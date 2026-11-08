@@ -343,6 +343,7 @@ import { answerFromAppView, appViewExecutorResult, asksAboutAppView, buildAppVie
 import { appAskScopeKey, appAskThreadDecision } from './app-ask-scope.js';
 import { rethrowIfCancelled } from './llm/cancellation.js';
 import { fetchLatestPublishedDqlVersion, resolveDqlRuntimeVersionStatus } from './version-status.js';
+import { backUpOnVersionChange } from './upgrade-backups.js';
 import { resolveRetrievalHealthStatus } from './retrieval-health.js';
 import {
   askScopeFromWorkspace,
@@ -5262,6 +5263,10 @@ function knownRelationKeys(projectRoot: string): RelationKeyKnowledge[] {
 
 async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServerScope): Promise<number> {
   const { rootDir, executor: rawExecutor, connection: rawConnection, preferredPort, projectRoot = process.cwd() } = opts;
+  const runtimeVersion = readDqlRuntimeVersion();
+  // First, before any store opens and migrates itself forward: when another
+  // ZLens version last opened this project, copy its state aside (upgrade-backups.ts).
+  backUpOnVersionChange(projectRoot, runtimeVersion);
   // RFC 0010 HH-3/HH-4: with host query hooks, every statement the server
   // sends to a warehouse runs as the person's connection and passes the row
   // policy first — this one executor is the only path. With any host, a
@@ -5298,7 +5303,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // its parent process. Register it through the same short-lived, scoped
   // registry used by an already-running loopback runtime's challenge endpoint.
   if (trustedCliTraceToken) cliAskTraceCapabilities.issue({ capability: trustedCliTraceToken });
-  const runtimeVersion = readDqlRuntimeVersion();
   // Warm the latest-version cache in the background (2s cap, 24h cache; offline → unknown).
   void fetchLatestPublishedDqlVersion();
   const allowedOrigins = new Set((opts.allowedOrigins ?? (readEnv('ZLENS_ALLOWED_ORIGINS') ?? '').split(','))

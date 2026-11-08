@@ -50,6 +50,8 @@ installation.
 | `zlens doctor git-hygiene` | Flag tracked local/generated files before commit |
 | `zlens validate [path]` | Validate all `.dql` files and semantic references |
 | `zlens compile [path]` | Generate project manifest (`dql-manifest.json`) |
+| `zlens backups [path]` | List the backups ZLens made of the project's local state (`.dql/local/backups/`) before a different version opened it, newest first: from and to version, when, and size. `--format json` prints them as JSON |
+| `zlens backups restore <name> [path] --yes` | Copy a backup's files back over the current state. Needs `--yes`, and refuses while `zlens notebook` serves the project. See [Backups before an upgrade](../get-started/install.md#backups-before-an-upgrade) |
 | `zlens verify [path]` | Check that the local `dql-manifest.json` (written by `zlens compile`) still matches the source: block SQL, status and domain, plus added or removed blocks, notebooks, Apps, dashboards, metrics, dimensions and sources. Exits 1 on drift. The manifest is gitignored, so this is a local check, not a CI gate on a clean clone |
 
 `zlens doctor scale --format json` includes counts, cache freshness,

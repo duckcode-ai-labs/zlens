@@ -267,6 +267,38 @@ npm i -g @zlens/cli@latest --allow-scripts=better-sqlite3   # global
 The first time the workbench opens after an upgrade, it shows **Guided Setup**
 again so you can check the project, database and AI settings.
 
+### Backups before an upgrade
+
+ZLens keeps your local work (App drafts, Ask conversations and runs, private
+notebooks, connection secrets and AI settings) in the project's `.dql/`
+folder. A new version updates those files the first time it opens them, and
+an older version may not read them afterwards. So when ZLens starts on a
+project that a different version last opened, it first copies that state into
+`.dql/local/backups/<from>-to-<to>-<time>/`, prints one line saying where,
+and then starts as usual (the notebook and `zlens mcp` both do this). It keeps
+the 3 newest backups. The Dataset results cache is left out, since ZLens runs
+those queries again when needed. A large project's stores can take a few
+hundred MB; when a backup would leave less than 1 GB free on the disk, ZLens
+skips it and says so.
+`.dql/local/` is git-ignored, so backups never reach Git, and only your user
+can read them.
+
+If an older ZLens opens a project a newer one already used, it makes a backup
+too, prints a warning, and names the backup from before the upgrade.
+
+To go back to a backup, stop ZLens (the notebook, and any `zlens mcp` using
+the project), then:
+
+```bash
+zlens backups                        # list them, newest first
+zlens backups restore <name> --yes   # copy one back
+```
+
+`restore` copies the backup's files over the current ones, so it needs
+`--yes`, and it refuses while `zlens notebook` serves the project. It clears
+the Dataset results cache, which ZLens rebuilds; other files ZLens made after
+the backup are left in place.
+
 ### Upgrading from the `dql` command
 
 ZLens used to be published as `@duckcodeailabs/dql-cli`, with the

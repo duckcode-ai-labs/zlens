@@ -37,6 +37,7 @@ import { runEval } from "./commands/eval.js";
 import { runCi } from "./commands/ci.js";
 import { runPropose } from "./commands/propose.js";
 import { runModel } from "./commands/model.js";
+import { runBackups } from "./commands/backups.js";
 import { explainNativeDependencyError, sqlitePreflightMessage } from "./native-deps.js";
 
 const HELP = `
@@ -98,6 +99,9 @@ const HELP = `
                                     Mark impacted semantic YAML pending recertification
     zlens notebook [path]           Launch the browser-first notebook for a project
                                     (offers to create one in a folder without a project)
+    zlens backups [path]            List the backups ZLens made before another version opened the project
+    zlens backups restore <name> --yes
+                                    Put a backup back (with ZLens stopped)
     zlens semantic <sub> [path]     Semantic layer: list, validate, query, pull
     zlens compile [path]            Generate project manifest (dql-manifest.json)
     zlens sync dbt [path]           Diff, compile, and reindex dbt-backed DQL state
@@ -228,6 +232,22 @@ const COMMAND_HELP: Record<string, string> = {
     folder with no ZLens project, it asks "No ZLens project here. Create
     one? [Y/n]" and creates it the way zlens init would; --yes creates it
     without asking. Without a terminal it prints the one command to run.
+  `,
+  backups: `
+  zlens backups — Backups made before another ZLens version opened the project
+
+  Usage:
+    zlens backups [path] [--format json]
+    zlens backups restore <name> [path] --yes
+
+  Notes:
+    When ZLens starts on a project that another version last opened, it
+    first copies the project's local state (the SQLite stores in .dql/local
+    and .dql/cache, .dql/local/private/ and .dql/provider-settings.json)
+    into .dql/local/backups/<from>-to-<to>-<time>/. It keeps the 3 newest.
+    The Dataset results cache is left out: it is rebuilt when needed.
+    restore copies a backup's files back over the current ones, so it needs
+    --yes, and it refuses while zlens notebook serves the project.
   `,
   certify: `
   zlens certify — Evaluate local certification rules
@@ -471,6 +491,7 @@ async function main() {
     command === "serve" ||
     command === "doctor" ||
     command === "notebook" ||
+    command === "backups" ||
     command === "validate" ||
     command === "semantic" ||
     command === "lineage" ||
@@ -548,6 +569,9 @@ async function main() {
         break;
       case "notebook":
         await runNotebook(file, flags);
+        break;
+      case "backups":
+        await runBackups(file, rest, flags);
         break;
       case "validate":
         await runValidate(file, flags);
