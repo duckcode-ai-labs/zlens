@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import type { DatabaseConnector, ConnectionConfig, TableInfo, ColumnInfo } from '../connector.js';
 import type { QueryExecutionOptions, QueryResult, ColumnMeta, ColumnType, Row } from '../result-types.js';
 import { importConnectorDependency } from '../optional-dependency.js';
-import { readEnv } from '../env.js';
+import { noEgress, readEnv } from '../env.js';
 import { DataFolderViews, type DataFolderStatus } from '../data-folder-views.js';
 import { defaultLakeSignIns, describeLakeStorage, lakeSignInFailure, lakeStorageClouds, lakeStorageSecretStatements } from '../lake-storage.js';
 import type { LakeCatalogConfig, LakeSourceConfig, LakeStorageConfig } from '../connector.js';
@@ -790,7 +790,8 @@ const closingDuckDBDatabases = new Map<string, Promise<void>>();
  * Unset or `on`: DuckDB's default.
  */
 export function duckDBAutoinstallOff(env: NodeJS.ProcessEnv = process.env): boolean {
-  return /^(off|false|0|no)$/i.test(readEnv('ZLENS_DUCKDB_AUTOINSTALL', env)?.trim() ?? '');
+  // ZLENS_NO_EGRESS=1 turns downloads off too.
+  return noEgress(env) || /^(off|false|0|no)$/i.test(readEnv('ZLENS_DUCKDB_AUTOINSTALL', env)?.trim() ?? '');
 }
 
 /** The settings every connection of a database with downloads off starts with (both are global in DuckDB). */

@@ -71,6 +71,8 @@ import {
 } from './git-contract.js';
 import {
   QueryExecutor,
+  bundledConnectorFolders,
+  noEgress,
   withQueryLabels,
   type ConnectionConfig,
   type DatabaseConnector,
@@ -1205,6 +1207,8 @@ export interface ConnectorInstallStatus {
   builtIn: boolean;
   installPath: string;
   installCommand?: string;
+  /** False on an install with no internet access (ZLENS_NO_EGRESS): a missing driver cannot be added from here. */
+  installable: boolean;
 }
 
 type DbtPreparationStage = 'validating' | 'compiling' | 'indexing' | 'ready';
@@ -39593,7 +39597,7 @@ function persistConnectionMetadataScope(
   writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
 }
 
-const CONNECTOR_INSTALLS: Record<string, Omit<ConnectorInstallStatus, 'installed' | 'installPath' | 'installCommand'>> = {
+const CONNECTOR_INSTALLS: Record<string, Omit<ConnectorInstallStatus, 'installed' | 'installPath' | 'installCommand' | 'installable'>> = {
   duckdb: {
     driver: 'duckdb',
     label: 'DuckDB',
@@ -39733,8 +39737,12 @@ function connectorInstallRoot(projectRoot: string): string {
 const CLI_PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function connectorModuleSearchPaths(projectRoot: string): string[] {
-  return [connectorInstallRoot(projectRoot), projectRoot];
+  // Drivers that came with the install (ZLENS_CONNECTOR_PATH) after the project's own, before the project.
+  return [connectorInstallRoot(projectRoot), ...bundledConnectorFolders(), projectRoot];
 }
+
+/** Why a driver cannot be installed from here: this install reaches nothing on the internet. */
+const NO_EGRESS_DRIVER_INSTALL = 'This install has no internet access (ZLENS_NO_EGRESS), so drivers are not downloaded: they come with the install (ZLENS_CONNECTOR_PATH). Ask whoever set it up to include this one.';
 
 function connectorInstallCommand(projectRoot: string, packageSpec: string): string {
   return `npm install --prefix ${connectorInstallRoot(projectRoot)} ${packageSpec}`;
@@ -39774,13 +39782,15 @@ export function getConnectorInstallStatuses(projectRoot: string): ConnectorInsta
         ? isConnectorPackageInstalled(projectRoot, definition.packageName)
         : true
     );
+    const installable = !noEgress();
     return {
       ...definition,
       installed,
       installPath,
-      installCommand: definition.packageSpec
+      installCommand: definition.packageSpec && installable
         ? connectorInstallCommand(projectRoot, definition.packageSpec)
         : undefined,
+      installable,
     };
   });
 }
@@ -39793,7 +39803,6 @@ function installConnectorPackage(projectRoot: string, driver: string): Connector
   if (definition.builtIn || !definition.packageSpec) {
     return getConnectorInstallStatuses(projectRoot).find((status) => status.driver === definition.driver)!;
   }
-
   installPackages(projectRoot, [definition.packageSpec]);
   return getConnectorInstallStatuses(projectRoot).find((status) => status.driver === definition.driver)!;
 }
@@ -39809,6 +39818,8 @@ function runConnectorNpm(projectRoot: string, args: string[]): void {
 }
 
 function installPackages(projectRoot: string, packageSpecs: string[]): void {
+  // Every runtime npm install passes here: none on an install with no internet access.
+  if (noEgress()) throw new Error(NO_EGRESS_DRIVER_INSTALL);
   const installRoot = connectorInstallRoot(projectRoot);
   // npm 12 blocks a dependency's install script unless package.json allows it:
   // allow it here for a driver that downloads its native binary in that script.
@@ -39846,7 +39857,11 @@ export function ensureConnectorInstalledForStartup(
   // Built-in drivers (SQLite, Databricks) and unknown drivers need nothing.
   if (!definition || definition.builtIn || !definition.packageSpec || !definition.packageName) return;
   if (isConnectorPackageInstalled(projectRoot, definition.packageName)) {
-    repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label);
+    if (!noEgress()) repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label);
+    return;
+  }
+  if (noEgress()) {
+    console.log(`[zlens] The ${definition.label} driver is not installed, and this install has no internet access (ZLENS_NO_EGRESS): include it with the install (ZLENS_CONNECTOR_PATH).`);
     return;
   }
   console.log(`[zlens] Installing the ${definition.label} driver into .dql/connectors (first run after install/upgrade)…`);
