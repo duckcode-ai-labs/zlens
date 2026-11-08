@@ -80,4 +80,13 @@ describe('Snowflake semantic views (DESC SEMANTIC VIEW, live format)', () => {
     expect(ratio?.sql).toMatch(/NULLIF/i);
     if (process.env.PRINT_SQL) console.log(`${composed?.sql}\n---\n${ratio?.sql}`);
   });
+
+  it('a top-N by a metric ranks the largest value first on Snowflake, never an empty one', () => {
+    const layer = new SemanticLayer();
+    addSnowflakeSemanticView(layer, view, DESC);
+    const top = layer.composeQuery({ metrics: ['total_wins'], dimensions: ['team_name'], orderBy: [{ name: 'total_wins', direction: 'desc' }], limit: 5, driver: 'snowflake' });
+    expect(top?.sql).toMatch(/ORDER BY total_wins DESC NULLS LAST\s+LIMIT 5$/);
+    const onDuckDb = layer.composeQuery({ metrics: ['total_wins'], dimensions: ['team_name'], orderBy: [{ name: 'total_wins', direction: 'desc' }], limit: 5, driver: 'duckdb' });
+    expect(onDuckDb?.sql).toMatch(/ORDER BY total_wins DESC\s+LIMIT 5$/);
+  });
 });
