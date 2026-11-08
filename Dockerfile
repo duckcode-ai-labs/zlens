@@ -12,9 +12,17 @@
 # Usage:
 #   docker build -t zlens:latest .
 #   docker run --rm -it -p 127.0.0.1:3474:3474 -v "$PWD":/workspace zlens:latest
+#
+# For a container with no internet access (an app inside Snowflake), bake the
+# database drivers into the image; ZLens finds them through ZLENS_CONNECTOR_PATH:
+#   docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake .
+# and see "ZLens inside Snowflake" in docs/get-started/install.md.
+
+# Node 24 LTS (Node 20's support ended in April 2026). ZLens supports 20, 22, 24 and 26.
+ARG NODE_VERSION=24
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS builder
+FROM node:${NODE_VERSION}-bookworm-slim AS builder
 
 WORKDIR /build
 
@@ -37,11 +45,22 @@ RUN pnpm -r build
 # Trim devDependencies for the runtime image.
 RUN pnpm -r --prod deploy /tmp/deploy-cli --filter @zlens/cli
 
+# Database drivers baked into the image (npm package specs separated by spaces),
+# for an install that cannot download them at run time. Empty by default: ZLens
+# then installs a project's driver into .dql/connectors when it first needs it.
+ARG ZLENS_DRIVERS=""
+RUN mkdir -p /tmp/drivers \
+ && if [ -n "$ZLENS_DRIVERS" ]; then \
+      printf '{"private":true}\n' > /tmp/drivers/package.json \
+      && npm --prefix /tmp/drivers install --no-audit --no-fund --omit=dev $ZLENS_DRIVERS; \
+    fi
+
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim AS runtime
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
-    ZLENS_HOST=0.0.0.0
+    ZLENS_HOST=0.0.0.0 \
+    ZLENS_CONNECTOR_PATH=/opt/zlens/drivers
 
 WORKDIR /opt/dql
 
@@ -53,6 +72,7 @@ RUN apt-get update \
 # Pull in the deployed CLI bundle (dist + node_modules).
 COPY --from=builder /tmp/deploy-cli /opt/dql
 COPY --from=builder /build/packages/create-dql-app/templates/starter /opt/dql/templates/starter
+COPY --from=builder /tmp/drivers /opt/zlens/drivers
 COPY scripts/docker-entrypoint.sh /usr/local/bin/dql-docker-entrypoint
 
 # Make `zlens` (and the old `dql` alias) available on PATH via tiny shims —

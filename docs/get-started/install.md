@@ -155,6 +155,32 @@ docker compose --profile slack up    # adds the Slack bot on :3479
 docker compose --profile ollama up   # adds a local Ollama on :11434
 ```
 
+### ZLens inside Snowflake (preview)
+
+The same image runs inside a Snowflake account (Snowpark Container Services),
+where it has no internet access. Bake the Snowflake driver into it, for the
+`linux/amd64` platform Snowflake runs:
+
+```bash
+docker build --platform linux/amd64 \
+  --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake .
+```
+
+Inside Snowflake the entrypoint sees the service's sign-in token
+(`/snowflake/session/token`, with `SNOWFLAKE_HOST` set). On the first start it
+creates a warehouse-first project in the mounted folder (`ZLENS_PROJECT_ROOT`,
+default `/workspace`) with one connection that signs in with that token, reads
+`SNOWFLAKE_ACCOUNT` and `SNOWFLAKE_HOST` at run time, and takes the warehouse,
+database, schema and role from `ZLENS_SNOWFLAKE_WAREHOUSE`,
+`ZLENS_SNOWFLAKE_DATABASE`, `ZLENS_SNOWFLAKE_SCHEMA` and `ZLENS_SNOWFLAKE_ROLE`.
+It also sets `ZLENS_NO_EGRESS=1`, `ZLENS_LOCK_CONNECTIONS=1` and
+`ZLENS_MODEL_PROVIDERS=none` unless you set them yourself (below). Later starts
+keep the project as it is.
+
+To try the same first start outside Snowflake, set `ZLENS_SNOWFLAKE_APP=1` and
+sign in with a key pair instead (`ZLENS_SNOWFLAKE_USER`,
+`ZLENS_SNOWFLAKE_PRIVATE_KEY_PATH`, and `SNOWFLAKE_ACCOUNT`).
+
 ### A packaged install: fixed connection and model
 
 When you package ZLens for someone else, as an app inside Snowflake or an

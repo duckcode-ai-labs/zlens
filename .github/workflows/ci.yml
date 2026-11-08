@@ -297,6 +297,28 @@ jobs:
           done
           echo "health check did not return 200 (last code: ${code})"
           exit 1
+      # Inside Snowflake (a token at /snowflake/session/token and SNOWFLAKE_HOST set) the
+      # entrypoint creates the project on first start with one connection that signs in with
+      # that token and names no account (scripts/docker-entrypoint.sh).
+      - name: first start inside Snowflake writes its connection
+        run: |
+          image=$(docker inspect zlens-notebook --format '{{.Image}}')
+          session=$(mktemp -d) && echo ci-not-a-real-token > "$session/token"
+          workspace=$(mktemp -d)
+          docker run --rm -v "$session:/snowflake/session:ro" -v "$workspace:/workspace" \
+            -e SNOWFLAKE_HOST=example.snowflakecomputing.com -e ZLENS_SNOWFLAKE_WAREHOUSE=APP_WH \
+            "$image" zlens --version
+          node -e '
+            const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const c = config.connections?.snowflake ?? {};
+            const want = { driver: "snowflake", authMethod: "oauth", tokenFilePath: "/snowflake/session/token", account: "${SNOWFLAKE_ACCOUNT}", host: "${SNOWFLAKE_HOST}", warehouse: "APP_WH" };
+            const wrong = Object.entries(want).filter(([key, value]) => c[key] !== value);
+            if (config.defaultConnectionName !== "snowflake" || config.modeling?.mode !== "warehouse-first" || wrong.length || "username" in c) {
+              console.error("unexpected first-start config:", JSON.stringify(config));
+              process.exit(1);
+            }
+            console.log("first-start connection ok");
+          ' "$workspace/dql.config.json"
       - name: container logs
         if: ${{ failure() }}
         env:
