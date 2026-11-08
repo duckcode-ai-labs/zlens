@@ -887,7 +887,7 @@ import {
   type ConnectionMetadataScopeInput,
   type ConnectionMetadataScopeV1,
 } from './warehouse-metadata.js';
-import { readWarehouseCatalogRelations, syncWarehouseCatalog } from './warehouse-catalog-sync.js';
+import { readWarehouseCatalogRelations, syncWarehouseCatalog, type LakeSizesSummary } from './warehouse-catalog-sync.js';
 import { dbtModelSnapshot, dbtWarehouseNodes, dbtWarehouseScopes, readDbtManifest } from './dbt-model-discovery.js';
 import { draftMeanings, meaningsStatus, planMeaningDrafts, plannedWithoutColumnList, type MeaningDraftReport } from './meaning-draft.js';
 import { acceptMeanings, meaningCatalog, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
@@ -912,7 +912,9 @@ import {
   type DiscoveredArea,
   type DiscoveryDecision,
   type WarehouseDiscoveryReport,
+  markSampledFacts,
 } from './warehouse-model-discovery.js';
+import { boundedReads } from './read-budget.js';
 import {
   NotebookDatasetWorkspace,
   type DatasetSource,
@@ -38854,6 +38856,8 @@ export interface WarehouseCatalogSummary {
   drift?: WarehouseCatalogDrift & { affected: string[] };
   /** The column value profile read with this sync (`agent.valueProfile` opted in). */
   valueProfile?: ValueProfileSummary;
+  /** Lake tables sized from metadata with this sync (open-formats plan L4). */
+  sizes?: LakeSizesSummary;
 }
 
 /** The entities and relationships bound to relations that changed. */
@@ -38901,7 +38905,7 @@ async function refreshWarehouseCatalogAfterSync(
   }
   try {
     const previous = readWarehouseCatalog(projectRoot).snapshot;
-    const { snapshot, warnings } = await syncWarehouseCatalog({ projectRoot, executor, connection, scope });
+    const { snapshot, warnings, sizes } = await syncWarehouseCatalog({ projectRoot, executor, connection, scope });
     // What the columns hold, read only when the project opted in.
     const valueProfile = await refreshValueProfile({ projectRoot, config, executor, connection, snapshot, hosted });
     const drift = previous && previous.fingerprint !== snapshot.fingerprint ? diffWarehouseCatalogs(previous, snapshot) : undefined;
@@ -38915,6 +38919,7 @@ async function refreshWarehouseCatalogAfterSync(
       warnings,
       ...(drift && changed ? { drift: { ...drift, affected: driftAffected(manifest, drift) } } : {}),
       ...(valueProfile ? { valueProfile } : {}),
+      ...(sizes ? { sizes } : {}),
     };
   } catch (error) {
     return { path, error: error instanceof Error ? error.message : String(error) };
@@ -39098,7 +39103,9 @@ async function checkDraftOnWarehouse(
   executor: QueryExecutor,
   options: { readViews?: boolean; manifest?: DQLManifest } = {},
 ): Promise<WarehouseDiscoveryReport> {
-  const run = (sql: string) => executor.executeQuery(sql, [], {}, connection);
+  // Lake tables are read within the read budget: a sample of files, or not at all (open-formats plan L4).
+  const bounded = boundedReads({ run: (sql: string) => executor.executeQuery(sql, [], {}, connection), snapshot });
+  const run = bounded.run;
   const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
   const allViews = options.readViews === true || /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
   const readable = (relation: Parameters<typeof cheapToRead>[0]) => allViews || cheapToRead(relation);
@@ -39116,7 +39123,9 @@ async function checkDraftOnWarehouse(
     rules: new Set(Object.keys(options.manifest?.modeling?.rules ?? {})),
     concepts: new Set(Object.keys(options.manifest?.modeling?.concepts ?? {})),
   };
-  return draftWordsAndRules(joined, snapshot, run, quote, { readable, existing });
+  const drafted = markSampledFacts(await draftWordsAndRules(joined, snapshot, run, quote, { readable, existing }), bounded.sampled());
+  const readNotes = bounded.notes();
+  return readNotes.length ? { ...drafted, readNotes } : drafted;
 }
 
 /**

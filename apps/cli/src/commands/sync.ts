@@ -27,6 +27,8 @@ import { defaultKgPath, ensureAgentProjectReady } from '@zlens/agent';
 import type { CLIFlags } from '../args.js';
 import { manifestCacheTrackedFiles, readCliDqlVersion } from './compile.js';
 import { runCompile } from './compile.js';
+import { formatBytes } from '../lake-sizes.js';
+import type { LakeSizesSummary } from '../warehouse-catalog-sync.js';
 
 interface DbtManifestShape {
   nodes?: Record<string, { resource_type?: string }>;
@@ -238,6 +240,7 @@ async function runSyncWarehouse(rest: string[], flags: CLIFlags): Promise<void> 
       } else {
         console.log(`  ✓ Warehouse catalog: ${catalog.relations} relation(s) → ${relative(projectRoot, catalog.path)}`);
         for (const warning of catalog.warnings ?? []) console.log(`    ! ${warning}`);
+        for (const line of lakeSizeLines(catalog.sizes)) console.log(line);
         const profile = catalog.valueProfile;
         if (profile && 'error' in profile) console.log(`    ! Value profile not read: ${profile.error}`);
         else if (profile && 'skipped' in profile) console.log(`    Value profile not read: ${profile.skipped}.`);
@@ -361,4 +364,17 @@ function safeMtime(path: string): number | null {
   } catch {
     return null;
   }
+}
+
+/** What sizing the lake tables found: read from metadata, never a scan (open-formats plan L4). */
+export function lakeSizeLines(sizes: LakeSizesSummary | undefined): string[] {
+  if (!sizes) return [];
+  const lines: string[] = [];
+  if (sizes.tables > 0) {
+    const estimated = sizes.estimated ? ` (estimated from some of their files for ${sizes.estimated})` : '';
+    lines.push(`  ✓ Lake table sizes: ${sizes.tables} table${sizes.tables === 1 ? '' : 's'}${sizes.bytes ? `, about ${formatBytes(sizes.bytes)}` : ''}, from file metadata${estimated}; no data was read.`);
+  }
+  if (sizes.notSized.length) lines.push(`    ! Not sized (their metadata could not say): ${sizes.notSized.slice(0, 6).join(', ')}${sizes.notSized.length > 6 ? ` … and ${sizes.notSized.length - 6} more` : ''}`);
+  if (sizes.timedOut) lines.push(`    ! ${sizes.timedOut} table${sizes.timedOut === 1 ? '' : 's'} not sized: sizing stops after two minutes. Name fewer tables in the connection's sources, or sync again.`);
+  return lines;
 }

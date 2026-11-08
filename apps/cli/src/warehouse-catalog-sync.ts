@@ -22,6 +22,7 @@ import {
 } from '@zlens/core';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
 import { duckdbCatalogScopePredicate, isAttachedDuckDBCatalog, sqliteColumnsOneByOne, type ConnectionMetadataScopeV1 } from './warehouse-metadata.js';
+import { addLakeSizes } from './lake-sizes.js';
 
 const MAX_ROWS = 50_000;
 // Schema reads only: a host's row policy (RFC 0010) can tell them from data.
@@ -34,6 +35,22 @@ export interface WarehouseCatalogSyncResult {
   snapshot: WarehouseCatalogSnapshotV1;
   /** Optional reads that failed (keys, comments, views), in plain words. */
   warnings: string[];
+  /** Lake tables sized from metadata (open-formats plan L4); absent when the connection has none. */
+  sizes?: LakeSizesSummary;
+}
+
+/** What sizing the lake tables found, for `zlens sync warehouse` and Settings. */
+export interface LakeSizesSummary {
+  /** Tables sized. */
+  tables: number;
+  /** Their bytes, all together. */
+  bytes: number;
+  /** Tables whose size is estimated from some of their files. */
+  estimated: number;
+  /** Lake tables whose metadata could not say. */
+  notSized: string[];
+  /** Lake tables left unsized when the time limit was reached. */
+  timedOut: number;
 }
 
 /** `'a'` with quotes doubled: a string literal for a metadata filter. */
@@ -366,6 +383,22 @@ export async function syncWarehouseCatalog(input: {
   if (relations.length === 0) {
     throw new Error('The warehouse catalog sync found no tables in the selected schemas. Check the schema selection and the connection role\'s permissions.');
   }
+  // Lake tables (files, buckets, catalog services): their size from metadata, never a scan.
+  let sizes: LakeSizesSummary | undefined;
+  if (/^(duckdb|file)$/i.test(input.connection.driver)) {
+    const run = async (sql: string) => (await input.executor.executePositional(sql, [], input.connection, QUERY_OPTIONS)).rows as Row[];
+    const found = await addLakeSizes(relations, run);
+    if (found.sized || found.notSized.length || found.timedOut) {
+      const sized = relations.filter((relation) => relation.sizeFrom !== undefined);
+      sizes = {
+        tables: found.sized,
+        bytes: sized.reduce((sum, relation) => sum + (relation.bytesEstimate ?? 0), 0),
+        estimated: sized.filter((relation) => /estimated/.test(relation.sizeFrom ?? '')).length,
+        notSized: found.notSized,
+        timedOut: found.timedOut,
+      };
+    }
+  }
   const snapshot = writeWarehouseCatalog(input.projectRoot, {
     version: 1,
     driver: input.connection.driver,
@@ -374,7 +407,7 @@ export async function syncWarehouseCatalog(input: {
     capturedAt: new Date().toISOString(),
     relations,
   });
-  return { snapshot, warnings };
+  return { snapshot, warnings, ...(sizes ? { sizes } : {}) };
 }
 
 /**

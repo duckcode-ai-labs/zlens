@@ -461,6 +461,7 @@ export const CONNECTOR_SCHEMAS: ConnectorFormSchema[] = [
     fields: [
       { key: 'dataFolder', label: 'Data folder or bucket', type: 'text', placeholder: './data  or  s3://bucket/folder/', helpText: 'Each CSV, TSV, Parquet or JSON file, Excel sheet, Delta or Iceberg table and folder of files in it is a table named after it; DuckDB and DuckLake files are attached read-only. On disk or in a bucket (s3://, gs://, az://, r2://); the data is read where it is. Empty when the connection only attaches catalogs.' },
       { key: 'storage.s3.region', label: 'AWS region', type: 'text', placeholder: 'us-east-1', bucket: 's3' },
+      { key: 'storage.s3.auth', label: 'Sign-in', type: 'select', bucket: 's3', options: [{ value: '', label: 'Your AWS sign-in' }, { value: 'keys', label: 'Access keys' }, { value: 'none', label: 'None: public data' }], helpText: 'None reads an open-data bucket without signing in.' },
       { key: 'storage.s3.profile', label: 'AWS profile', type: 'text', placeholder: 'default', bucket: 's3', helpText: 'Empty: your usual AWS sign-in (environment, SSO, instance role). Nothing secret is saved.' },
       { key: 'storage.s3.accessKeyId', label: 'Access key ID', type: 'text', bucket: 's3', helpText: 'Only to use keys instead of your AWS sign-in.' },
       { key: 'storage.s3.secretAccessKey', label: 'Secret access key', type: 'password', bucket: 's3' },
@@ -480,7 +481,7 @@ export const CONNECTOR_SCHEMAS: ConnectorFormSchema[] = [
         helpText: 'Attached read-only; their tables are catalog.schema.table. Types: iceberg (an Iceberg REST catalog: Lakekeeper, Polaris, R2 Data Catalog), glue, s3_tables, unity, ducklake, duckdb, sqlite. A clientSecret, token or password moves to the project\'s private secrets file.',
       },
     ],
-    primary: () => ['dataFolder', 'storage.s3.region', 'storage.s3.profile', 'storage.azure.accountName', 'storage.r2.accountId', 'storage.r2.keyId', 'storage.r2.secret'],
+    primary: () => ['dataFolder', 'storage.s3.region', 'storage.s3.auth', 'storage.s3.profile', 'storage.azure.accountName', 'storage.r2.accountId', 'storage.r2.keyId', 'storage.r2.secret'],
   },
 ];
 

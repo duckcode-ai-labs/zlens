@@ -336,6 +336,50 @@ describe('a data folder read as a database', () => {
 describe('a lake folder read through a connection', () => {
   const sqlPath = (path: string) => path.replace(/'/g, "''");
 
+  duckDbIt('a folder of many files that share their columns opens one footer per statement; one whose files differ is read by name, and says so (L4-9)', async () => {
+    const folder = dataFolder({});
+    mkdirSync(join(folder, 'wide'));
+    mkdirSync(join(folder, 'mixed'));
+    const writer = new DuckDBConnector();
+    await writer.connect({ driver: 'duckdb', moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    try {
+      for (let index = 0; index < 70; index += 1) {
+        const name = String(index).padStart(3, '0');
+        await writer.execute(`COPY (SELECT ${index} * 2 + i AS id, 1.5 AS amount FROM range(2) t(i)) TO '${sqlPath(join(folder, 'wide', `part-${name}.parquet`))}' (FORMAT parquet)`);
+        // The first file of the second folder has no fee: a column the others gained later.
+        await writer.execute(index === 0
+          ? `COPY (SELECT 0 AS id) TO '${sqlPath(join(folder, 'mixed', `part-${name}.parquet`))}' (FORMAT parquet)`
+          : `COPY (SELECT ${index} AS id, 2.0 AS fee) TO '${sqlPath(join(folder, 'mixed', `part-${name}.parquet`))}' (FORMAT parquet)`);
+      }
+    } finally {
+      await writer.disconnect();
+    }
+    const connector = new FileConnector();
+    await connector.connect({
+      driver: 'file',
+      sources: [{ name: 'wide', path: join(folder, 'wide'), format: 'parquet' }, { name: 'mixed', path: join(folder, 'mixed'), format: 'parquet' }],
+      moduleSearchPaths: [configuredDuckDbConnectorRoot!],
+    });
+    try {
+      const first = async (sql: string) => (await connector.execute(sql)).rows[0];
+      const viewSql = async (name: string) => String((await first(`SELECT sql FROM duckdb_views() WHERE view_name = '${name}'`))?.sql ?? '');
+      expect(await viewSql('wide')).not.toMatch(/union_by_name/);
+      expect(await viewSql('mixed')).toMatch(/union_by_name/);
+      expect(await first('SELECT COUNT(*) AS n, CAST(SUM(amount) AS INTEGER) AS total FROM wide')).toEqual({ n: 140, total: 210 });
+      expect(await first('SELECT COUNT(*) AS n, COUNT(fee) AS fees FROM mixed')).toEqual({ n: 70, fees: 69 });
+      expect(await first("SELECT value FROM duckdb_settings() WHERE name = 'parquet_metadata_cache'")).toEqual({ value: 'true' });
+      const status = await connector.dataFolderStatus();
+      expect(status?.tables.map((table) => table.name)).toEqual(['wide', 'mixed']);
+      expect(status?.problems).toEqual([{
+        source: join(folder, 'mixed'),
+        name: 'mixed',
+        reason: 'its 70 files do not all have the same columns (part-000.parquet and part-005.parquet differ), so each statement on it looks at every file\'s footer first; after the first, they are kept in memory',
+      }]);
+    } finally {
+      await connector.disconnect();
+    }
+  }, 120_000);
+
   duckDbIt('reads every kind of table a lake folder holds by name, and attaches its database files read-only', async () => {
     const folder = dataFolder({
       'daily/2024-01-01.csv': 'day,amount\n2024-01-01,5\n',

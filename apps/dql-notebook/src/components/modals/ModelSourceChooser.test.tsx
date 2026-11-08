@@ -110,6 +110,16 @@ describe('Draft my models card', () => {
     expect(html).toContain('Drafted 2 models and 1 join from 6 tables.');
   });
 
+  it('lists what the draft read of large lake tables under its message (open-formats L4)', () => {
+    const notes = Array.from({ length: 8 }, (_, index) => `table_${index}: checked on 2 of 90 files spread across it.`);
+    const html = renderToStaticMarkup(<DraftModelsCard busy={false} canDraft outcome={{ ok: true, proposalId: 'p', message: 'Drafted 7 models.', readNotes: notes }} onDraft={noop} t={t} />);
+    expect(html).toContain('aria-label="Large tables"');
+    expect(html).toContain('table_0: checked on 2 of 90 files spread across it.');
+    expect(html).toContain('table_5:');
+    expect(html).not.toContain('table_6:');
+    expect(html).toContain('… and 2 more');
+  });
+
   it('keeps the drafts: says how many wait for review, the Domain they go in, and offers a rename', () => {
     const waiting = { proposalId: 'p', createdAt: '2026-10-21T00:00:00Z', models: 9, joins: 12, domains: ['Jaffle shop'], stale: false };
     const html = renderToStaticMarkup(<DraftModelsCard busy={false} canDraft outcome={null} waiting={waiting} onDraft={noop} onRename={noop} t={t} />);

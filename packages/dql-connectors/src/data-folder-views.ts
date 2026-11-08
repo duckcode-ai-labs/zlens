@@ -9,6 +9,7 @@ import {
   dataFolderViewName,
   dataFolderFilesStatement,
   dataFolderViewStatement,
+  dataFolderAllFilesStatement,
   detachDataFolderCatalogStatement,
   dropDataFolderViewStatement,
   modifiedTime,
@@ -26,7 +27,7 @@ import {
   lakeCatalogSchemasStatement,
   lakeCatalogUndescribedStatement,
 } from './lake-catalogs.js';
-import { readBucketFolder, resolveLakeSources, type LakeProblem, type LakeRun } from './lake-listing.js';
+import { LAKE_LISTING_DEADLINE_MS, readBucketFolder, resolveLakeSources, type LakeProblem, type LakeRun } from './lake-listing.js';
 
 /** A table or catalog of a data folder that DuckDB could not read, and why. */
 export interface DataFolderProblem {
@@ -69,6 +70,17 @@ export interface DataFolderViewsOptions {
 
 /** A folder table is one table only when its first files (at most this many) share their columns. */
 const SAME_COLUMNS_FILES = 50;
+/**
+ * A folder of more files than this is read with its first file's columns when
+ * files spread across it share them: reading it by column name opens every
+ * file's footer on each statement (87 s and 4,123 requests for each statement
+ * on a 4,118-file folder in a bucket). Decision L4-9.
+ */
+export const ONE_SCHEMA_ABOVE_FILES = 64;
+/** How many files spread across such a folder are compared. */
+export const ONE_SCHEMA_SAMPLE = 16;
+/** A folder's files are compared again after this long. */
+const ONE_SCHEMA_RECHECK_MS = 600_000;
 /** An unchanged folder is looked at again after this long (a new Iceberg commit, a new sheet). */
 const RESCAN_MS = 2_000;
 /** A bucket is listed again after this long: each listing reads every object name under the prefix, and costs requests. */
@@ -107,6 +119,8 @@ export class DataFolderViews {
   private readonly notes: LakeProblem[] = [];
   /** A lazy catalog's tables last looked up (at most once a minute), and those that could not be. */
   private readonly described = new Map<string, { at: number; problems: LakeProblem[] }>();
+  /** Large folders: whether files spread across each share their columns, by its file pattern. */
+  private readonly oneSchema = new Map<string, { at: number; same: boolean; note?: LakeProblem }>();
 
   constructor(
     /** A folder on disk, a bucket URL, or `''` for sources only. */
@@ -143,8 +157,9 @@ export class DataFolderViews {
     ].filter((problem): problem is NonNullable<typeof problem> => Boolean(problem))
       .map(({ source, name, reason }) => ({ source, name, reason }));
     const catalogNotes = catalogs.flatMap((catalog) => this.described.get(catalog.name)?.problems ?? []);
+    const schemaNotes = this.contents.tables.flatMap((table) => this.oneSchema.get(table.file)?.note ?? []);
     problems.unshift(...this.notes, ...this.listingProblems);
-    problems.push(...catalogNotes);
+    problems.push(...catalogNotes, ...schemaNotes);
     return {
       folder: this.folder,
       tables: tables.map((table) => ({ name: dataFolderViewName(table), source: table.source, kind: table.kind })),
@@ -194,7 +209,8 @@ export class DataFolderViews {
     const folderCatalogs = folder.catalogs.map((catalog) => (ownNames.has(catalog.name)
       ? { ...catalog, name: `${catalog.name}_${catalog.type}`, kind: catalog.kind.replace(/attached as .*$/, `attached as ${catalog.name}_${catalog.type}`) }
       : catalog));
-    this.contents = { tables: [...sourceTables, ...folder.tables], catalogs: [...ownCatalogs, ...folderCatalogs], skipped: folder.skipped };
+    const tables = await Promise.all([...sourceTables, ...folder.tables].map((table) => this.withOneSchema(table, now)));
+    this.contents = { tables, catalogs: [...ownCatalogs, ...folderCatalogs], skipped: folder.skipped };
     if (this.contents.catalogs.length || this.catalogs.size) await this.syncCatalogs();
     await this.syncViews();
   }
@@ -349,6 +365,50 @@ export class DataFolderViews {
     } catch {
       return new Set();
     }
+  }
+
+  /**
+   * A folder of many files whose files, spread across it, share their columns
+   * is read with the first file's columns (decision L4-9). One whose files
+   * differ is still read by column name, and says what that costs.
+   */
+  private async withOneSchema(table: DataFolderTable, now: number): Promise<DataFolderTable> {
+    if (!table.folder || !['read_parquet', 'read_csv_auto', 'read_json_auto'].includes(table.reader)) return table;
+    let known = this.oneSchema.get(table.file);
+    if (!known || now - known.at >= ONE_SCHEMA_RECHECK_MS) {
+      known = await this.compareSpreadFiles(table, now).catch(() => ({ at: now, same: false }));
+      this.oneSchema.set(table.file, known);
+    }
+    return known.same ? { ...table, folder: { ...table.folder, sameColumns: true } } : table;
+  }
+
+  private async compareSpreadFiles(table: DataFolderTable, now: number): Promise<{ at: number; same: boolean; note?: LakeProblem }> {
+    const statement = dataFolderAllFilesStatement(table);
+    if (!statement) return { at: now, same: false };
+    const files = (await this.run(statement, { deadlineMs: LAKE_LISTING_DEADLINE_MS })).rows.map((row) => String(row['file'] ?? ''));
+    if (files.length <= ONE_SCHEMA_ABOVE_FILES) return { at: now, same: false };
+    const picked = [...new Set(Array.from({ length: ONE_SCHEMA_SAMPLE }, (_, index) => files[Math.round((index * (files.length - 1)) / (ONE_SCHEMA_SAMPLE - 1))]!))];
+    let first: { file: string; columns: string } | undefined;
+    for (const file of picked) {
+      const described = await this.run(dataFolderFileColumnsStatement(table, file));
+      const columns = described.rows.map((row) => `${String(row['column_name'] ?? '').toLowerCase()} ${String(row['column_type'] ?? '').toLowerCase()}`).sort().join(', ');
+      if (!first) {
+        first = { file, columns };
+        continue;
+      }
+      if (columns !== first.columns) {
+        return {
+          at: now,
+          same: false,
+          note: {
+            source: table.source,
+            name: dataFolderViewName(table),
+            reason: `its ${files.length.toLocaleString('en-US')} files do not all have the same columns (${basename(first.file)} and ${basename(file)} differ), so each statement on it looks at every file's footer first; after the first, they are kept in memory`,
+          },
+        };
+      }
+    }
+    return { at: now, same: true };
   }
 
   /** For a folder of files that is not partitioned: why its files are not one table, when their columns differ. */

@@ -281,6 +281,8 @@ export interface DraftOutcome {
   domain?: string;
   /** Staging copies left out ("Show staging tables" drafts them too). */
   stagingHidden?: Array<{ relation: string; finalRelation: string }>;
+  /** Large lake tables: checked on a sample of their files, or a check skipped for size. */
+  readNotes?: string[];
 }
 
 /** Plain words for what `Draft my models` found (`zlens model discover --validate`). */
@@ -300,10 +302,17 @@ export function draftOutcome(result: { report: WarehouseDiscoveryReport; proposa
     ok: true,
     proposalId: proposal.id,
     // Honest about what is written (new-user round 2, problem 4): drafts wait for a Save in Modeling.
-    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? ', each join checked on the data' : ''}. Not saved yet: review and save them in Modeling.`,
+    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? `, each join checked on the data${sampledText(report)}` : ''}. Not saved yet: review and save them in Modeling.`,
     ...(domain ? { domain } : {}),
     ...(report.stagingHidden?.length ? { stagingHidden: report.stagingHidden } : {}),
+    ...(report.readNotes?.length ? { readNotes: report.readNotes.map((note) => note.text) } : {}),
   };
+}
+
+/** `(2 large tables on a sample of their files)`: the checks did not read every row of them. */
+function sampledText(report: WarehouseDiscoveryReport): string {
+  const sampled = new Set((report.readNotes ?? []).filter((note) => note.kind === 'sampled').map((note) => note.relation)).size;
+  return sampled ? ` (${sampled} large table${sampled === 1 ? '' : 's'} on a sample of ${sampled === 1 ? 'its' : 'their'} files)` : '';
 }
 
 export function draftErrorMessage(error: unknown): string {

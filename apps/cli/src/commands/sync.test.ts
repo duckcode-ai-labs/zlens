@@ -200,3 +200,18 @@ describe('dbt counts (new-user round 2, problem 10)', () => {
     }
   });
 });
+
+describe('lake table sizes in `zlens sync warehouse` (open-formats L4)', () => {
+  it('says how large the lake tables are, that nothing was read, and what could not be sized', async () => {
+    const { lakeSizeLines } = await import('./sync.js');
+    expect(lakeSizeLines(undefined)).toEqual([]);
+    expect(lakeSizeLines({ tables: 7, bytes: 5_600_000_000_000, estimated: 7, notSized: [], timedOut: 0 })).toEqual([
+      '  ✓ Lake table sizes: 7 tables, about 5.6 TB, from file metadata (estimated from some of their files for 7); no data was read.',
+    ]);
+    expect(lakeSizeLines({ tables: 1, bytes: 0, estimated: 0, notSized: ['memory.main.events'], timedOut: 2 })).toEqual([
+      '  ✓ Lake table sizes: 1 table, from file metadata; no data was read.',
+      '    ! Not sized (their metadata could not say): memory.main.events',
+      "    ! 2 tables not sized: sizing stops after two minutes. Name fewer tables in the connection's sources, or sync again.",
+    ]);
+  });
+});

@@ -670,9 +670,10 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
   console.log('ZLens model draft (checked on the warehouse; nothing is written without --apply)');
   printDraftScope(report);
   if (report.dbtLeftOut?.length) console.log(`  Left to the dbt draft: ${report.dbtLeftOut.length} table${report.dbtLeftOut.length === 1 ? '' : 's'} dbt builds (zlens model draft --source dbt drafts ${report.dbtLeftOut.length === 1 ? 'it' : 'them'} as dbt models)`);
+  printReadNotes(report);
   console.log(`  ${tables.length} table${tables.length === 1 ? '' : 's'} to answer from · ${lookAlikes.length} with a better table to use instead · ${report.relationships.length} join${report.relationships.length === 1 ? '' : 's'} (${passed.length} passed) · ${report.rules?.length ?? 0} measured rule${report.rules?.length === 1 ? '' : 's'} · ${report.concepts?.length ?? 0} concept${report.concepts?.length === 1 ? '' : 's'}`);
   console.log('Tables to answer from');
-  for (const entity of tables) console.log(`  ${entity.domain}${entity.area ? `/${entity.area}` : ''}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}` : ''}`);
+  for (const entity of tables) console.log(`  ${entity.domain}${entity.area ? `/${entity.area}` : ''}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}${entity.sampled ? ` (measured on ${entity.sampled})` : ''}` : ''}`);
   if (report.stagingHidden?.length) {
     console.log('Staging copies left out (a final table holds the same rows; --include-staging drafts them)');
     for (const item of report.stagingHidden) console.log(`  ${item.relation} · same as ${item.finalRelation}`);
@@ -687,7 +688,7 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
     const status = relationship.validation?.status;
     const mark = status === 'passed' ? '✓' : status ? '!' : '?';
     const why = status === 'passed' ? '' : status ? `: ${relationship.validation?.message ?? 'the check did not pass'}` : `: not checked${relationship.validationError ? ` (${relationship.validationError})` : ''}`;
-    console.log(`  ${mark} ${relationship.from} → ${relationship.to} on ${keyText(relationship.keys)} · ${relationship.cardinality}${why}`);
+    console.log(`  ${mark} ${relationship.from} → ${relationship.to} on ${keyText(relationship.keys)} · ${relationship.cardinality}${why}${relationship.sampled ? ` · checked on ${relationship.sampled}; validate it on the whole tables to certify it` : ''}`);
   }
   if (report.rules?.length) {
     console.log('Rules measured on the data (each number is what the saved query returned)');
@@ -702,9 +703,18 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
     : 'Write it as drafts with: zlens model draft --apply');
 }
 
+/** Lake tables too large to read whole: what the checks read of them (open-formats plan L4). */
+function printReadNotes(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport): void {
+  const notes = report.readNotes ?? [];
+  if (!notes.length) return;
+  console.log('  Large tables (each check reads at most a set amount of a table; ZLENS_READ_BUDGET_MB changes it):');
+  for (const note of notes) console.log(`    ${note.kind === 'sampled' ? '·' : '!'} ${note.text}`);
+}
+
 function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport, title = 'ZLens warehouse discovery'): void {
   const newEntities = report.entities.filter((entity) => !entity.existing);
   console.log(`${title} (draft only${report.validated ? ', checked on the warehouse' : ''})`);
+  printReadNotes(report);
   console.log(`  catalog ${report.catalogFingerprint.slice(0, 12)} · ${report.relations} relations · ${newEntities.length} new entities · ${report.relationships.length} new relationships${report.existingRelationships ? ` · ${report.existingRelationships} already modeled` : ''}${report.rules?.length ? ` · ${report.rules.length} measured rules` : ''}${report.concepts?.length ? ` · ${report.concepts.length} concepts` : ''}`);
   if (report.queryHistory) {
     console.log('error' in report.queryHistory

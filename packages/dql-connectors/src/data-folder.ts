@@ -41,8 +41,14 @@ export interface DataFolderViewSource {
   reader: DataFileReader;
   /** An Excel sheet's name. */
   sheet?: string;
-  /** A folder of files: read as one table (by column name); partitioned, its `key=value` folder names are columns. */
-  folder?: { partitioned: boolean };
+  /**
+   * A folder of files: read as one table (by column name); partitioned, its
+   * `key=value` folder names are columns. `sameColumns`: its files were seen to
+   * share their columns (files spread across a folder of many), so it is read
+   * with the first file's columns, and a statement opens one footer instead of
+   * every file's (open-formats plan L4, decision L4-9).
+   */
+  folder?: { partitioned: boolean; sameColumns?: boolean };
   /**
    * An Iceberg table's newest metadata version (`00003-1b2c…`, from
    * `00003-1b2c….metadata.json`): it is read as of that version, from its own
@@ -720,9 +726,10 @@ function readerCall(source: DataFolderViewSource): string {
     case 'delta_scan':
       return `delta_scan(${sqlText(source.file)})`;
     default:
-      return source.folder
-        ? `${source.reader}(${sqlText(source.file)}, union_by_name = true${source.folder.partitioned ? ', hive_partitioning = true' : ''})`
-        : `${source.reader}(${sqlText(source.file)})`;
+      if (!source.folder) return `${source.reader}(${sqlText(source.file)})`;
+      return source.folder.sameColumns
+        ? `${source.reader}(${sqlText(source.file)}${source.folder.partitioned ? ', hive_partitioning = true' : ''})`
+        : `${source.reader}(${sqlText(source.file)}, union_by_name = true${source.folder.partitioned ? ', hive_partitioning = true' : ''})`;
   }
 }
 
@@ -804,4 +811,10 @@ export function dataFolderFilesStatement(source: DataFolderViewSource, limit: nu
 /** The columns of one file a folder table reads. */
 export function dataFolderFileColumnsStatement(source: DataFolderViewSource, file: string): string {
   return `DESCRIBE SELECT * FROM ${source.reader}(${sqlText(file)})`;
+}
+
+/** Every file a folder table reads, in order (one listing; no file is opened). */
+export function dataFolderAllFilesStatement(source: DataFolderViewSource): string | undefined {
+  if (!source.folder) return undefined;
+  return `SELECT file FROM glob(${sqlText(source.file)}) ORDER BY file`;
 }

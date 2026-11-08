@@ -468,8 +468,8 @@ describe('extension downloads (ZLENS_DUCKDB_AUTOINSTALL)', () => {
     const directory = mkdtempSync(join(tmpdir(), 'dql-duckdb-off-'));
     try {
       await exercise(join(directory, 'w.duckdb'));
-      // The database's own setup connection: the pragma, then both settings.
-      expect(stub.log[0]).toEqual(['PRAGMA disable_checkpoint_on_shutdown', ...SETTINGS]);
+      // The database's own setup connection: the pragma, then both settings, then the footer cache (L4-9).
+      expect(stub.log[0]).toEqual(['PRAGMA disable_checkpoint_on_shutdown', ...SETTINGS, 'SET GLOBAL parquet_metadata_cache = true']);
       // The first connector's connection: both settings, then its statement.
       expect(stub.log[1].slice(0, 3)).toEqual([...SETTINGS, 'SELECT 1']);
       const used = stub.log.filter((statements) => setupOf(statements).length > 0 || statements.some((sql) => /^SELECT [123]$/.test(sql)));
@@ -518,7 +518,7 @@ describe('extension downloads (ZLENS_DUCKDB_AUTOINSTALL)', () => {
       await expect(connector.execute('SET autoinstall_known_extensions = true')).rejects.toThrow(/extension downloads are off on this install \(ZLENS_DUCKDB_AUTOINSTALL=off\); autoinstall_known_extensions cannot be changed/);
       await expect(connector.execute('RESET autoload_known_extensions')).rejects.toThrow(/autoload_known_extensions cannot be changed/);
       await expect(connector.execute("PRAGMA autoload_known_extensions='true'")).rejects.toThrow(/autoload_known_extensions cannot be changed/);
-      const engineSaw = () => stub.log.flat().filter((sql) => /^(?:FORCE\s+)?INSTALL|= true|RESET|PRAGMA autoload/i.test(sql) || /;\s*INSTALL/i.test(sql));
+      const engineSaw = () => stub.log.flat().filter((sql) => /^(?:FORCE\s+)?INSTALL|(?:autoinstall|autoload)\w*\s*=\s*true|RESET|PRAGMA autoload/i.test(sql) || /;\s*INSTALL/i.test(sql));
       expect(engineSaw()).toEqual([]);
       // Bundling from disk downloads nothing: these reach the engine.
       const allowed = ["INSTALL httpfs FROM '/opt/zlens/extensions'", "INSTALL '/opt/zlens/extensions/httpfs.duckdb_extension'", 'LOAD httpfs', 'SET autoload_known_extensions = false', "SELECT 'INSTALL httpfs' AS text"];
