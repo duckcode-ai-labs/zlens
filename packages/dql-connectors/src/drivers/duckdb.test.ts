@@ -425,6 +425,11 @@ describe('extension downloads (ZLENS_DUCKDB_AUTOINSTALL)', () => {
     for (const value of [undefined, '', 'on', 'true']) expect(duckDBAutoinstallOff({ ZLENS_DUCKDB_AUTOINSTALL: value })).toBe(false);
   });
 
+  it('is off on an install with no internet access (ZLENS_NO_EGRESS=1), whatever ZLENS_DUCKDB_AUTOINSTALL says', () => {
+    expect(duckDBAutoinstallOff({ ZLENS_NO_EGRESS: '1' })).toBe(true);
+    expect(duckDBAutoinstallOff({ ZLENS_NO_EGRESS: '1', ZLENS_DUCKDB_AUTOINSTALL: 'on' })).toBe(true);
+  });
+
   it('reads the old name DQL_DUCKDB_AUTOINSTALL when the new one is not set; the new one wins when both are', () => {
     expect(duckDBAutoinstallOff({ DQL_DUCKDB_AUTOINSTALL: 'off' })).toBe(true);
     expect(duckDBAutoinstallOff({ ZLENS_DUCKDB_AUTOINSTALL: 'on', DQL_DUCKDB_AUTOINSTALL: 'off' })).toBe(false);

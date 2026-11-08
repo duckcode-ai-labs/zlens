@@ -12,3 +12,21 @@ export function readEnv(
   const current = env[`ZLENS_${suffix}`];
   return current !== undefined ? current : env[`DQL_${suffix}`];
 }
+
+/**
+ * ZLENS_NO_EGRESS=1 (or true, on, yes): ZLens reaches nothing on the internet by itself. No update check,
+ * no DuckDB extension downloads, no driver installs from npm: drivers come with the install
+ * (`ZLENS_CONNECTOR_PATH`). For a container with no outbound access, such as an app inside Snowflake.
+ * What a person points ZLens at (a model provider, a Slack webhook) is theirs to configure.
+ */
+export function noEgress(env: Readonly<Record<string, string | undefined>> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {}): boolean {
+  return /^(1|true|on|yes)$/i.test(readEnv('ZLENS_NO_EGRESS', env)?.trim() ?? '');
+}
+
+/**
+ * ZLENS_CONNECTOR_PATH: folders (separated like PATH) whose `node_modules` hold drivers installed with
+ * ZLens itself, e.g. baked into a container image. Searched after the project's `.dql/connectors`.
+ */
+export function bundledConnectorFolders(env: Readonly<Record<string, string | undefined>> = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {}, delimiter = ((globalThis as { process?: { platform?: string } }).process?.platform === 'win32' ? ';' : ':')): string[] {
+  return (readEnv('ZLENS_CONNECTOR_PATH', env) ?? '').split(delimiter).map((folder) => folder.trim()).filter(Boolean);
+}

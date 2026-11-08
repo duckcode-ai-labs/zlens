@@ -71,6 +71,8 @@ interface ConnectorInstallStatus {
   builtIn: boolean;
   installPath: string;
   installCommand?: string;
+  /** False when this install has no internet access: a missing driver cannot be added here. */
+  installable?: boolean;
 }
 
 const QUICK_CONNECT_PRESETS = [
@@ -1139,9 +1141,9 @@ export function ConnectionPanel({
                     textTransform: 'uppercase',
                   }}
                 >
-                  {builtIn ? 'Built in' : installed ? 'Installed' : 'Install required'}
+                  {builtIn ? 'Built in' : installed ? 'Installed' : installStatus?.installable === false ? 'Not included' : 'Install required'}
                 </span>
-                {!installed && (
+                {!installed && installStatus?.installable !== false && (
                   <button
                     onClick={() => handleInstallConnector(driver)}
                     disabled={Boolean(installingDriver)}
@@ -2017,6 +2019,7 @@ function ConnectorStatusRow({
   const builtIn = status?.builtIn ?? true;
   const installed = status?.installed ?? true;
   const needsInstall = !installed && !builtIn;
+  const notIncluded = needsInstall && status?.installable === false;
 
   const tone = installing ? t.warning : needsInstall ? t.warning : t.success;
   const toneBg = installing ? 'var(--status-warning-bg)' : needsInstall ? 'var(--status-warning-bg)' : 'var(--status-success-bg)';
@@ -2027,7 +2030,9 @@ function ConnectorStatusRow({
       ? 'Built in — no installation needed'
       : installed
         ? 'Connector installed and ready'
-        : 'Connector package required before you can connect';
+        : notIncluded
+          ? 'Not included with this install, which has no internet access to add it'
+          : 'Connector package required before you can connect';
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, border: `1px solid ${toneBorder}`, borderRadius: 9, background: toneBg, padding: '10px 12px' }}>
@@ -2041,7 +2046,7 @@ function ConnectorStatusRow({
           {statusText}
         </div>
       </div>
-      {needsInstall || installing ? (
+      {notIncluded && !installing ? null : needsInstall || installing ? (
         <button
           type="button"
           onClick={onInstall}

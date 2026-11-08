@@ -29,6 +29,7 @@ export type { SQLParamSpec } from './sql-params.js';
 export { buildParamValues, expandArrayParameters, normalizeSQLPlaceholders } from './sql-params.js';
 export { SnowflakeConnector, SNOWFLAKE_APPLICATION, snowflakeQueryTag } from './drivers/snowflake.js';
 export { currentQueryLabels, withQueryLabels, type QueryLabels } from './query-labels.js';
+export { bundledConnectorFolders, noEgress } from './env.js';
 export { DuckDBConnector, DUCKDB_DRIVER_PACKAGE, duckDBNewerFileMessage, duckDBOpenFailureMessage, ZLENS_DUCKDB_READER_LINE, type DuckDBConsistentReadScope } from './drivers/duckdb.js';
 export { FileConnector } from './drivers/file.js';
 export {

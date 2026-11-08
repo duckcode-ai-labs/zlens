@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { isNewerDqlVersion } from './version-status.js';
+import { describe, expect, it, vi } from 'vitest';
+import { fetchLatestPublishedDqlVersion, isNewerDqlVersion } from './version-status.js';
 
 describe('isNewerDqlVersion', () => {
   it('orders release versions numerically', () => {
@@ -23,5 +23,20 @@ describe('isNewerDqlVersion', () => {
   it('falls back to inequality for unparseable versions', () => {
     expect(isNewerDqlVersion('nightly', '1.17.3')).toBe(true);
     expect(isNewerDqlVersion('nightly', 'nightly')).toBe(false);
+  });
+});
+
+describe('the update check on an install with no internet access', () => {
+  it('asks npm nothing when ZLENS_NO_EGRESS=1', async () => {
+    vi.stubEnv('ZLENS_DISABLE_VERSION_CHECK', '');
+    vi.stubEnv('ZLENS_NO_EGRESS', '1');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    try {
+      expect(await fetchLatestPublishedDqlVersion()).toBeUndefined();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 });

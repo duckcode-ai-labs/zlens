@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readEnv } from '@zlens/core';
+import { noEgress } from '@zlens/connectors';
 
 export interface DqlRuntimeVersionStatus {
   /** Version of the code actually serving this process. */
@@ -41,7 +42,7 @@ let latestInFlight: Promise<string | undefined> | undefined;
 
 /** Best-effort latest published version; never throws, never blocks longer than 2s. */
 export async function fetchLatestPublishedDqlVersion(): Promise<string | undefined> {
-  if (readEnv('ZLENS_DISABLE_VERSION_CHECK') === '1') return undefined;
+  if (readEnv('ZLENS_DISABLE_VERSION_CHECK') === '1' || noEgress()) return undefined;
   if (latestCache && Date.now() - latestCache.fetchedAt < LATEST_CACHE_TTL_MS) return latestCache.version;
   if (latestInFlight) return latestInFlight;
   latestInFlight = (async () => {

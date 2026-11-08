@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { QueryExecutor, describeLakeStorage, type DataFolderStatus } from '@zlens/connectors';
+import { QueryExecutor, describeLakeStorage, noEgress, type DataFolderStatus } from '@zlens/connectors';
 import { WorkbenchRoutedQueryExecutor, type WorkbenchQueryRouteOptions } from '../workbench-query-route.js';
 import { appsPublishSettings, appsPublishSettingsProblems, buildManifest, collectInputFiles, resolveDbtManifestPath, resolveSemanticLayerWithDiagnostics } from '@zlens/core';
 import { buildLocalContextPack, defaultKgPath, defaultMetadataPath, openMetadataCatalog } from '@zlens/agent';
@@ -732,7 +732,13 @@ function checkSnowflakeNodeVersion(): Check {
 export function checkSnowflakeDriver(projectRoot: string, version = installedConnectorPackageVersion(projectRoot, 'snowflake-sdk')): Check {
   const install = 'npm install --prefix .dql/connectors snowflake-sdk@^3.4.1';
   if (!version) {
-    return { name: 'Snowflake driver', ok: false, detail: `snowflake-sdk is not installed; run ${install}` };
+    return {
+      name: 'Snowflake driver',
+      ok: false,
+      detail: noEgress()
+        ? 'snowflake-sdk is not included with this install, which has no internet access (ZLENS_NO_EGRESS); add it to the folder ZLENS_CONNECTOR_PATH names'
+        : `snowflake-sdk is not installed; run ${install}`,
+    };
   }
   const major = Number(version.split('.')[0]);
   if (Number.isFinite(major) && major < 3) {

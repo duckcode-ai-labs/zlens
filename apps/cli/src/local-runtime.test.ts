@@ -103,6 +103,8 @@ import {
   readProjectAskRuntimeMode,
   resolveAskAgentRuntimeMode,
   getConnectorInstallStatuses,
+  ensureConnectionPackages,
+  installedConnectorPackageVersion,
   assertConnectionNodeCompatibility,
   ensureConnectorInstalledForStartup,
   connectorInstallDriver,
@@ -7608,6 +7610,34 @@ describe('normalizeProjectConnection', () => {
     expect(normalized).toMatchObject({ password: 'hunter22', sshTunnel: { password: 'tunnel-pass' } });
     expect(() => normalizeProjectConnection({ driver: 'postgresql', password: '${secret:gone.password}' } as never, projectRoot))
       .toThrow(/Re-enter it on the Connections page/);
+  });
+});
+
+describe('drivers on an install with no internet access', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('finds a driver that came with the install (ZLENS_CONNECTOR_PATH), for the check and the connection', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-no-egress-'));
+    const bundled = mkdtempSync(join(tmpdir(), 'zlens-bundled-drivers-'));
+    const sdk = join(bundled, 'node_modules', 'snowflake-sdk');
+    mkdirSync(sdk, { recursive: true });
+    writeFileSync(join(sdk, 'package.json'), JSON.stringify({ name: 'snowflake-sdk', version: '3.4.1', main: 'index.js' }));
+    writeFileSync(join(sdk, 'index.js'), 'module.exports = {};');
+    vi.stubEnv('ZLENS_CONNECTOR_PATH', bundled);
+    expect(getConnectorInstallStatuses(projectRoot).find((status) => status.driver === 'snowflake')).toMatchObject({ installed: true });
+    expect(installedConnectorPackageVersion(projectRoot, 'snowflake-sdk')).toBe('3.4.1');
+    expect(normalizeProjectConnection({ driver: 'snowflake', account: 'a' } as never, projectRoot).moduleSearchPaths).toEqual([join(projectRoot, '.dql', 'connectors'), bundled, projectRoot]);
+  });
+
+  it('never runs npm with ZLENS_NO_EGRESS=1: no Install command, and an install is refused with the reason', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-no-egress-'));
+    vi.stubEnv('ZLENS_NO_EGRESS', '1');
+    const snowflake = getConnectorInstallStatuses(projectRoot).find((status) => status.driver === 'snowflake');
+    expect(snowflake).toMatchObject({ installed: false, installable: false });
+    expect(snowflake?.installCommand).toBeUndefined();
+    expect(() => ensureConnectionPackages(projectRoot, { driver: 'snowflake' })).toThrow(/no internet access \(ZLENS_NO_EGRESS\).*ZLENS_CONNECTOR_PATH/);
+    expect(() => ensureConnectorInstalledForStartup(projectRoot, 'snowflake')).not.toThrow();
+    expect(existsSync(join(projectRoot, '.dql', 'connectors', 'node_modules'))).toBe(false);
   });
 });
 

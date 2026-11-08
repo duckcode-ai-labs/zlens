@@ -62,6 +62,24 @@ that uses a tunnel or IAM sign-in.
 This keeps the global CLI install small while still letting each project opt
 into the database packages it actually uses.
 
+**An install with no internet access.** In a container that cannot reach the
+internet (an app inside Snowflake, an air-gapped server), set
+`ZLENS_NO_EGRESS=1`. ZLens then reaches nothing on the internet by itself:
+no update check against npm, no DuckDB extension downloads (as
+`ZLENS_DUCKDB_AUTOINSTALL=off`), and no driver installs from npm, at startup or
+from the Connections page, which shows a missing driver as not included.
+Install the drivers with the image instead, in a folder named by
+`ZLENS_CONNECTOR_PATH` (several folders are separated like `PATH`):
+
+```bash
+npm install --prefix /opt/zlens/drivers snowflake-sdk@^3.4.1
+export ZLENS_CONNECTOR_PATH=/opt/zlens/drivers ZLENS_NO_EGRESS=1
+```
+
+ZLens looks for a driver in the project's `.dql/connectors` first, then in
+`ZLENS_CONNECTOR_PATH`, then in the project. What you point ZLens at yourself,
+such as a model provider or a Slack webhook, still goes where you point it.
+
 Keep the `@^1.5.6-r.1` range on the DuckDB command (and the quotes, which
 zsh needs): npm's `latest` for `@duckdb/node-api` is 2.0, whose database files
 DuckDB 1.x cannot read.
