@@ -21,7 +21,7 @@ spec:
     port: 3474
     public: true
   # Projects, Apps, history and settings: kept through suspend, resume and upgrades.
-  # Snowflake deletes the volume if the service is dropped, so stop_app() only suspends.
+  # Snowflake deletes the volume if the service is dropped (DROP SERVICE ... FORCE), so stop_app() only suspends.
   volumes:
   - name: workspace
     source: block

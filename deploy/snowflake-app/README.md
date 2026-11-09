@@ -8,15 +8,20 @@ every component and flow of information is in [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## Build and install it (in your own account, development mode)
 
-1. Build the image for Snowflake's platform, with the Snowflake driver baked in, and push it to an
-   image repository in your account (`CREATE IMAGE REPOSITORY ...`):
+1. Build the image for Snowflake's platform, with the Snowflake driver baked in and ZLens running as the
+   unprivileged `node` user, and push it to an image repository in your account
+   (`CREATE IMAGE REPOSITORY ...`):
 
    ```bash
-   docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake .
+   docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" \
+     --build-arg ZLENS_USER=node -t zlens-snowflake .
    snow spcs image-registry login
    docker tag zlens-snowflake <orgname>-<acctname>.registry.snowflakecomputing.com/<db>/<schema>/<repo>/zlens:<tag>
    docker push <orgname>-<acctname>.registry.snowflakecomputing.com/<db>/<schema>/<repo>/zlens:<tag>
    ```
+
+   Before an image becomes a version others install, scan it: `./scan-image.sh zlens-snowflake`
+   (fixable critical or high CVEs fail it, as in CI; then a ClamAV malware scan of its files).
 
 2. From this folder, with a Snowflake CLI connection for a role that may create application packages:
 

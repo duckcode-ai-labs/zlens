@@ -8,6 +8,10 @@ artifacts:
   container_services:
     images:
     - <% ctx.env.ZLENS_IMAGE %>
+snowflake_database:
+  roles:
+  - CORTEX_USER:
+      description: "Ask questions with Claude through Snowflake Cortex, inside your account."
 privileges:
 - BIND SERVICE ENDPOINT:
     description: "Open ZLens in the browser at its own Snowflake address."
