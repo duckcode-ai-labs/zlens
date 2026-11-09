@@ -117,6 +117,15 @@ prepare_snowflake_app() {
   fi
   mkdir -p "$workspace"
   cd "$workspace"
+  # The app image runs as the unprivileged `node` user (ZLENS_USER=node). A volume first used by an
+  # image that ran as root holds files this user cannot change: say so plainly instead of failing later.
+  for path in . dql.config.json .dql; do
+    if [ -e "$path" ] && [ ! -w "$path" ]; then
+      log "Cannot write $workspace/$path as $(id -un) (uid $(id -u)): the volume was probably created by an image that ran as root."
+      log "Give it to this user once (chown -R $(id -u):$(id -g) $workspace) or run the image as root."
+      exit 1
+    fi
+  done
   if [ ! -f dql.config.json ]; then
     log "First start: creating a warehouse-first project in $workspace."
     zlens init --warehouse-first --yes >/dev/null

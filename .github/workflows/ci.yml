@@ -330,6 +330,31 @@ jobs:
           ZLENS_SERVER_TOKEN: ci-health-check-token
         run: docker compose down
 
+  # --- the image the ZLens app for Snowflake ships (deploy/snowflake-app) ---
+  # Snowflake's security review rejects images with fixable critical or high CVEs and asks for a
+  # non-root container: build that image as the app does, check it runs as `node` and can write a
+  # fresh volume, and scan it with Trivy.
+  snowflake-image:
+    name: snowflake app image (non-root, CVE scan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the Snowflake app image
+        run: |
+          docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" \
+            --build-arg ZLENS_USER=node -t zlens-snowflake:ci .
+      - name: runs as node and writes a fresh volume
+        run: |
+          test "$(docker inspect --format '{{.Config.User}}' zlens-snowflake:ci)" = node
+          docker volume create zlens-ci-workspace
+          docker run --rm -v zlens-ci-workspace:/workspace --entrypoint sh zlens-snowflake:ci \
+            -c 'test "$(id -u)" = 1000 && touch /workspace/write-check && node /opt/dql/dist/index.js --version'
+      - name: no fixable critical or high CVEs
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.2 image \
+            --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --no-progress \
+            zlens-snowflake:ci
+
   # --- docs: every relative link resolves; every documented command is real ---
   docs:
     name: docs link check

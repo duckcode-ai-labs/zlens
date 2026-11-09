@@ -15,14 +15,18 @@
 #
 # For a container with no internet access (an app inside Snowflake), bake the
 # database drivers into the image; ZLens finds them through ZLENS_CONNECTOR_PATH:
-#   docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake .
+#   docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" \
+#     --build-arg ZLENS_USER=node -t zlens-snowflake .
 # and see "ZLens inside Snowflake" in docs/get-started/install.md.
+# ZLENS_USER=node runs ZLens as the image's unprivileged `node` user (uid 1000) instead of root;
+# the Snowflake app sets it, since Snowflake's security review asks for a non-root container.
 
 # Node 24 LTS (Node 20's support ended in April 2026). ZLens supports 20, 22, 24 and 26.
+# Debian 13 (trixie): unlike bookworm's, its zlib has a fix for every critical CVE Trivy reports.
 ARG NODE_VERSION=24
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
-FROM node:${NODE_VERSION}-bookworm-slim AS builder
+FROM node:${NODE_VERSION}-trixie-slim AS builder
 
 WORKDIR /build
 
@@ -56,7 +60,7 @@ RUN mkdir -p /tmp/drivers \
     fi
 
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
-FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+FROM node:${NODE_VERSION}-trixie-slim AS runtime
 
 ENV NODE_ENV=production \
     ZLENS_HOST=0.0.0.0 \
@@ -64,10 +68,15 @@ ENV NODE_ENV=production \
 
 WORKDIR /opt/dql
 
-# Native modules need libstdc++ at runtime.
+# Native modules need libstdc++ at runtime. Debian's security fixes are applied on top of the
+# base image, and the npm it bundles is updated: Node 24's npm 11.19 carries brace-expansion and
+# undici versions with known high CVEs (Snowflake's app review scans the image; so does CI).
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g --no-audit --no-fund npm@11.21.2 \
+ && npm cache clean --force
 
 # Pull in the deployed CLI bundle (dist + node_modules).
 COPY --from=builder /tmp/deploy-cli /opt/dql
@@ -83,6 +92,8 @@ RUN printf '#!/bin/sh\nexec node /opt/dql/dist/index.js "$@"\n' > /usr/local/bin
  && chmod +x /usr/local/bin/dql-docker-entrypoint
 
 # Project files live here at runtime — bind-mount your repo to /workspace.
+# Owned by `node`, so a fresh volume is writable when ZLENS_USER=node.
+RUN mkdir -p /workspace && chown node:node /workspace
 WORKDIR /workspace
 
 EXPOSE 3474 3479
@@ -93,5 +104,10 @@ EXPOSE 3474 3479
 # server refuses to start, e.g.:
 #   docker run -p 127.0.0.1:3474:3474 -e ZLENS_SERVER_TOKEN=... \
 #     -e ZLENS_ALLOWED_ORIGINS=http://127.0.0.1:3474 -v "$PWD":/workspace <image>
+#
+# The user ZLens runs as. root by default, so a bind-mounted folder of any owner keeps working;
+# `--build-arg ZLENS_USER=node` (the Snowflake app) runs it unprivileged.
+ARG ZLENS_USER=root
+USER ${ZLENS_USER}
 ENTRYPOINT ["dql-docker-entrypoint"]
 CMD ["zlens", "notebook", "--host", "0.0.0.0", "--no-open"]
