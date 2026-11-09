@@ -9,8 +9,10 @@ keeps its projects on a volume in your account.
 When you get the app, Snowflake gives it what it needs to run: a small compute pool, its own address,
 and an extra-small warehouse for its queries. ZLens starts by itself. Then:
 
-1. **Who uses ZLens.** Open *Catalog » Apps » ZLENS_APP* (your app's name), then the **Configurations**
-   tab, and enter the Snowflake user name of the one person who will use it.
+1. **Who uses ZLens.** Open **Apps** in Snowsight's left menu, then this app, then its **Configurations**
+   tab. Pick a warehouse at the top of the page first (Snowsight needs one to save), then **Review**,
+   enter the Snowflake user name of the one person who will use ZLens, and **Save**. (In SQL:
+   `ALTER APPLICATION ZLENS_APP SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';`)
 2. **What ZLens may read.** Grant the app one database (replace `ZLENS_APP` with the app's name and
    `MY_DB`, `MY_SCHEMA` with yours; repeat the schema lines for more schemas in that database):
 
@@ -21,10 +23,12 @@ and an extra-small warehouse for its queries. ZLens starts by itself. Then:
    GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
    ```
 
-3. **Let that person open it.** On the app's page, *Access management*: add their role. (In SQL:
+3. **Let that person open it.** On the app's page, *Access management*: add their role (the role that
+   installed the app can open it already). (In SQL:
    `GRANT APPLICATION ROLE ZLENS_APP.app_user TO ROLE THEIR_ROLE;`)
 4. **Ask with Claude** (optional): `GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;`
-5. **Open it:** *Launch App* on the app's page, or `CALL ZLENS_APP.app_public.app_url();` for its address.
+5. **Open it:** *Launch app* on the app's page (it opens a new window), or
+   `CALL ZLENS_APP.app_public.app_url();` for its address. It opens straight into the project.
 
 Until steps 1 and 2 are done, whoever opens ZLens sees which of them is still missing. ZLens picks up
 changes within a minute, without a restart. Anyone but the named user is told the app is set up for

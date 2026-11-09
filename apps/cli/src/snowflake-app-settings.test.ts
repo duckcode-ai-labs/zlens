@@ -95,6 +95,7 @@ describe('reading the app settings', () => {
   it('shows the admin only the steps still missing, with the app\'s name filled in', () => {
     const both = snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: true, databases: [] });
     expect(both).toContain('Configurations');
+    expect(both).toContain('Pick a warehouse at the top of the page first');
     expect(both).toContain('GRANT USAGE ON DATABASE MY_DB TO APPLICATION ZLENS_APP;');
     const onlyData = snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: [] });
     expect(onlyData).not.toContain('Configurations');
@@ -168,6 +169,9 @@ describe('the server, set up from Snowsight', () => {
     expect((await call('/api/connections', 'OTHER')).status).toBe(403);
     const saved = JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf8'));
     expect(saved.connections.default.database).toBe('SALES');
+    // The app set up its own project: the installer's first-run questions never open there.
+    const launch = await (await call('/api/onboarding/launch', 'JSMITH')).json();
+    expect(launch).toMatchObject({ shouldOpen: false, snowflakeAppManaged: true });
     // Snowflake's readiness probe is never held up by the setup.
     expect((await fetch(`http://127.0.0.1:${port}/api/health`)).status).toBe(200);
   });
