@@ -1,0 +1,20 @@
+# The ZLens app for Snowflake (the free, one-person app): `snow app run` builds the package and
+# installs it in development mode. ZLENS_IMAGE names the ZLens image in your image repository,
+# e.g. /zlens_dev/app/images/zlens:0.3.1 (see README.md).
+definition_version: 2
+entities:
+  zlens_package:
+    type: application package
+    identifier: ZLENS_PACKAGE
+    manifest: app/manifest.yml
+    artifacts:
+      - src: app/*
+        dest: ./
+        processors:
+          - templates
+  zlens_app:
+    type: application
+    identifier: ZLENS_APP
+    from:
+      target: zlens_package
+    debug: false

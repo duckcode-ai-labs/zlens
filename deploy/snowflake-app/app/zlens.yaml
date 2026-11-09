@@ -1,0 +1,28 @@
+# ZLens's service. {{ env }} is filled by app_public.start_app() (the person, warehouse, database, schema).
+spec:
+  containers:
+  - name: zlens
+    image: <% ctx.env.ZLENS_IMAGE %>
+    env: {{ env }}
+    volumeMounts:
+    - name: workspace
+      mountPath: /workspace
+    readinessProbe:
+      port: 3474
+      path: /api/health
+    resources:
+      requests:
+        memory: 2G
+        cpu: 0.5
+      limits:
+        memory: 5G
+  endpoints:
+  - name: ui
+    port: 3474
+    public: true
+  # Projects, Apps, history and settings: kept through suspend, resume and upgrades.
+  # Snowflake deletes the volume if the service is dropped, so stop_app() only suspends.
+  volumes:
+  - name: workspace
+    source: block
+    size: 10Gi
