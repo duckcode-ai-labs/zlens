@@ -148,7 +148,7 @@ export function snowflakeAppSetupPage(input: { appName?: string; needsUser: bool
   const app = input.appName ?? '<this app>';
   const steps: string[] = [];
   if (input.needsUser) {
-    steps.push(`<li><strong>Who uses ZLens.</strong> In Snowsight, open <em>Catalog » Apps » ${escapeHtml(app)}</em>, then the <em>Configurations</em> tab, and enter the Snowflake user name of the person who will use ZLens.</li>`);
+    steps.push(`<li><strong>Who uses ZLens.</strong> In Snowsight, open <em>Apps</em> in the left menu, then <em>${escapeHtml(app)}</em>, then its <em>Configurations</em> tab. Pick a warehouse at the top of the page first (Snowsight needs one to save), then <em>Review</em>, enter the Snowflake user name of the person who will use ZLens, and <em>Save</em>.</li>`);
   }
   if (input.databases.length === 0) {
     const grants = [

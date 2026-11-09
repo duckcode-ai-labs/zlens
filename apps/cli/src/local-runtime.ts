@@ -15388,7 +15388,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // With a host (RFC 0010 HH-9) the host sets up the project; the
       // installer's first-run review never opens for the people it signs in.
       const hostManaged = Boolean(hostIdentity);
-      const shouldOpen = !hostManaged && acknowledgedVersion !== runtimeVersion;
+      // The ZLens app for Snowflake sets up its own project (its connection, locked, and the database
+      // granted to it): the first-run questions have nothing left to ask there.
+      const snowflakeAppManaged = Boolean(snowflakeApp);
+      const shouldOpen = !hostManaged && !snowflakeAppManaged && acknowledgedVersion !== runtimeVersion;
       const dbtConfigured = dbtProjectConfigured(projectRoot, projectConfig);
       const requiresDbtReapply = Boolean(
         shouldOpen
@@ -15406,6 +15409,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         shouldOpen,
         reason: shouldOpen ? (acknowledgedVersion ? 'version_upgrade' : 'first_install') : null,
         ...(hostManaged ? { hostManaged: true } : {}),
+        ...(snowflakeAppManaged ? { snowflakeAppManaged: true } : {}),
       }));
       return;
     }
