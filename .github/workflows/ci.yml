@@ -307,13 +307,15 @@ jobs:
           workspace=$(mktemp -d)
           docker run --rm -v "$session:/snowflake/session:ro" -v "$workspace:/workspace" \
             -e SNOWFLAKE_HOST=example.snowflakecomputing.com -e ZLENS_SNOWFLAKE_WAREHOUSE=APP_WH \
+            -e SNOWFLAKE_DATABASE=THE_APP -e SNOWFLAKE_SCHEMA=CORE \
             "$image" zlens --version
           node -e '
             const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
             const c = config.connections?.snowflake ?? {};
             const want = { driver: "snowflake", authMethod: "oauth", tokenFilePath: "/snowflake/session/token", account: "${SNOWFLAKE_ACCOUNT}", host: "${SNOWFLAKE_HOST}", warehouse: "APP_WH" };
             const wrong = Object.entries(want).filter(([key, value]) => c[key] !== value);
-            if (config.defaultConnectionName !== "snowflake" || config.modeling?.mode !== "warehouse-first" || wrong.length || "username" in c) {
+            // SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA, set by Snowflake, name where the service lives, never the data.
+            if (config.defaultConnectionName !== "snowflake" || config.modeling?.mode !== "warehouse-first" || wrong.length || "username" in c || "database" in c || "schema" in c) {
               console.error("unexpected first-start config:", JSON.stringify(config));
               process.exit(1);
             }

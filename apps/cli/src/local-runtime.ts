@@ -65,6 +65,7 @@ import {
 import { resolveNpmInvocation } from './npm-runtime.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason } from './deployment-locks.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
+import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions } from './snowflake-app-settings.js';
 import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
 import {
   ensureDqlGitignore,
@@ -1277,6 +1278,14 @@ export interface LocalServerOptions {
    * counts only inside a Snowflake container (snowflake-ingress.ts).
    */
   snowflakeIngress?: SnowflakeIngress;
+  /**
+   * The ZLens app for Snowflake set up from Snowsight: the person from an application configuration value
+   * and the database from what is granted to the app, both read while running (snowflake-app-settings.ts).
+   * Defaults to ZLENS_SNOWFLAKE_APP_SETTINGS; only with the Snowflake sign-in on.
+   */
+  snowflakeAppSettings?: SnowflakeAppSettingsOptions;
+  /** Tests: how the app's settings are read (defaults to the project's connection). */
+  snowflakeAppQuery?: SnowflakeAppQuery;
   /**
    * Receives the underlying HTTP server once created, so short-lived callers
    * (e.g. `zlens agent ask` starting an ephemeral runtime) can `close()` it and
@@ -5445,6 +5454,43 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       ? normalizeProjectConnection(projectConfig.defaultConnection, projectRoot)
       : null;
   let connection = configuredConnection ?? resolveDbtProfileRuntimeConnection(projectRoot, projectConfig);
+  // The ZLens app for Snowflake: the person and the database come from Snowsight while ZLens runs.
+  const snowflakeAppOptions = snowflakeIngress ? (opts.snowflakeAppSettings ?? snowflakeAppSettingsFromEnv()) : undefined;
+  const snowflakeAppQuery: SnowflakeAppQuery = opts.snowflakeAppQuery ?? (async (sql) => {
+    if (!connection) throw new Error('No Snowflake connection');
+    return (await executor.executeQuery(sql, [], {}, connection)).rows as Array<Record<string, unknown>>;
+  });
+  const snowflakeApp = snowflakeAppOptions ? new SnowflakeAppSettings(snowflakeAppOptions, snowflakeAppQuery) : undefined;
+  // Point the project's connection at the database the app was granted (written to dql.config.json, as Settings does).
+  let snowflakeAppDatabase: string | undefined;
+  const useSnowflakeAppDatabase = async (database: string): Promise<void> => {
+    if (snowflakeAppDatabase === database) return;
+    const configPath = join(projectRoot, 'dql.config.json');
+    const raw = existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown> : {};
+    const connections = (raw.connections && typeof raw.connections === 'object' ? raw.connections : {}) as Record<string, Record<string, unknown>>;
+    const key = resolveDefaultConnectionKey(raw, getStoredConnections(raw)) ?? Object.keys(connections)[0];
+    if (!key || !connections[key]) return;
+    // A schema belongs to the database it was in: the new database's schemas are all read.
+    const { schema: _previousSchema, ...rest } = connections[key];
+    connections[key] = { ...rest, database };
+    raw.connections = connections;
+    writeFileSync(configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8');
+    projectConfig = loadProjectConfig(projectRoot);
+    if (projectConfig.defaultConnection) connection = normalizeProjectConnection(projectConfig.defaultConnection, projectRoot);
+    snowflakeAppDatabase = database;
+    console.log(`[zlens] Reading the database this app was granted: ${database}.`);
+  };
+  // Snowflake will not auto-suspend a service with a public endpoint, but wakes a stopped one when it is opened:
+  // the app stops itself after a quiet spell.
+  const idleSuspend = snowflakeIngress ? idleSuspendFromEnv() : undefined;
+  const idleSuspender = idleSuspend
+    ? new IdleSuspender(idleSuspend.minutes * 60_000, async () => {
+      if (!connection) throw new Error('No Snowflake connection');
+      console.log(`[zlens] No one has used ZLens for ${idleSuspend.minutes} minutes: stopping. Opening it again starts it.`);
+      await executor.executeQuery(`ALTER SERVICE ${idleSuspend.service} SUSPEND`, [], {}, connection);
+    })
+    : undefined;
+  idleSuspender?.start();
   const projectSnapshots = new ProjectSnapshotService<DQLManifest>();
   let meaningDraftJob: MeaningDraftJob | undefined;
   // Server-lifetime registry for exact compiler-owned SQL. The downstream DQL
@@ -15046,6 +15092,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const requestUrl = req.url || '/';
     const url = new URL(requestUrl, 'http://127.0.0.1');
     const path = url.pathname || '/';
+    if (idleSuspender && path !== '/api/health') res.on('close', idleSuspender.touch());
     void (async () => {
 
     // Exact-origin CORS. An origin on the explicit allowlist is always accepted
@@ -15082,6 +15129,49 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(snowflakeIngressRefusalPage(refusal.error));
         }
         return;
+      }
+    }
+    // The app set up from Snowsight: until the admin names the person and grants a database, a page with the steps;
+    // then only that person, on the database granted.
+    if (snowflakeIngress && snowflakeApp && path !== '/api/health') {
+      let state: Awaited<ReturnType<SnowflakeAppSettings['current']>> | undefined;
+      try {
+        state = await snowflakeApp.current();
+      } catch (error) {
+        console.warn(`[zlens] Could not read this app's settings: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (state) {
+        const database = chooseDatabase(state.databases, typeof connection?.database === 'string' ? connection.database : undefined);
+        if (database && connection && database !== connection.database) {
+          try { await useSnowflakeAppDatabase(database); } catch (error) {
+            console.warn(`[zlens] Could not switch to the granted database: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+        const refusal = state.user ? snowflakeIngressRefusal({ appUser: state.user }, req.headers[SNOWFLAKE_USER_HEADER]) : undefined;
+        if (refusal) {
+          if (path.startsWith('/api/')) {
+            res.writeHead(refusal.status, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(serializeJSON({ error: refusal.error, code: refusal.code }));
+          } else {
+            res.writeHead(refusal.status, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(snowflakeIngressRefusalPage(refusal.error));
+          }
+          return;
+        }
+        if (!state.user || !database) {
+          const message = !state.user
+            ? 'ZLens is not set up yet: your Snowflake admin enters who uses it on the app\'s Configurations tab.'
+            : 'ZLens cannot read any data yet: your Snowflake admin grants this app one database.';
+          if (path.startsWith('/api/')) {
+            res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
+            // Which databases the app can see is the configured person's business only.
+            res.end(serializeJSON({ error: message, code: 'SNOWFLAKE_APP_SETUP_NEEDED', databases: state.user ? state.databases : [] }));
+          } else {
+            res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(snowflakeAppSetupPage({ appName: snowflakeAppOptions?.appName, needsUser: !state.user, databases: state.user ? state.databases : [] }));
+          }
+          return;
+        }
       }
     }
     // RFC 0010 HH-6: every API request that changes something or is refused

@@ -193,6 +193,13 @@ user and tells anyone else it is set up for one person. Outside a Snowflake cont
 `/snowflake/session/token`) this mode never turns on. The ZLens app package for Snowflake, with its
 setup steps, is in [`deploy/snowflake-app`](https://github.com/duckcode-ai-labs/zlens/tree/main/deploy/snowflake-app).
 
+The app sets three more switches. `ZLENS_SNOWFLAKE_APP_SETTINGS=1` makes ZLens read its one person from
+the app's configuration value (`ZLENS_SNOWFLAKE_APP_USER_CONFIGURATION`, default `ZLENS_USER`, which the
+admin enters on the app's Configurations tab) and its database from what is granted to the app, both
+while it runs. Until both are there, it shows the missing steps. `ZLENS_SNOWFLAKE_IDLE_SUSPEND_MINUTES`
+with `ZLENS_SNOWFLAKE_SERVICE` makes it stop its own service after that many idle minutes; opening its
+address starts it again (Snowflake does not auto-suspend a service with a public endpoint).
+
 To try the same first start outside Snowflake, set `ZLENS_SNOWFLAKE_APP=1` and
 sign in with a key pair instead (`ZLENS_SNOWFLAKE_USER`,
 `ZLENS_SNOWFLAKE_PRIVATE_KEY_PATH`, and `SNOWFLAKE_ACCOUNT`).

@@ -39,10 +39,11 @@ repository (`/<db>/<schema>/<repo>`).
 3. **Push** it to the image repository in the provider account (`snow spcs image-registry login`,
    then `docker tag` and `docker push` as in [README.md](README.md)).
 
-4. **Try it in development mode** from this folder, as the customer's admin would (grants,
-   `start_app`, `app_url` from [app/README.md](app/README.md)): the named person gets the page,
-   anyone else is refused, Test connection signs in with the container's token, a query reads the
-   granted tables, and `stop_app()` then `start_app()` keeps the project.
+4. **Try it in development mode** from this folder, as the customer's admin would (the steps in
+   [app/README.md](app/README.md)): before the person and a database are set, ZLens shows the
+   missing steps; then the named person gets the page, anyone else is refused, Test connection signs
+   in with the container's token, a query reads the granted tables, and `stop_app()` then
+   `start_app()` keeps the project.
 
    ```bash
    ZLENS_IMAGE=<repo>/zlens:<v> snow app run

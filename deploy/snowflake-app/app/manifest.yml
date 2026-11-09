@@ -1,4 +1,4 @@
-manifest_version: 1
+manifest_version: 2
 artifacts:
   setup_script: setup.sql
   readme: README.md
@@ -17,3 +17,5 @@ privileges:
     description: "Open ZLens in the browser at its own Snowflake address."
 - CREATE COMPUTE POOL:
     description: "Run ZLens in one small compute pool in your account."
+- CREATE WAREHOUSE:
+    description: "Its own extra-small warehouse for ZLens's queries (it suspends after 60 seconds idle)."
