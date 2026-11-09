@@ -1,0 +1,15 @@
+manifest_version: 1
+artifacts:
+  setup_script: setup.sql
+  readme: README.md
+  default_web_endpoint:
+    service: core.zlens
+    endpoint: ui
+  container_services:
+    images:
+    - <% ctx.env.ZLENS_IMAGE %>
+privileges:
+- BIND SERVICE ENDPOINT:
+    description: "Open ZLens in the browser at its own Snowflake address."
+- CREATE COMPUTE POOL:
+    description: "Run ZLens in one small compute pool in your account."

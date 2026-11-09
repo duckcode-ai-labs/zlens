@@ -109,6 +109,12 @@ prepare_snowflake_app() {
   # No model unless the app package chooses one: ZLENS_MODEL_PROVIDERS=cortex
   # gives it Claude through Snowflake Cortex, signed in with the service's token.
   export ZLENS_MODEL_PROVIDERS="${ZLENS_MODEL_PROVIDERS:-none}"
+  # Inside Snowflake its ingress signs people in and names them (Sf-Context-Current-User): ZLens trusts that
+  # header there, and only there (the server checks for Snowflake's token file too). ZLENS_SNOWFLAKE_APP_USER,
+  # set by the app, names the one person the free app serves.
+  if [ -f "$snowflake_token_file" ]; then
+    export ZLENS_SNOWFLAKE_INGRESS="${ZLENS_SNOWFLAKE_INGRESS:-1}"
+  fi
   mkdir -p "$workspace"
   cd "$workspace"
   if [ ! -f dql.config.json ]; then

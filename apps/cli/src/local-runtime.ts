@@ -64,6 +64,7 @@ import {
 } from "./mixed-source-sql.js";
 import { resolveNpmInvocation } from './npm-runtime.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason } from './deployment-locks.js';
+import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
 import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
 import {
   ensureDqlGitignore,
@@ -1270,6 +1271,12 @@ export interface LocalServerOptions {
   hostHookTimeoutMs?: number;
   /** Exact browser origins allowed for non-loopback API access. */
   allowedOrigins?: string[];
+  /**
+   * Inside Snowflake (the ZLens app): Snowflake signs people in and names them in a header, so the person
+   * is who it says and no shared token or origin list is needed. Defaults to ZLENS_SNOWFLAKE_INGRESS, which
+   * counts only inside a Snowflake container (snowflake-ingress.ts).
+   */
+  snowflakeIngress?: SnowflakeIngress;
   /**
    * Receives the underlying HTTP server once created, so short-lived callers
    * (e.g. `zlens agent ask` starting an ephemeral runtime) can `close()` it and
@@ -5323,6 +5330,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const allowedOrigins = new Set((opts.allowedOrigins ?? (readEnv('ZLENS_ALLOWED_ORIGINS') ?? '').split(','))
     .map((value) => value.trim().replace(/\/$/, ''))
     .filter(Boolean));
+  const snowflakeIngress = opts.snowflakeIngress ?? snowflakeIngressFromEnv();
   // RFC 0010: with a host, Dataset grain proofs are each person's (their row rules decided them); none stays shared.
   if (hostHooks) {
     try {
@@ -5351,10 +5359,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // Each signed-in person — and each read-only link — keeps its own App
   // persona ("view as"), apart from the owner's.
   if (hostIdentity || !loopback) installHostPersonaSlots(defaultPersonaRegistry);
-  if (!loopback && !authToken && !hostIdentity) {
+  // Inside Snowflake its sign-in stands in for both: the person is named on every request, and the page's own address is the origin.
+  if (!loopback && !authToken && !hostIdentity && !snowflakeIngress) {
     throw new Error('Non-loopback ZLens server binding requires ZLENS_SERVER_TOKEN (or LocalServerOptions.authToken).');
   }
-  if (!loopback && allowedOrigins.size === 0) {
+  if (!loopback && allowedOrigins.size === 0 && !snowflakeIngress) {
     throw new Error('Non-loopback ZLens server binding requires ZLENS_ALLOWED_ORIGINS (or LocalServerOptions.allowedOrigins).');
   }
   const gitRoot = await resolveGitRoot(projectRoot);
@@ -15044,7 +15053,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // origins are accepted only when the server is bound to loopback.
     const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin.replace(/\/$/, '') : undefined;
     const loopbackOrigin = requestOrigin ? isLoopbackOrigin(requestOrigin) : false;
-    const originAllowed = !requestOrigin || allowedOrigins.has(requestOrigin) || (loopback && loopbackOrigin);
+    const originAllowed = !requestOrigin || allowedOrigins.has(requestOrigin) || (loopback && loopbackOrigin)
+      || Boolean(snowflakeIngress && sameOriginAsHost(requestOrigin, req.headers.host));
     if (requestOrigin && originAllowed) res.setHeader('Access-Control-Allow-Origin', requestOrigin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -15058,6 +15068,21 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       res.writeHead(204);
       res.end();
       return;
+    }
+    // Inside Snowflake: only the person Snowflake signed in, and in the free app only its one person. The
+    // health check is Snowflake's own readiness probe, which reaches the container directly, unsigned.
+    if (snowflakeIngress && path !== '/api/health') {
+      const refusal = snowflakeIngressRefusal(snowflakeIngress, req.headers[SNOWFLAKE_USER_HEADER]);
+      if (refusal) {
+        if (path.startsWith('/api/')) {
+          res.writeHead(refusal.status, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: refusal.error, code: refusal.code }));
+        } else {
+          res.writeHead(refusal.status, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end(snowflakeIngressRefusalPage(refusal.error));
+        }
+        return;
+      }
     }
     // RFC 0010 HH-6: every API request that changes something or is refused
     // is reported to the host's audit sink, with who it was once known.
@@ -15077,7 +15102,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // A read-only link names one App (RFC 0010 HH-2); it never carries the
     // server's own token.
     let viewerAppId: string | undefined;
-    if (!runPass && !hostIdentity && !loopback && path.startsWith('/api/') && path !== '/api/health') {
+    if (!runPass && !hostIdentity && !snowflakeIngress && !loopback && path.startsWith('/api/') && path !== '/api/health') {
       const authorization = req.headers.authorization ?? '';
       const bearer = authorization.startsWith('Bearer ') ? authorization.slice('Bearer '.length).trim() : '';
       const viewer = authToken && isViewerToken(bearer) ? readViewerToken(authToken, bearer) : null;

@@ -180,6 +180,14 @@ It also sets `ZLENS_NO_EGRESS=1`, `ZLENS_LOCK_CONNECTIONS=1` and
 in with the service's token and is then on by default. Later starts keep the
 project as it is.
 
+Inside Snowflake, Snowflake signs people in before a request reaches ZLens and names them in a
+header (`Sf-Context-Current-User`) that a browser cannot forge. There the entrypoint sets
+`ZLENS_SNOWFLAKE_INGRESS=1`, so ZLens needs no `ZLENS_SERVER_TOKEN` or `ZLENS_ALLOWED_ORIGINS`:
+the person is who Snowflake says, and with `ZLENS_SNOWFLAKE_APP_USER` set, ZLens serves that one
+user and tells anyone else it is set up for one person. Outside a Snowflake container (no
+`/snowflake/session/token`) this mode never turns on. The ZLens app package for Snowflake, with its
+setup steps, is in [`deploy/snowflake-app`](https://github.com/duckcode-ai-labs/zlens/tree/main/deploy/snowflake-app).
+
 To try the same first start outside Snowflake, set `ZLENS_SNOWFLAKE_APP=1` and
 sign in with a key pair instead (`ZLENS_SNOWFLAKE_USER`,
 `ZLENS_SNOWFLAKE_PRIVATE_KEY_PATH`, and `SNOWFLAKE_ACCOUNT`).
