@@ -7,45 +7,39 @@ them. The files it describes are in this folder: [`app/manifest.yml`](app/manife
 [`app/setup.sql`](app/setup.sql), [`app/zlens.yaml`](app/zlens.yaml).
 
 ```mermaid
-flowchart LR
-  person(["Signed-in user<br/>(browser)"])
-  admin(["Consumer admin<br/>(Snowsight / SQL)"])
+flowchart TB
+  person(["Signed-in user (browser)"])
+  admin(["Consumer admin (Snowsight / SQL)"])
 
   subgraph consumer["Consumer's Snowflake account"]
-    ingress["Snowflake ingress<br/>Snowflake sign-in,<br/>endpoint role check"]
-
+    ingress["Snowflake ingress<br/>Snowflake sign-in + endpoint role check"]
     subgraph app["The installed application"]
+      direction LR
       procs["app_public procedures<br/>start_app · stop_app · app_url"]
-      subgraph pool["Compute pool APP_POOL (CPU_X64_XS, 1 node)"]
-        subgraph svc["Service core.zlens"]
-          zlens["Container zlens<br/>ZLens server, port 3474<br/>endpoint ui"]
-        end
-      end
-      volume[("Block volume 10Gi<br/>/workspace<br/>ZLens project + history")]
+      zlens["Service core.zlens<br/>container zlens: ZLens server<br/>endpoint ui, port 3474<br/>on compute pool APP_POOL"]
+      volume[("Block volume 10Gi<br/>/workspace<br/>project + history")]
     end
-
-    token["/snowflake/session/token<br/>(service OAuth token)"]
-    wh["Warehouse the consumer grants"]
-    data[("Database / schema<br/>the consumer grants<br/>(SELECT only)")]
-    cortex["Snowflake Cortex<br/>(Claude models)"]
-    events[("Event table<br/>(if the consumer has one)")]
+    subgraph objects["Snowflake services and the consumer's objects"]
+      direction LR
+      token["Service OAuth token<br/>/snowflake/session/token"]
+      data[("Granted warehouse,<br/>database and schema<br/>SELECT only")]
+      cortex["Snowflake Cortex<br/>Claude models"]
+      events[("Event table<br/>if the consumer has one")]
+    end
   end
 
-  provider["Provider: DuckCode AI Labs"]
-  internet["Internet"]
+  outside["Provider (DuckCode AI Labs) and the internet"]
 
   person -- "1 HTTPS" --> ingress
   ingress -- "2 request + Sf-Context-Current-User" --> zlens
   admin -- "3 CALL" --> procs
-  procs -- "4 create / resume / suspend" --> pool
+  procs -- "4 create · resume · suspend" --> zlens
   zlens -- "5 reads" --> token
-  zlens -- "6 SQL (read-only)" --> wh
-  wh --> data
+  zlens -- "6 read-only SQL" --> data
   zlens -- "7 prompts" --> cortex
   zlens <-- "8 project files" --> volume
-  zlens -- "9 stdout / stderr" --> events
-  zlens -. "no connection" .-x provider
-  zlens -. "no egress" .-x internet
+  zlens -- "9 stdout · stderr" --> events
+  zlens -. "no connection" .-x outside
 ```
 
 ## The flows
