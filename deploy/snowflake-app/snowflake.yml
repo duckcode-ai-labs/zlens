@@ -3,9 +3,11 @@
 # e.g. /zlens_dev/app/images/zlens:0.3.1 (see README.md).
 definition_version: 2
 entities:
+  # Development: `snow app run` installs it in development mode. INTERNAL: never leaves this account.
   zlens_package:
     type: application package
     identifier: ZLENS_PACKAGE
+    distribution: internal
     manifest: app/manifest.yml
     artifacts:
       - src: app/*
@@ -18,3 +20,15 @@ entities:
     from:
       target: zlens_package
     debug: false
+  # The package customers install from (a Marketplace listing). EXTERNAL: every version Snowflake
+  # scans before it can be released; versions only, never development mode (see RELEASING.md).
+  zlens_release:
+    type: application package
+    identifier: ZLENS
+    distribution: external
+    manifest: app/manifest.yml
+    artifacts:
+      - src: app/*
+        dest: ./
+        processors:
+          - templates
