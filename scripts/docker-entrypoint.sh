@@ -106,7 +106,8 @@ write_snowflake_connection() {
 prepare_snowflake_app() {
   export ZLENS_NO_EGRESS="${ZLENS_NO_EGRESS:-1}"
   export ZLENS_LOCK_CONNECTIONS="${ZLENS_LOCK_CONNECTIONS:-1}"
-  # No model until the app is given one (the Cortex provider).
+  # No model unless the app package chooses one: ZLENS_MODEL_PROVIDERS=cortex
+  # gives it Claude through Snowflake Cortex, signed in with the service's token.
   export ZLENS_MODEL_PROVIDERS="${ZLENS_MODEL_PROVIDERS:-none}"
   mkdir -p "$workspace"
   cd "$workspace"

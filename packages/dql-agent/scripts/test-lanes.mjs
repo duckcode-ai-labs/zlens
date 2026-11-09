@@ -72,7 +72,8 @@ const REQUIRED_TEST_FILES = [
 // 190 with the certified-join check of a semantic compile (semantic-join-trust.test.ts, +1 file, +8 tests).
 // 191 with a certified block answering its own question before any model reads it (certified-question.test.ts, +1 file, +14 tests).
 // 193 with one answer to "is this the same table?" (physical-binding.test.ts, +1 file, +6 tests; simplification plan Z1).
-const EXPECTED_TEST_FILES = 193;
+// 194 with Claude through Snowflake Cortex (claude-cortex.test.ts, +1 file, +10 tests).
+const EXPECTED_TEST_FILES = 194;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -178,10 +179,12 @@ const EXPECTED_TEST_FILES = 193;
 // (catalog.test.ts, +1; release PR #280 e2e, App journeys after a certify).
 // 2820 with a dbt-duckdb external source found as its dbt_sources table and an unreadable location
 // left out (warehouse-search-objects.test.ts, +1; open-formats plan L3b, zlens#290).
-const EXPECTED_TESTS = 2820;
+// 2830 with Claude through Snowflake Cortex: its address, Snowflake sign-in tokens and key-pair JWT
+// (claude-cortex.test.ts, +10; Snowflake Native App plan step 1d).
+const EXPECTED_TESTS = 2830;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2739.
+// The ordinary lane's share is the difference: 2749.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

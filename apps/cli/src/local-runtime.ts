@@ -402,6 +402,8 @@ import {
   OllamaProvider,
   ollamaBaseUrl,
   OpenAIProvider,
+  CORTEX_DEFAULT_MODEL,
+  isCortexClaudeProvider,
   buildBlockBusinessFingerprint,
   buildBlockSqlFingerprints,
   buildAnalysisQuestionPlan,
@@ -742,6 +744,7 @@ import {
   type ProviderSettingsId,
   type RedactedProviderSettings,
 } from './settings/provider-settings.js';
+import { cortexInProjectAccount, cortexSignIn, createCortexProvider, setProjectConnectionLookup } from './settings/cortex-sign-in.js';
 import { ClaudeCodeCliProvider, CodexCliProvider } from './providers/subscription-cli.js';
 import { createFailoverProvider } from './providers/failover-provider.js';
 import {
@@ -3948,6 +3951,17 @@ function ollamaOnThisMachine(selected: { id: string; provider?: unknown } | null
 }
 
 /**
+ * The Snowflake Cortex rule, beside the Ollama one: Cortex signed in through the project's own Snowflake connection
+ * runs in the account the project's data already lives in, so result values may reach it as they may reach a model on
+ * this machine (settings/cortex-sign-in.ts `cortexInProjectAccount`). Judged by the address the provider sends to.
+ */
+function cortexInProjectAccountFor(selected: { id: string; provider?: unknown } | null | undefined, projectRoot: string): boolean {
+  if (!selected || selected.id !== 'cortex') return false;
+  const declared = (selected.provider as { baseUrl?: unknown } | undefined)?.baseUrl;
+  return cortexInProjectAccount(projectRoot, getEffectiveProviderConfig(projectRoot, 'cortex').connection, typeof declared === 'string' ? declared : undefined);
+}
+
+/**
  * The process-wide hooks (for work outside every server) follow the servers running now: a host's while every
  * server here shares the same hooks, none otherwise (host/request-context.ts `processHostHooks`).
  */
@@ -3988,7 +4002,8 @@ export function appAutopilotContextWithoutValues(promptContext: string): string 
  *
  * - with a host: the host's `isInBoundary` (told every table the values came from, when ZLens knows them all; an
  *   error or anything but `true` is no); a host without that rule: only a model on this machine;
- * - without a host: a model on this machine (`this-machine`), or — for the prompts the single-user product has
+ * - without a host: a model on this machine (`this-machine`; Snowflake Cortex signed in through the project's own
+ *   Snowflake connection counts as one), or — for the prompts the single-user product has
  *   always sent to the model the person chose (a conversation's memory, a follow-up's earlier answer, App
  *   Autopilot's preview, the Research narration they asked for) — that model (`chosen-model`).
  *
@@ -4010,7 +4025,7 @@ function valuesMayReachProvider(input: {
   const baseUrl = typeof declared === 'string' ? declared : config?.baseUrl;
   return resultValuesMayReachModel(
     { id: selected.id, name: selected.provider.name, ...(config?.model ? { model: config.model } : {}), ...(baseUrl ? { baseUrl } : {}) },
-    () => ollamaOnThisMachine(selected, config?.baseUrl),
+    () => ollamaOnThisMachine(selected, config?.baseUrl) || cortexInProjectAccountFor(selected, input.projectRoot),
     input.relations ? { relations: input.relations } : undefined,
   );
 }
@@ -5391,7 +5406,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // Hosted APIs still pay real latency on large-repo analyst prompts
     // (extended thinking, 80-candidate workspaces), so they get headroom
     // too — just less of it.
-    const hostedApi = active === 'anthropic' || active === 'openai' || active === 'gemini' || active === 'custom-openai';
+    const hostedApi = active === 'anthropic' || active === 'openai' || active === 'gemini' || active === 'custom-openai' || active === 'cortex';
     setProcessDefaultDeadlineScale(slowLocalOrCli ? 6 : hostedApi ? 2 : 1);
   };
   syncDeadlineScaleToActiveProvider();
@@ -20083,6 +20098,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl : undefined,
           model: typeof body.model === 'string' ? body.model : undefined,
           reasoningEffort: isReasoningEffortSetting(body.reasoningEffort) ? body.reasoningEffort : undefined,
+          connection: typeof body.connection === 'string' ? body.connection : undefined,
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         syncDeadlineScaleToActiveProvider();
@@ -20187,6 +20203,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           apiKey: typeof body.apiKey === 'string' && body.apiKey ? body.apiKey : undefined,
           baseUrl: typeof body.baseUrl === 'string' && body.baseUrl ? body.baseUrl : undefined,
           model: typeof body.model === 'string' && body.model ? body.model : undefined,
+          connection: typeof body.connection === 'string' && body.connection ? body.connection : undefined,
         });
         res.writeHead(ok.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(ok));
@@ -33577,7 +33594,8 @@ function isLLMProviderId(value: unknown): value is ProviderId {
     || value === 'openai'
     || value === 'gemini'
     || value === 'ollama'
-    || value === 'custom-openai';
+    || value === 'custom-openai'
+    || value === 'cortex';
 }
 
 export function resolveDefaultLLMProvider(projectRoot: string): ProviderId | null {
@@ -33589,7 +33607,7 @@ export function resolveDefaultLLMProvider(projectRoot: string): ProviderId | nul
     // (subscription-only ids like `codex` aren't runners; they fall through).
     if (active?.enabled && isLLMProviderId(activeProvider)) return activeProvider;
   }
-  const preferred: ProviderId[] = ['openai', 'gemini', 'anthropic', 'custom-openai', 'ollama'];
+  const preferred: ProviderId[] = ['openai', 'gemini', 'anthropic', 'custom-openai', 'cortex', 'ollama'];
   for (const id of preferred) {
     const provider = settings.find((item) => item.id === id);
     if (provider?.enabled && provider.configured) return id;
@@ -33646,7 +33664,8 @@ function isGovernedAnswerProviderId(value: unknown): value is ProviderSettingsId
     || value === 'ollama'
     || value === 'custom-openai'
     || value === 'claude-code'
-    || value === 'codex';
+    || value === 'codex'
+    || value === 'cortex';
 }
 
 /**
@@ -33663,7 +33682,7 @@ export function governedProviderPreflightError(requestedProvider?: string): Erro
   return Object.assign(
     new Error(invalidRequestedProvider
       ? 'The selected AI provider is not available in this local runtime. Choose a configured provider in Settings and retry.'
-      : 'No AI provider is configured. Configure a subscription (Claude Code / Codex), OpenAI, Gemini, Ollama, or a custom OpenAI-compatible endpoint in Settings.'),
+      : 'No AI provider is configured. Configure a subscription (Claude Code / Codex), OpenAI, Gemini, Ollama, Snowflake Cortex, or a custom OpenAI-compatible endpoint in Settings.'),
     {
       code: invalidRequestedProvider ? 'MODEL_NOT_FOUND' as const : 'AUTHENTICATION_FAILED' as const,
       providerPhase: 'preflight' as const,
@@ -33729,7 +33748,7 @@ function resolveRunReasoningEffort(
  * applied per run; it was lost when that runtime was removed.
  */
 /** API providers whose Ask reading runs at low effort by default (see askDispatchReasoningEffort). */
-const API_READING_LOW_PROVIDERS = new Set<string>(['anthropic', 'openai', 'gemini', 'custom-openai']);
+const API_READING_LOW_PROVIDERS = new Set<string>(['anthropic', 'openai', 'gemini', 'custom-openai', 'cortex']);
 
 export function askDispatchReasoningEffort(
   projectRoot: string,
@@ -39612,6 +39631,27 @@ function projectConnectionById(
   }
   return null;
 }
+
+/**
+ * How Snowflake Cortex finds the connection it signs in with (settings/cortex-sign-in.ts): the one its settings name,
+ * else the project's default, read the way every query reads it. Only a Snowflake connection is read further (its
+ * saved secrets and `${VAR}`s): Cortex signs in with nothing else.
+ */
+function lookupProjectConnection(projectRoot: string, name?: string): { name?: string; connection: ConnectionConfig | null; error?: string } {
+  const config = loadProjectConfig(projectRoot);
+  const id = name ?? config.defaultConnectionName ?? (config.defaultConnection ? 'default' : undefined);
+  if (!id) return { connection: null };
+  const stored = normalizeStoredConnection(getStoredConnections(config as unknown as Record<string, unknown>)[id])
+    ?? (!name && config.defaultConnection ? config.defaultConnection : null);
+  if (!stored) return { name: id, connection: null };
+  if (stored.driver !== 'snowflake') return { name: id, connection: stored };
+  try {
+    return { name: id, connection: normalizeProjectConnection(stored, projectRoot) };
+  } catch (error) {
+    return { name: id, connection: null, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+setProjectConnectionLookup(lookupProjectConnection);
 
 function persistConnectionMetadataScope(
   projectRoot: string,
@@ -47391,6 +47431,15 @@ async function selectAssistProvider(
         ? new CodexOAuthProvider({ projectRoot, model: config.model })
         : new CodexCliProvider({ model: config.model });
       break;
+    case 'cortex':
+      // Claude in the customer's Snowflake account, signed in with the project's Snowflake connection. A connection
+      // Cortex cannot sign in with means no model (Settings and the test say why).
+      try {
+        provider = createCortexProvider(projectRoot, { connection: config.connection, model: config.model });
+      } catch {
+        return null;
+      }
+      break;
     default:
       return null;
   }
@@ -47408,7 +47457,9 @@ async function selectAssistProvider(
   // conversation can change, and only on a genuine fault.
   // A model on this machine never fails over to one off it: whether results may reach the model was decided for
   // the model on this machine (the local-model rule), so its prompts must not be carried anywhere else.
-  const alternates = requestedProvider || ollamaOnThisMachine({ id: selected.id, provider }, config.baseUrl)
+  // Snowflake Cortex never fails over either: it was chosen so prompts stay inside Snowflake, and Anthropic's,
+  // OpenAI's or Google's own API would take them out. Failing over INTO Cortex from another provider is fine.
+  const alternates = requestedProvider || ollamaOnThisMachine({ id: selected.id, provider }, config.baseUrl) || selected.id === 'cortex'
     // An explicitly requested provider is a choice, not a default. Honour it.
     ? []
     : settings
@@ -47448,6 +47499,8 @@ function providerReadinessFailure(provider: AgentProvider): Error | undefined {
 }
 
 function plannerProviderSettingsId(provider: AgentProvider | null | undefined): ProviderSettingsId | undefined {
+  // Claude through Snowflake Cortex is a ClaudeProvider underneath; its failures name Cortex, not Anthropic.
+  if (isCortexClaudeProvider(provider)) return 'cortex';
   switch (provider?.name) {
     case 'claude': return 'anthropic';
     case 'openai': return 'openai';
@@ -52329,6 +52382,7 @@ function collectSettingsEnvStatus(): SettingsEnvGroup[] {
         v('GEMINI_MODEL', 'Gemini model', 'Optional Gemini model override.'),
         v('OLLAMA_BASE_URL', 'Ollama base URL', 'Local Ollama HTTP endpoint. Docker defaults to http://ollama:11434.'),
         v('OLLAMA_MODEL', 'Ollama model', 'Optional local model name such as llama3.1.'),
+        v('ZLENS_CORTEX_MODEL', 'Snowflake Cortex model', 'Optional Cortex model such as claude-sonnet-5 (the default). Cortex signs in with the project\'s Snowflake connection.'),
       ],
     },
     {
@@ -52371,7 +52425,7 @@ function isDeterministicDqlGenerationProvider(value: unknown): boolean {
 async function testProviderConfig(
   projectRoot: string,
   id: ProviderSettingsId,
-  overrides?: { apiKey?: string; baseUrl?: string; model?: string },
+  overrides?: { apiKey?: string; baseUrl?: string; model?: string; connection?: string },
 ): Promise<{ ok: boolean; message: string }> {
   const base = getEffectiveProviderConfig(projectRoot, id);
   // When the user supplies inline values (testing what they typed before saving),
@@ -52386,10 +52440,11 @@ async function testProviderConfig(
     ...(overrides?.apiKey ? { apiKey: overrides.apiKey } : {}),
     ...(overrides?.baseUrl ? { baseUrl: overrides.baseUrl } : {}),
     ...(overrides?.model ? { model: overrides.model } : {}),
+    ...(overrides?.connection ? { connection: overrides.connection } : {}),
     ...(inline ? { enabled: true } : {}),
   };
   const label = providerSettingsLabel(id);
-  const details = providerConfigDetails(id, config);
+  const details = providerConfigDetails(projectRoot, id, config);
   const isSubscriptionCli = id === 'claude-code' || id === 'codex';
   // Subscription providers are always testable — the connection (browser OAuth, or
   // an installed+logged-in CLI) needs no saved config; the others require enabling first.
@@ -52398,6 +52453,7 @@ async function testProviderConfig(
   }
   if (id === 'openai') return testOpenAIProviderConfig(config, label, details);
   if (id === 'anthropic') return testAnthropicProviderConfig(config, label, details);
+  if (id === 'cortex') return testCortexProviderConfig(projectRoot, config, label, details);
 
   // OAuth-first for subscriptions: when the user signed in via the browser, test the
   // OAuth-backed provider (no CLI required); otherwise fall back to the CLI passthrough.
@@ -52515,6 +52571,36 @@ async function testAnthropicProviderConfig(
   }
 }
 
+/**
+ * Snowflake Cortex: a one-token request through the project's Snowflake connection. A connection Cortex cannot sign
+ * in with is reported in one plain sentence, before anything is sent.
+ */
+async function testCortexProviderConfig(
+  projectRoot: string,
+  config: ReturnType<typeof getEffectiveProviderConfig>,
+  label: string,
+  details: string,
+): Promise<{ ok: boolean; message: string }> {
+  const signIn = cortexSignIn(projectRoot, config.connection);
+  // The reason is already one sentence that names Cortex.
+  if (signIn.problem) return { ok: false, message: signIn.problem };
+  try {
+    const provider = createCortexProvider(projectRoot, { connection: config.connection, model: config.model });
+    const response = await provider.generate([
+      { role: 'user', content: 'Reply with exactly: OK' },
+    ], { maxTokens: 1, temperature: 0 });
+    return {
+      ok: true,
+      message: `${label} responded through the governed runtime${details}: ${response.trim().slice(0, 80) || 'OK'}`,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `${label} call failed${details}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 function providerSettingsLabel(id: ProviderSettingsId): string {
   switch (id) {
     case 'anthropic': return 'Anthropic Claude';
@@ -52524,13 +52610,23 @@ function providerSettingsLabel(id: ProviderSettingsId): string {
     case 'custom-openai': return 'Custom OpenAI-compatible provider';
     case 'claude-code': return 'Claude subscription (Claude Code CLI)';
     case 'codex': return 'ChatGPT subscription (Codex CLI)';
+    case 'cortex': return 'Snowflake Cortex';
   }
 }
 
-function providerConfigDetails(id: ProviderSettingsId, config: ReturnType<typeof getEffectiveProviderConfig>): string {
+function providerConfigDetails(projectRoot: string, id: ProviderSettingsId, config: ReturnType<typeof getEffectiveProviderConfig>): string {
   // Subscription providers (Claude Code / Codex) authenticate via OAuth/CLI, not an
   // API key — omit the key clause so we don't report a misleading "API key missing".
   const isSubscription = id === 'claude-code' || id === 'codex';
+  if (id === 'cortex') {
+    // Cortex signs in with a Snowflake connection: name it, never an API key.
+    const signIn = cortexSignIn(projectRoot, config.connection);
+    const parts = [
+      `model ${config.model || CORTEX_DEFAULT_MODEL}`,
+      signIn.connection ? `Snowflake connection ${signIn.connection}` : '',
+    ].filter(Boolean);
+    return ` (${parts.join(', ')})`;
+  }
   const authNote = isSubscription
     ? ''
     : id === 'ollama' ? 'local endpoint' : config.apiKey ? 'API key present' : 'API key missing';

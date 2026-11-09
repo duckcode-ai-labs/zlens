@@ -1,0 +1,143 @@
+import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import type { Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { QueryExecutor } from '@zlens/connectors';
+import { isCortexClaudeProvider } from '@zlens/agent';
+import { meaningDraftProvider, startLocalServer } from './local-runtime.js';
+import { listProviderSettings, saveProviderSettings } from './settings/provider-settings.js';
+
+/**
+ * Snowflake Cortex as the model a single user picks, through the server's own
+ * reading of dql.config.json: chosen, it is Claude at the account's Cortex
+ * address, and it never fails over to a model outside Snowflake. Fetch is faked
+ * for every address but this machine, so nothing reaches Snowflake.
+ */
+const servers: Server[] = [];
+const roots: string[] = [];
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  await Promise.all(servers.splice(0).map((server) => new Promise<void>((done) => { server.closeAllConnections?.(); server.close(() => done()); })));
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+function project(connection: Record<string, unknown>): string {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-cortex-'));
+  roots.push(projectRoot);
+  writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'cortex', defaultConnectionName: 'snowflake', connections: { snowflake: connection } }));
+  return projectRoot;
+}
+
+function keyPairProject(): string {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const root = project({ driver: 'snowflake', account: '${ZLENS_TEST_CORTEX_ACCOUNT}', username: 'svc_zlens', authMethod: 'key_pair', privateKeyPath: '${ZLENS_TEST_CORTEX_KEY}' });
+  const keyPath = join(root, 'rsa_key.p8');
+  writeFileSync(keyPath, privateKey.export({ type: 'pkcs8', format: 'pem' }).toString());
+  // The connection's `${VAR}`s are filled in the way the server fills them for queries.
+  vi.stubEnv('ZLENS_TEST_CORTEX_ACCOUNT', 'myorg-test_acct');
+  vi.stubEnv('ZLENS_TEST_CORTEX_KEY', keyPath);
+  return root;
+}
+
+/** Records every request that would leave this machine and answers it as Cortex would. */
+function fakeSnowflake(): Array<{ url: string; init?: RequestInit }> {
+  const nativeFetch = globalThis.fetch;
+  const sent: Array<{ url: string; init?: RequestInit }> = [];
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (LOOPBACK.has(new URL(url).hostname)) return nativeFetch(input, init);
+    sent.push({ url, ...(init ? { init } : {}) });
+    return new Response(JSON.stringify({ content: [{ type: 'text', text: 'OK' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }));
+  return sent;
+}
+
+async function start(projectRoot: string) {
+  // As inside Snowflake: the server installs no driver from the internet at start (the test has none).
+  vi.stubEnv('ZLENS_NO_EGRESS', '1');
+  const port = await startLocalServer({
+    rootDir: projectRoot, projectRoot, executor: {} as QueryExecutor, preferredPort: 0,
+    captureServer: (created) => { servers.push(created); },
+  });
+  return async (method: string, path: string, body?: unknown) => {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method,
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, any> };
+  };
+}
+
+describe('Snowflake Cortex chosen as the model', () => {
+  it('is Claude at the account\'s Cortex address, with no failover out of Snowflake even when another provider is configured', async () => {
+    const projectRoot = keyPairProject();
+    saveProviderSettings(projectRoot, { id: 'openai', enabled: true, apiKey: 'test-key-not-real', model: 'gpt-test' });
+    saveProviderSettings(projectRoot, { id: 'cortex', enabled: true });
+    expect(listProviderSettings(projectRoot).find((provider) => provider.id === 'cortex')).toMatchObject({ active: true, configured: true, connectionSignIn: { connection: 'snowflake', method: 'key_pair' } });
+
+    const selected = await meaningDraftProvider(projectRoot);
+    // The provider itself, not a failover wrapper: there is nothing to fail over to.
+    expect(isCortexClaudeProvider(selected?.provider)).toBe(true);
+    expect((selected!.provider as unknown as { baseUrl: string }).baseUrl).toBe('https://myorg-test-acct.snowflakecomputing.com/api/v2/cortex');
+
+    // A failing Cortex call stays failed: it is never retried on OpenAI.
+    const sent: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      sent.push(String(input));
+      return new Response('{"code":"003001","message":"not allowed"}', { status: 403 });
+    }));
+    await expect(selected!.provider.generate([{ role: 'user', content: 'Why did revenue rise?' }])).rejects.toThrow(/claude: 403/);
+    expect(sent.every((url) => url.startsWith('https://myorg-test-acct.snowflakecomputing.com/'))).toBe(true);
+  });
+
+  it('is never chosen without a connection Cortex can sign in with', async () => {
+    const projectRoot = project({ driver: 'snowflake', account: 'acct', username: 'u', password: 'p' });
+    saveProviderSettings(projectRoot, { id: 'cortex', enabled: true });
+    expect(await meaningDraftProvider(projectRoot)).toBeNull();
+  });
+});
+
+describe('the provider test route for Snowflake Cortex', () => {
+  it('sends a one-token request through the project\'s Snowflake connection', async () => {
+    const projectRoot = keyPairProject();
+    const sent = fakeSnowflake();
+    const call = await start(projectRoot);
+    const listed = (await call('GET', '/api/settings/providers')).json.providers as Array<Record<string, any>>;
+    expect(listed.find((provider) => provider.id === 'cortex')).toMatchObject({ label: 'Snowflake Cortex', configured: true, connectionSignIn: { connection: 'snowflake', method: 'key_pair' } });
+    const tested = await call('POST', '/api/settings/providers/test', { id: 'cortex', model: 'claude-opus-5' });
+    expect(tested.status).toBe(200);
+    expect(tested.json.message).toMatch(/^Snowflake Cortex responded through the governed runtime \(model claude-opus-5, Snowflake connection snowflake\): OK/);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.url).toBe('https://myorg-test-acct.snowflakecomputing.com/api/v2/cortex/v1/messages');
+    expect(JSON.parse(String(sent[0]!.init!.body))).toMatchObject({ model: 'claude-opus-5', max_tokens: 1 });
+    const headers = sent[0]!.init!.headers as Record<string, string>;
+    expect(headers['x-api-key']).toBeUndefined();
+    expect(headers['x-snowflake-authorization-token-type']).toBe('KEYPAIR_JWT');
+  });
+
+  it('says why in one sentence, and sends nothing, when the connection signs in with a password', async () => {
+    const projectRoot = project({ driver: 'snowflake', account: 'acct', username: 'u', password: 'p' });
+    const sent = fakeSnowflake();
+    const call = await start(projectRoot);
+    const tested = await call('POST', '/api/settings/providers/test', { id: 'cortex' });
+    expect(tested.status).toBe(400);
+    expect(tested.json.message).toBe('Snowflake Cortex signs in with your Snowflake connection\'s key pair, programmatic access token or OAuth token; this connection uses a password.');
+    expect(sent).toEqual([]);
+  });
+
+  it('is the only provider an install that allows only Cortex lists', async () => {
+    vi.stubEnv('ZLENS_MODEL_PROVIDERS', 'cortex');
+    const projectRoot = keyPairProject();
+    const call = await start(projectRoot);
+    const providers = (await call('GET', '/api/settings/providers')).json.providers as Array<{ id: string; allowed: boolean; enabled: boolean }>;
+    expect(providers.filter((provider) => provider.allowed).map((provider) => provider.id)).toEqual(['cortex']);
+    expect(providers.find((provider) => provider.id === 'cortex')?.enabled).toBe(true);
+    expect((await call('POST', '/api/settings/providers', { id: 'anthropic', apiKey: 'sk-ant-xyz-1234567' })).status).toBe(403);
+  });
+});

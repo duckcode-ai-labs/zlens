@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { ConnectorQueryError } from '../result-types.js';
 import { withQueryLabels } from '../query-labels.js';
-import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth, readSnowflakeTokenFile, snowflakeLogLevel, snowflakeQueryTag } from './snowflake.js';
+import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth, readSnowflakePrivateKey, readSnowflakeTokenFile, snowflakeLogLevel, snowflakeQueryTag } from './snowflake.js';
 
 // A stand-in SDK for connect(): it records the connection settings ZLens hands it.
 const fakeSdk = vi.hoisted(() => {
@@ -64,6 +64,20 @@ describe('normalizeSnowflakePrivateKeyForAuth', () => {
   it('returns an actionable error when an encrypted key has the wrong passphrase', () => {
     expect(() => normalizeSnowflakePrivateKeyForAuth(encryptedKey, 'wrong-passphrase'))
       .toThrow(/Snowflake private key could not be parsed or decrypted/);
+  });
+
+  it('reads a connection\'s key from its file or the pasted text, decrypted (the driver and Snowflake Cortex share it)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zlens-sf-key-'));
+    try {
+      const path = join(dir, 'rsa_key.p8');
+      writeFileSync(path, encryptedKey);
+      const fromFile = await readSnowflakePrivateKey({ privateKeyPath: path, privateKeyPassphrase: 'correct-passphrase' });
+      expect(fromFile).toContain('-----BEGIN PRIVATE KEY-----');
+      expect(await readSnowflakePrivateKey({ privateKey: pkcs1Key })).toBe(fromFile);
+      expect(await readSnowflakePrivateKey({})).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

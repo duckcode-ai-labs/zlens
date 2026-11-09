@@ -20,6 +20,7 @@ queries, saved queries, certification, Apps and lineage.
     - **Google Gemini**
     - **Ollama — local**
     - **Custom OpenAI-compatible**
+    - **Snowflake Cortex** (see [Claude through Snowflake Cortex](#claude-through-snowflake-cortex))
 3. Under **How do you want to connect?**, choose one:
     - **Subscription**: sign in with your existing Claude or ChatGPT plan, with
       **Sign in with Claude** or **Sign in with ChatGPT**. No API key, and nothing
@@ -65,6 +66,45 @@ With **Ollama — local**, questions and data never leave your network:
 3. Set **Host** to `http://localhost:11434` and, under **Advanced enterprise
    routing**, the **Model** name.
 4. Click **Test, save & activate**.
+
+## Claude through Snowflake Cortex
+
+When your data is in Snowflake, Snowflake Cortex runs Claude inside your
+Snowflake account. There is no API key: Cortex signs in with the project's
+Snowflake connection.
+
+1. In **Settings → AI provider**, choose **Snowflake Cortex**.
+2. The form shows which Snowflake connection Cortex signs in with: the
+   project's default connection, or the one you name under **Snowflake
+   connection**.
+3. Optional: set a **Model**. The default is `claude-sonnet-5`. Cortex names
+   its Claude models the same way (`claude-opus-5`, `claude-haiku-4-5`, ...);
+   which ones you can use depends on your account and region.
+4. Click **Test, save & activate**. The test asks Cortex for a one-token answer.
+
+Cortex signs in with the connection's **key pair**, **programmatic access
+token** or **OAuth token** (inside Snowflake, the service's own token). A
+connection that signs in another way, such as a password, MFA or browser
+sign-on, can't be used, and Settings says so. The Snowflake user's role needs
+access to Cortex, as for Cortex's SQL functions (the `SNOWFLAKE.CORTEX_USER`
+database role).
+
+What reaches the model:
+
+- Signed in through the project's own Snowflake connection, ZLens treats
+  Cortex like a model on this machine: result values, such as a chart's rows
+  or a story's figures, may reach it, because they stay in the Snowflake
+  account your data already lives in. A connection to another Snowflake
+  account counts as any hosted model. On a hosted server, the host's own
+  boundary rule still decides.
+- Claude may be processed in another Snowflake region when your account
+  allows cross-region inference.
+- Cortex never fails over: when it can't answer, ZLens does not send the
+  question to another provider, which would take it outside Snowflake.
+
+Cortex calls are billed to your Snowflake account, so ZLens does not use
+Cortex until you choose it. `ZLENS_CORTEX_MODEL` sets the model from the
+environment.
 
 ## Search (optional)
 

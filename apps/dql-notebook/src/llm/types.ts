@@ -1,6 +1,6 @@
 import type { DqlArtifactReference } from '@zlens/core/artifacts';
 
-export type ProviderId = 'anthropic' | 'claude-agent-sdk' | 'claude-code' | 'openai' | 'gemini' | 'ollama' | 'custom-openai';
+export type ProviderId = 'anthropic' | 'claude-agent-sdk' | 'claude-code' | 'openai' | 'gemini' | 'ollama' | 'custom-openai' | 'cortex';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
