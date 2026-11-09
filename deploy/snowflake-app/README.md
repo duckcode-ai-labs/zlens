@@ -3,7 +3,8 @@
 ZLens packaged as a Snowflake Native App with containers. The customer installs it in their own
 account; ZLens runs there (Snowpark Container Services), reads only the tables they grant the app,
 signs people in through Snowflake (only the one named user), keeps its project on a block volume,
-and uses Claude through Snowflake Cortex. What the customer's admin runs is in `app/README.md`.
+and uses Claude through Snowflake Cortex. What the customer's admin runs is in `app/README.md`;
+every component and flow of information is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Build and install it (in your own account, development mode)
 
