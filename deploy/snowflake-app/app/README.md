@@ -4,46 +4,45 @@ Governed analytics in your Snowflake account: a semantic layer, certified answer
 and Apps. This free app serves **one person**. ZLens runs here, reads only what you grant it, and
 keeps its projects on a volume in your account.
 
-## Set up (as ACCOUNTADMIN, or a role that may grant these)
+## Set up (in Snowsight, as ACCOUNTADMIN or the role that installed the app)
 
-Replace `ZLENS_APP` with this app's name, and the warehouse, database and schema with yours.
+When you get the app, Snowflake gives it what it needs to run: a small compute pool, its own address,
+and an extra-small warehouse for its queries. ZLens starts by itself. Then:
 
-```sql
--- 1. Let ZLens run, and open at its own Snowflake address.
-GRANT CREATE COMPUTE POOL ON ACCOUNT TO APPLICATION ZLENS_APP;
-GRANT BIND SERVICE ENDPOINT ON ACCOUNT TO APPLICATION ZLENS_APP;
+1. **Who uses ZLens.** Open *Catalog » Apps » ZLENS_APP* (your app's name), then the **Configurations**
+   tab, and enter the Snowflake user name of the one person who will use it.
+2. **What ZLens may read.** Grant the app one database (replace `ZLENS_APP` with the app's name and
+   `MY_DB`, `MY_SCHEMA` with yours; repeat the schema lines for more schemas in that database):
 
--- 2. What ZLens may read (it reads as the app, only what you grant).
-GRANT USAGE ON WAREHOUSE MY_WH TO APPLICATION ZLENS_APP;
-GRANT USAGE ON DATABASE MY_DB TO APPLICATION ZLENS_APP;
-GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
-GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
-GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
+   ```sql
+   GRANT USAGE ON DATABASE MY_DB TO APPLICATION ZLENS_APP;
+   GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
+   GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
+   GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
+   ```
 
--- 3. Let ZLens ask Claude through Snowflake Cortex (optional: without it, Ask is off).
-GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;
+3. **Let that person open it.** On the app's page, *Access management*: add their role. (In SQL:
+   `GRANT APPLICATION ROLE ZLENS_APP.app_user TO ROLE THEIR_ROLE;`)
+4. **Ask with Claude** (optional): `GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;`
+5. **Open it:** *Launch App* on the app's page, or `CALL ZLENS_APP.app_public.app_url();` for its address.
 
--- 4. Start it for the one Snowflake user who will use it, and let that user open it.
-CALL ZLENS_APP.app_public.start_app('THEIR_SNOWFLAKE_USER', 'MY_WH', 'MY_DB', 'MY_SCHEMA');
-GRANT APPLICATION ROLE ZLENS_APP.app_user TO ROLE THEIR_ROLE;
+Until steps 1 and 2 are done, whoever opens ZLens sees which of them is still missing. ZLens picks up
+changes within a minute, without a restart. Anyone but the named user is told the app is set up for
+one person.
 
--- 5. Its address (ready a few minutes after starting).
-CALL ZLENS_APP.app_public.app_url();
-```
-
-Stop it when not in use (its projects are kept): `CALL ZLENS_APP.app_public.stop_app();`
-
-Anyone but the named user who opens it is told the app is set up for one person.
+**It stops by itself.** After 30 minutes with no one using it, ZLens stops (its projects are kept), and
+opening it again starts it, in a minute or two. To stop it now: `CALL ZLENS_APP.app_public.stop_app();`
+To start it without opening it: `CALL ZLENS_APP.app_public.start_app();`
 
 ## What ZLens reaches, sends, stores and logs
 
 - **Endpoints.** One: `ui` (port 3474), ZLens's web page and its API, at the address `app_url()` returns.
-  Snowflake signs people in before any request reaches it, and ZLens serves only the user named in
-  `start_app`. There is no other way in.
+  Snowflake signs people in before any request reaches it, and ZLens serves only the user named on
+  the Configurations tab. There is no other way in.
 - **Internet.** None. The app asks for no external access integration, and ZLens runs with downloads and
   update checks turned off. Nothing is sent to the app's provider.
 - **Your data.** ZLens reads table and column descriptions and runs read-only queries, as the app, on only
-  what you granted above. Every query carries a `QUERY_TAG` and shows in your `QUERY_HISTORY`.
+  the database you granted, with its own warehouse. Every query carries a `QUERY_TAG` and shows in your `QUERY_HISTORY`.
 - **AI.** Questions go to Claude through Snowflake Cortex, inside Snowflake. A prompt holds the question,
   table and column names, metric definitions, and sometimes rows of a query result. Cortex may process it
   in another Snowflake region if your account allows cross-region inference. The app's provider never

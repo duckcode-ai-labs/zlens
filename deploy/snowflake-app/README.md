@@ -32,7 +32,9 @@ every component and flow of information is in [ARCHITECTURE.md](ARCHITECTURE.md)
    ZLENS_IMAGE=/<db>/<schema>/<repo>/zlens:<tag> snow app run
    ```
 
-3. Then follow `app/README.md` as the consumer (grants, `start_app`, `app_url`).
+3. Then follow `app/README.md` as the consumer: the person on the Configurations tab (in SQL,
+   `ALTER APPLICATION ZLENS_APP SET CONFIGURATION ZLENS_USER VALUE = '...'`), the database grants, the
+   app role, then `app_url()`.
 
 Inside the container, ZLens trusts Snowflake's `Sf-Context-Current-User` header only because the
 Snowflake ingress sets it (a client's own copy is replaced); outside a Snowflake container that

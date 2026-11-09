@@ -82,7 +82,10 @@ write_snowflake_connection() {
     const env = process.env;
     const path = "dql.config.json";
     const config = JSON.parse(fs.readFileSync(path, "utf8"));
-    const pick = (name) => env["ZLENS_SNOWFLAKE_" + name] || env["SNOWFLAKE_" + name] || undefined;
+    // Snowflake sets SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA in every container to where the service lives,
+    // which is not data: the database and schema come only from ZLENS_SNOWFLAKE_*.
+    const pick = (name) => env["ZLENS_SNOWFLAKE_" + name]
+      || (name === "DATABASE" || name === "SCHEMA" ? undefined : env["SNOWFLAKE_" + name]) || undefined;
     const connection = { driver: "snowflake", account: "${SNOWFLAKE_ACCOUNT}" };
     if (env.SNOWFLAKE_HOST) connection.host = "${SNOWFLAKE_HOST}";
     for (const [key, name] of [["warehouse", "WAREHOUSE"], ["database", "DATABASE"], ["schema", "SCHEMA"], ["role", "ROLE"]]) {
