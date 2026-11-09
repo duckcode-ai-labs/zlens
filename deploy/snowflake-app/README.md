@@ -8,6 +8,9 @@ every component and flow of information is in [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## Build and install it (in your own account, development mode)
 
+`snowflake.yml` defines two packages: `ZLENS_PACKAGE` (INTERNAL, for development, used below) and
+`ZLENS` (EXTERNAL, what customers install). How a version reaches customers: [RELEASING.md](RELEASING.md).
+
 1. Build the image for Snowflake's platform, with the Snowflake driver baked in and ZLens running as the
    unprivileged `node` user, and push it to an image repository in your account
    (`CREATE IMAGE REPOSITORY ...`):
