@@ -746,7 +746,7 @@ import {
   type ProviderSettingsId,
   type RedactedProviderSettings,
 } from './settings/provider-settings.js';
-import { cortexInProjectAccount, cortexSignIn, createCortexProvider, setProjectConnectionLookup } from './settings/cortex-sign-in.js';
+import { cortexInProjectAccount, cortexSignIn, createCortexProvider, setProjectConnectionLookup, useCortexSqlExecutor } from './settings/cortex-sign-in.js';
 import { ClaudeCodeCliProvider, CodexCliProvider } from './providers/subscription-cli.js';
 import { createFailoverProvider } from './providers/failover-provider.js';
 import {
@@ -5311,6 +5311,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   scope.hooks = hostHooks;
   const storeDeadline = hookDeadline(hookTimeoutMs);
   const executor = withHostQueryHooks(rawExecutor, { rowPolicy: hostHooks?.rowPolicy, credentials: hostHooks?.credentials, statements: hostHooks?.statements, hosted: Boolean(hostHooks), engine: Boolean(hostHooks) });
+  // Cortex through SQL, when Snowflake refuses its REST API, goes the same one way.
+  useCortexSqlExecutor(executor);
   // Validate before creating listeners, project state, or a connection.  A
   // malformed embedding/CLI option must fail safely rather than silently
   // starting an ambiguous rollout mode.
@@ -15085,6 +15087,172 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
   };
 
+  // Modeling » Draft from warehouse, callable on its own: the route below, and the ZLens app for Snowflake
+  // drafting its models by itself after its first sync.
+  const draftWarehouseProposal = async (body: { validate?: boolean; queryHistory?: boolean; domain?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' }, snapshot: ReturnType<typeof projectSnapshot>) => {
+    // Staging copies of a final table are left out unless the person asks
+    // for them ("Show staging tables"), so the map has one Customer.
+    const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
+    // A dbt-first project drafts from dbt and the warehouse together (RFC 0012, decision M5).
+    // A hybrid project drafts either side: its dbt models, or the warehouse
+    // tables dbt does not build (the default, as before).
+    const projectMode = modelingModeOf(loadProjectConfig(projectRoot));
+    const report = projectMode === 'dbt-first' || (projectMode === 'hybrid' && body.source === 'dbt')
+      ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, scope: draftScopeFromBody(body.scope), executor })
+      : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
+    // New Domains and subject areas are created by the proposal's own scope
+    // step, as for dbt discovery, so the batch stays in dependency order.
+    // A drafted join lives in the subject area of the entity it starts
+    // from, as the Modeling editor writes it, so a later edit updates it
+    // in place instead of adding a second copy. New entities land in the
+    // default area.
+    const areaOfEntity = new Map(Object.values(snapshot.manifest.modeling?.entities ?? {}).map((entity) => [`${entity.domain}::${entity.localId ?? entity.id}`, entity.areaId?.split('::').pop()]));
+    const changes = warehouseDiscoveryChanges(report)
+      .filter((change) => change.operation !== 'upsert_domain')
+      .map((change): ModelingAuthoringChange => change.operation === 'upsert_relationship' && !change.value.areaId
+        ? { ...change, value: { ...change.value, areaId: areaOfEntity.get(`${change.value.domain}::${change.value.from}`) ?? DEFAULT_MODEL_AREA_ID } }
+        : change);
+    if (changes.length === 0) return { report, proposal: null };
+    const evidenceFor = (change: ModelingAuthoringChange): string[] => {
+      if (change.operation === 'upsert_entity') {
+        const entity = report.entities.find((item) => item.relationId === change.value.dbtModel);
+        return [
+          `warehouse relation ${entity?.relation ?? change.value.dbtModel}`,
+          ...(entity?.grainSource === 'primary_key' ? [`declared primary key ${entity.grain}`] : entity?.grainSource === 'unique_column' ? [`${entity.grain} is unique on the warehouse`] : []),
+          ...(entity?.useInstead ? [`use ${tableName(entity.useInstead.relation)} instead: ${entity.useInstead.reason}`] : []),
+        ];
+      }
+      if (change.operation === 'upsert_relationship') {
+        const relationship = report.relationships.find((item) => item.id === change.value.id && item.domain === change.value.domain);
+        return [...(relationship?.evidence.map((item) => item.reason) ?? []), ...(relationship?.validation ? [`warehouse check: ${relationship.validation.message}`] : [])];
+      }
+      if (change.operation === 'upsert_rule' && change.value.evidence) return [`measured on the warehouse: ${change.value.evidence.query}`];
+      return [`warehouse catalog ${report.catalogFingerprint.slice(0, 12)}`];
+    };
+    const operationId = (change: ModelingAuthoringChange): string => {
+      const value = change.value as { id: string; domain?: string };
+      return change.operation === 'upsert_domain' ? `warehouse:domain:${value.id}` : `warehouse:${change.operation.replace('upsert_', '')}:${value.domain}:${value.id}`;
+    };
+    const operations: ContextAuthoringOperation[] = changes.map((change) => ({
+      id: operationId(change),
+      kind: 'modeling_change',
+      change,
+      evidence: evidenceFor(change),
+    }));
+    const proposal = previewContextAuthoring({
+      origin: 'warehouse_discovery',
+      operations,
+      expectedSnapshotId: snapshot.snapshotId,
+      domainNames: Object.fromEntries(report.domains.map((item) => [item.id, item.name])),
+    });
+    // The newest draft replaces the ones before it; they wait for no one now.
+    closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
+    return { report, proposal };
+  };
+
+  // Settings » Database » Apply and synchronize, callable on its own: the route, and the ZLens app for
+  // Snowflake reading its granted database by itself.
+  const syncConnectionMetadataScope = async (connectionId: string, selectedConnection: ConnectionConfig, cfg: ReturnType<typeof loadProjectConfig>, body: ConnectionMetadataScopeInput) => {
+    const scope = normalizeConnectionMetadataScope(
+      connectionId,
+      selectedConnection,
+      body,
+      metadataScopeDbtDefaults(projectRoot, cfg),
+    );
+    // The model as it stands, so drift can name what a re-sync touches.
+    const modelBeforeSync = modelingModeOf(cfg) === 'warehouse-first' || modelingModeOf(cfg) === 'hybrid'
+      ? (() => { try { return projectSnapshot().manifest; } catch { return undefined; } })()
+      : undefined;
+    const synced = await syncWarehouseMetadata({
+      projectRoot,
+      executor,
+      connection: selectedConnection,
+      scope,
+    });
+    persistConnectionMetadataScope(projectRoot, connectionId, scope);
+    projectConfig = loadProjectConfig(projectRoot);
+    const warehouseCatalog = await refreshWarehouseCatalogAfterSync(projectRoot, projectConfig, executor, selectedConnection, connectionId, synced.scope, modelBeforeSync, Boolean(hostHooks));
+    return { synced, warehouseCatalog };
+  };
+
+  // The ZLens app for Snowflake sets itself up (approved design D1, D2, 2026-11-09): once it knows the
+  // database granted to it, it reads every schema in it the app can see (the sync Settings » Database
+  // runs) and drafts the models from them (Modeling » Draft from warehouse). The drafts wait for review
+  // as always. Once per database: a marker in .dql/local remembers it across restarts.
+  type SnowflakeAppSetup = { state: 'idle' | 'running' | 'done' | 'failed'; database?: string; schemas?: string[]; relations?: number; drafted?: number; proposalId?: string; error?: string; at?: string };
+  let snowflakeAppSetup: SnowflakeAppSetup = { state: 'idle' };
+  const snowflakeAppSetupMarker = join(projectRoot, '.dql', 'local', 'snowflake-app-setup.json');
+  // In the ZLens app for Snowflake, the schema list offers only the databases granted to the app (approved
+  // design D4): not Snowflake's own SNOWFLAKE database, the app's own schemas or INFORMATION_SCHEMA.
+  const onlyGrantedScopes = async <T extends { scopes: Array<{ catalogOrDatabase: string; schemas: Array<{ name: string }> }>; dbtScopes?: unknown[]; supported?: boolean; message?: string }>(discovery: T): Promise<T> => {
+    let granted: string[] = [];
+    try {
+      granted = (await snowflakeApp!.current()).databases;
+    } catch {
+      // The settings could not be read: keep to the database ZLens reads now.
+    }
+    if (granted.length === 0 && typeof connection?.database === 'string') granted = [connection.database];
+    const wanted = new Set(granted.map((name) => name.toUpperCase()));
+    const scopes = discovery.scopes
+      .filter((scope) => wanted.has(scope.catalogOrDatabase.toUpperCase()))
+      .map((scope) => ({ ...scope, schemas: scope.schemas.filter((schema) => schema.name.toUpperCase() !== 'INFORMATION_SCHEMA') }));
+    const count = scopes.reduce((total, scope) => total + scope.schemas.length, 0);
+    // The count the list shows, not the one before the filter.
+    const message = discovery.supported && !discovery.dbtScopes?.length
+      ? `Found ${count} schema${count === 1 ? '' : 's'} in the database granted to this app. Choose the ones ZLens should read, then Apply and synchronize.`
+      : discovery.message;
+    return { ...discovery, scopes, ...(message ? { message } : {}) };
+  };
+  const SNOWFLAKE_APP_SETUP_RETRY_MS = 10 * 60_000;
+  const runSnowflakeAppSetup = async (database: string, options: { again?: boolean } = {}): Promise<void> => {
+    if (snowflakeAppSetup.state === 'running') return;
+    if (!options.again && snowflakeAppSetup.database === database) {
+      if (snowflakeAppSetup.state === 'done') return;
+      // A failed setup is not retried on every request: after a quiet spell, or when someone asks.
+      if (snowflakeAppSetup.state === 'failed' && Date.now() - Date.parse(snowflakeAppSetup.at ?? '') < SNOWFLAKE_APP_SETUP_RETRY_MS) return;
+    }
+    if (!options.again) try {
+      const marker = existsSync(snowflakeAppSetupMarker) ? JSON.parse(readFileSync(snowflakeAppSetupMarker, 'utf-8')) as SnowflakeAppSetup : undefined;
+      if (marker?.state === 'done' && marker.database === database) {
+        snowflakeAppSetup = marker;
+        return;
+      }
+    } catch {
+      // An unreadable marker: set up again.
+    }
+    snowflakeAppSetup = { state: 'running', database };
+    try {
+      const cfg = loadProjectConfig(projectRoot);
+      const connections = getStoredConnections(cfg as unknown as Record<string, unknown>);
+      const connectionId = resolveDefaultConnectionKey(cfg as unknown as Record<string, unknown>, connections) ?? Object.keys(connections)[0];
+      const selectedConnection = connectionId ? projectConnectionById(projectRoot, cfg, connectionId) : undefined;
+      if (!connectionId || !selectedConnection) throw new Error('ZLens has no Snowflake connection.');
+      const discovery = await discoverWarehouseMetadataScopes({ connectionId, executor, connection: selectedConnection, dbtRelations: metadataScopeDbtDefaults(projectRoot, cfg).relations });
+      const found = discovery.scopes.find((item) => item.catalogOrDatabase.toUpperCase() === database.toUpperCase());
+      const schemas = (found?.schemas ?? []).map((item) => item.name).filter((name) => name.toUpperCase() !== 'INFORMATION_SCHEMA');
+      if (!found || schemas.length === 0) throw new Error("the app can see no schemas there. Grant it USAGE on the schemas to read.");
+      const { warehouseCatalog } = await syncConnectionMetadataScope(connectionId, selectedConnection, cfg, { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: found.catalogOrDatabase, schemas }] } as ConnectionMetadataScopeInput);
+      if (warehouseCatalog?.error) throw new Error(warehouseCatalog.error);
+      if (warehouseCatalog?.skipped) throw new Error(warehouseCatalog.skipped);
+      const { report, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot());
+      snowflakeAppSetup = {
+        state: 'done',
+        database,
+        schemas,
+        relations: typeof warehouseCatalog?.relations === 'number' ? warehouseCatalog.relations : undefined,
+        drafted: proposal ? report.entities.length : 0,
+        ...(proposal ? { proposalId: proposal.id } : {}),
+        at: new Date().toISOString(),
+      };
+      mkdirSync(dirname(snowflakeAppSetupMarker), { recursive: true });
+      writeFileSync(snowflakeAppSetupMarker, JSON.stringify(snowflakeAppSetup, null, 2) + '\n', 'utf-8');
+      console.log(`[zlens] Read ${snowflakeAppSetup.relations ?? 0} tables and views in ${database} (${schemas.join(', ')}) and drafted ${snowflakeAppSetup.drafted} models for review.`);
+    } catch (error) {
+      snowflakeAppSetup = { state: 'failed', database, error: error instanceof Error ? error.message : String(error), at: new Date().toISOString() };
+      console.warn(`[zlens] Could not set up from ${database} by itself: ${snowflakeAppSetup.error}`);
+    }
+  };
+
   const server = createServer((req, res) => withServerScope(scope, () => {
     res = withCompression(req, res);
     // Every answer of a hosted server says it is hosted, its refusals and failures too (RFC 0010 HH-9).
@@ -15147,6 +15315,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             console.warn(`[zlens] Could not switch to the granted database: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
+        // Then it reads the tables and drafts the models by itself, in the background (once per database).
+        if (database && (snowflakeAppDatabase === database || connection?.database === database)) void runSnowflakeAppSetup(database);
         const refusal = state.user ? snowflakeIngressRefusal({ appUser: state.user }, req.headers[SNOWFLAKE_USER_HEADER]) : undefined;
         if (refusal) {
           if (path.startsWith('/api/')) {
@@ -15377,6 +15547,32 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const operation = operationCoordinator.cancel(operationId);
       res.writeHead(operation ? 200 : 404, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(serializeJSON(operation ?? { error: 'Operation not found.' }));
+      return;
+    }
+
+    // The ZLens app for Snowflake setting itself up: reading the tables, drafting the models.
+    if (req.method === 'GET' && path === '/api/snowflake-app/setup') {
+      let waiting: ReturnType<typeof waitingWarehouseDraftSummary> | undefined;
+      try {
+        waiting = waitingWarehouseDraftSummary(waitingWarehouseDrafts()[0], projectSnapshot().snapshotId);
+      } catch {
+        // The project cannot be read yet: no drafts to point to.
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...snowflakeAppSetup, waitingDraft: waiting ?? null }));
+      return;
+    }
+    // Try again (the banner's button after a failed setup): reads the tables and drafts the models anew.
+    if (req.method === 'POST' && path === '/api/snowflake-app/setup') {
+      const database = snowflakeAppDatabase ?? (typeof connection?.database === 'string' ? connection.database : undefined);
+      if (!snowflakeApp || !database) {
+        res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ error: 'Only the ZLens app for Snowflake sets itself up, once it has a database.' }));
+        return;
+      }
+      void runSnowflakeAppSetup(database, { again: true });
+      res.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ managed: true, ...snowflakeAppSetup }));
       return;
     }
 
@@ -16827,67 +17023,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
           throw Object.assign(new Error('Project sources changed. Refresh Modeling and draft again.'), { code: 'PROPOSAL_STALE' });
         }
-        // Staging copies of a final table are left out unless the person asks
-        // for them ("Show staging tables"), so the map has one Customer.
-        const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
-        // A dbt-first project drafts from dbt and the warehouse together (RFC 0012, decision M5).
-        // A hybrid project drafts either side: its dbt models, or the warehouse
-        // tables dbt does not build (the default, as before).
-        const projectMode = modelingModeOf(loadProjectConfig(projectRoot));
-        const report = projectMode === 'dbt-first' || (projectMode === 'hybrid' && body.source === 'dbt')
-          ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, scope: draftScopeFromBody(body.scope), executor })
-          : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
-        // New Domains and subject areas are created by the proposal's own scope
-        // step, as for dbt discovery, so the batch stays in dependency order.
-        // A drafted join lives in the subject area of the entity it starts
-        // from, as the Modeling editor writes it, so a later edit updates it
-        // in place instead of adding a second copy. New entities land in the
-        // default area.
-        const areaOfEntity = new Map(Object.values(snapshot.manifest.modeling?.entities ?? {}).map((entity) => [`${entity.domain}::${entity.localId ?? entity.id}`, entity.areaId?.split('::').pop()]));
-        const changes = warehouseDiscoveryChanges(report)
-          .filter((change) => change.operation !== 'upsert_domain')
-          .map((change): ModelingAuthoringChange => change.operation === 'upsert_relationship' && !change.value.areaId
-            ? { ...change, value: { ...change.value, areaId: areaOfEntity.get(`${change.value.domain}::${change.value.from}`) ?? DEFAULT_MODEL_AREA_ID } }
-            : change);
-        if (changes.length === 0) {
+        const { report, proposal } = await draftWarehouseProposal(body, snapshot);
+        if (!proposal) {
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({ requestId, report, proposal: null }));
           return;
         }
-        const evidenceFor = (change: ModelingAuthoringChange): string[] => {
-          if (change.operation === 'upsert_entity') {
-            const entity = report.entities.find((item) => item.relationId === change.value.dbtModel);
-            return [
-              `warehouse relation ${entity?.relation ?? change.value.dbtModel}`,
-              ...(entity?.grainSource === 'primary_key' ? [`declared primary key ${entity.grain}`] : entity?.grainSource === 'unique_column' ? [`${entity.grain} is unique on the warehouse`] : []),
-              ...(entity?.useInstead ? [`use ${tableName(entity.useInstead.relation)} instead: ${entity.useInstead.reason}`] : []),
-            ];
-          }
-          if (change.operation === 'upsert_relationship') {
-            const relationship = report.relationships.find((item) => item.id === change.value.id && item.domain === change.value.domain);
-            return [...(relationship?.evidence.map((item) => item.reason) ?? []), ...(relationship?.validation ? [`warehouse check: ${relationship.validation.message}`] : [])];
-          }
-          if (change.operation === 'upsert_rule' && change.value.evidence) return [`measured on the warehouse: ${change.value.evidence.query}`];
-          return [`warehouse catalog ${report.catalogFingerprint.slice(0, 12)}`];
-        };
-        const operationId = (change: ModelingAuthoringChange): string => {
-          const value = change.value as { id: string; domain?: string };
-          return change.operation === 'upsert_domain' ? `warehouse:domain:${value.id}` : `warehouse:${change.operation.replace('upsert_', '')}:${value.domain}:${value.id}`;
-        };
-        const operations: ContextAuthoringOperation[] = changes.map((change) => ({
-          id: operationId(change),
-          kind: 'modeling_change',
-          change,
-          evidence: evidenceFor(change),
-        }));
-        const proposal = previewContextAuthoring({
-          origin: 'warehouse_discovery',
-          operations,
-          expectedSnapshotId: snapshot.snapshotId,
-          domainNames: Object.fromEntries(report.domains.map((item) => [item.id, item.name])),
-        });
-        // The newest draft replaces the ones before it; they wait for no one now.
-        closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
         res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ requestId, report, proposal }));
       } catch (error) {
@@ -29660,7 +29801,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           dbtRelations: defaults.relations,
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON(discovery));
+        res.end(serializeJSON(snowflakeApp ? await onlyGrantedScopes(discovery) : discovery));
       } catch (error) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
@@ -29726,25 +29867,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const selectedConnection = projectConnectionById(projectRoot, cfg, connectionId);
         if (!selectedConnection) throw new Error(`Unknown connection "${connectionId}".`);
         const body = await readJSON(req) as ConnectionMetadataScopeInput;
-        const scope = normalizeConnectionMetadataScope(
-          connectionId,
-          selectedConnection,
-          body,
-          metadataScopeDbtDefaults(projectRoot, cfg),
-        );
-        // The model as it stands, so drift can name what a re-sync touches.
-        const modelBeforeSync = modelingModeOf(cfg) === 'warehouse-first' || modelingModeOf(cfg) === 'hybrid'
-          ? (() => { try { return projectSnapshot().manifest; } catch { return undefined; } })()
-          : undefined;
-        const synced = await syncWarehouseMetadata({
-          projectRoot,
-          executor,
-          connection: selectedConnection,
-          scope,
-        });
-        persistConnectionMetadataScope(projectRoot, connectionId, scope);
-        projectConfig = loadProjectConfig(projectRoot);
-        const warehouseCatalog = await refreshWarehouseCatalogAfterSync(projectRoot, projectConfig, executor, selectedConnection, connectionId, synced.scope, modelBeforeSync, Boolean(hostHooks));
+        const { synced, warehouseCatalog } = await syncConnectionMetadataScope(connectionId, selectedConnection, cfg, body);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({
           scope: synced.scope,
@@ -52708,6 +52831,13 @@ async function testCortexProviderConfig(
     const response = await provider.generate([
       { role: 'user', content: 'Reply with exactly: OK' },
     ], { maxTokens: 1, temperature: 0 });
+    // Snowflake refused the REST API and the answer came through SQL: say so (approved design D5).
+    if (isCortexClaudeProvider(provider) && provider.route() === 'sql') {
+      return {
+        ok: true,
+        message: `${label} answered through Cortex SQL${details}. Snowflake refuses the Cortex REST API for this account, so ZLens asks Cortex through SQL (AI_COMPLETE): Ask works, with no prompt caching.`,
+      };
+    }
     return {
       ok: true,
       message: `${label} responded through the governed runtime${details}: ${response.trim().slice(0, 80) || 'OK'}`,

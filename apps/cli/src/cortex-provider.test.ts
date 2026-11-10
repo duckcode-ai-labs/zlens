@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
-import { isCortexClaudeProvider } from '@zlens/agent';
+import { isCortexClaudeProvider, resetCortexRoute } from '@zlens/agent';
 import { meaningDraftProvider, startLocalServer } from './local-runtime.js';
 import { listProviderSettings, saveProviderSettings } from './settings/provider-settings.js';
 
@@ -18,6 +18,8 @@ import { listProviderSettings, saveProviderSettings } from './settings/provider-
 const servers: Server[] = [];
 const roots: string[] = [];
 afterEach(async () => {
+  // A refusal is remembered per account host: each test starts on the REST API.
+  resetCortexRoute();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((done) => { server.closeAllConnections?.(); server.close(() => done()); })));
@@ -92,7 +94,7 @@ describe('Snowflake Cortex chosen as the model', () => {
       sent.push(String(input));
       return new Response('{"code":"003001","message":"not allowed"}', { status: 403 });
     }));
-    await expect(selected!.provider.generate([{ role: 'user', content: 'Why did revenue rise?' }])).rejects.toThrow(/claude: 403/);
+    await expect(selected!.provider.generate([{ role: 'user', content: 'Why did revenue rise?' }])).rejects.toThrow('Snowflake refuses the Cortex REST API for this account (HTTP 403, error 003001)');
     expect(sent.every((url) => url.startsWith('https://myorg-test-acct.snowflakecomputing.com/'))).toBe(true);
   });
 

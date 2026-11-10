@@ -730,6 +730,22 @@ export interface SetupLaunchResponse {
   requiresDbtReapply: boolean;
   shouldOpen: boolean;
   reason: 'first_install' | 'version_upgrade' | null;
+  /** The ZLens app for Snowflake: it sets itself up, so the setup wizard stays closed. */
+  snowflakeAppManaged?: boolean;
+}
+
+/** The ZLens app for Snowflake setting itself up: reading the granted database's tables, drafting the models. */
+export interface SnowflakeAppSetupStatus {
+  managed: boolean;
+  state: 'idle' | 'running' | 'done' | 'failed';
+  database?: string;
+  schemas?: string[];
+  relations?: number;
+  drafted?: number;
+  proposalId?: string;
+  error?: string;
+  at?: string;
+  waitingDraft?: WaitingWarehouseDrafts | null;
 }
 
 export type DbtOnboardingErrorCode =
@@ -7380,6 +7396,15 @@ export const api = {
 
   async getSetupLaunch(): Promise<SetupLaunchResponse> {
     return request<SetupLaunchResponse>('/api/onboarding/launch');
+  },
+
+  async getSnowflakeAppSetup(): Promise<SnowflakeAppSetupStatus> {
+    return request<SnowflakeAppSetupStatus>('/api/snowflake-app/setup');
+  },
+
+  /** Read the tables and draft the models again (after a failed setup). */
+  async retrySnowflakeAppSetup(): Promise<SnowflakeAppSetupStatus> {
+    return request<SnowflakeAppSetupStatus>('/api/snowflake-app/setup', { method: 'POST', body: '{}' });
   },
 
   async acknowledgeSetupLaunch(): Promise<{ requestId: string; version: string; acknowledged: true }> {

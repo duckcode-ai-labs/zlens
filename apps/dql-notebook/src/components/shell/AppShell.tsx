@@ -11,6 +11,7 @@ import { ActivityBar } from './ActivityBar';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { HostBanner } from './HostBanner';
+import { SnowflakeAppSetupBanner } from './SnowflakeAppSetupBanner';
 import { hostLandingView, useHostUi } from '../../host/host-ui';
 import { HostRefusalNotice, ReadOnlyStrip } from './HostReadOnly';
 import { DevPanel } from './DevPanel';
@@ -310,6 +311,7 @@ export function AppShell() {
     >
       {/* The host's strip (HH-9), e.g. "Draft space — changes go to review" */}
       <HostBanner />
+      <SnowflakeAppSetupBanner enabled={Boolean(setupLaunch?.snowflakeAppManaged)} />
       {/* Header spans full width */}
       <Header />
       <HostRefusalNotice />
