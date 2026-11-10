@@ -65,6 +65,7 @@ import {
 import { resolveNpmInvocation } from './npm-runtime.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason } from './deployment-locks.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
+import { keepSseStreamAlive } from './sse-keep-alive.js';
 import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions } from './snowflake-app-settings.js';
 import { SnowflakeAppBackups } from './snowflake-app-backups.js';
 import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
@@ -1323,6 +1324,13 @@ export interface LocalServerOptions {
     projectRoot: string;
     request: AgentRunRequest;
   }) => AgentProvider | null | Promise<AgentProvider | null>;
+  /**
+   * How often a quiet Ask stream sends a keep-alive line (default 15 s, from
+   * `SSE_KEEP_ALIVE_MS`). A proxy in front of ZLens, such as the Snowflake
+   * ingress (90 s), ends a connection that carries no bytes for too long.
+   * Tests set a short one; 0 turns it off.
+   */
+  agentRunStreamKeepAliveMs?: number;
   /**
    * Host-only seam for exact Dataset-chart answers. The runtime still validates
    * the current server-issued chart context before it asks this provider; a
@@ -18446,6 +18454,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             if (wantsStream) {
               res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' });
               writeAgentRunSse(res as unknown as ServerResponse, 'agent-run-accepted', { runId: priorClaim.runId, replayed: true });
+              // Nothing else is written while the original runs: keep the connection from looking idle.
+              const stopKeepAlive = keepSseStreamAlive(res as unknown as ServerResponse, opts.agentRunStreamKeepAliveMs);
               const deadline = Date.now() + 10 * 60_000;
               while (Date.now() < deadline && !res.destroyed) {
                 await new Promise((resolve) => setTimeout(resolve, 500));
@@ -18456,6 +18466,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 else writeAgentRunSse(res as unknown as ServerResponse, 'agent-run-error', { error: 'The original submission ended without a stored run; check the run list before asking again.' });
                 break;
               }
+              stopKeepAlive();
               if (!res.writableEnded) res.end();
             } else {
               res.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -18500,6 +18511,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             'X-Accel-Buffering': 'no',
           });
         }
+        // One AI call can run for over a minute with no event to send. A proxy
+        // that cuts quiet connections (the Snowflake ingress documents 90 s)
+        // ends the stream mid-run, and the page showed "network error".
+        const stopKeepAlive = wantsStream
+          ? keepSseStreamAlive(res as unknown as ServerResponse, opts.agentRunStreamKeepAliveMs)
+          : () => {};
         const operation = operationCoordinator.create({
           type: 'agent_run',
           scope: `agent-run:${runId}`,
@@ -18609,6 +18626,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           // completed Ask a 4.66 MB reply.
           res.end(serializeJSON({ run: slimAgentRunForTransport(completedRun) }));
         } finally {
+        stopKeepAlive();
         activeAgentRunControllers.delete(runId);
         appViewByAgentRun.delete(runId);
         }

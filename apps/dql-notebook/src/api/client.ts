@@ -4397,15 +4397,59 @@ async function requestUncached<T>(path: string, options?: RequestInit): Promise<
   return res.json() as Promise<T>;
 }
 
-async function streamAgentRunResponse(
+/**
+ * The connection carrying an Ask run's stream ended before the run's answer
+ * arrived: a proxy cut it (the Snowflake ingress documents a 90 s timeout),
+ * the network dropped, or nothing arrived for too long. The
+ * run itself belongs to the server and goes on; the page reconnects to it by
+ * id instead of reporting a failure.
+ */
+export class AgentRunStreamDroppedError extends Error {
+  readonly reason: 'disconnected' | 'ended' | 'stalled';
+  constructor(reason: 'disconnected' | 'ended' | 'stalled', detail?: string) {
+    super(reason === 'stalled'
+      ? 'The AI request stream went quiet.'
+      : reason === 'ended'
+        ? 'Agent run stream ended before completion.'
+        : `The connection to the AI request dropped${detail ? ` (${detail})` : ''}.`);
+    this.name = 'AgentRunStreamDroppedError';
+    this.reason = reason;
+  }
+}
+
+export function isAgentRunStreamDropped(error: unknown): error is AgentRunStreamDroppedError {
+  return error instanceof AgentRunStreamDroppedError;
+}
+
+/**
+ * The server writes a keep-alive line every 15 s while a run is quiet. A
+ * stream with no bytes at all for this long is held by something in between
+ * (a buffering proxy, a half-open connection), so the page stops waiting on it
+ * and reads the run by id instead.
+ */
+export const AGENT_RUN_STREAM_STALL_MS = 45_000;
+
+export async function streamAgentRunResponse(
   res: Response,
   onMessage: (message: AgentRunStreamMessage) => void,
+  options: { stallMs?: number } = {},
 ): Promise<AgentRun> {
   if (!res.body) throw new Error('Agent run stream is not available in this browser.');
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let completed: AgentRun | undefined;
+  const stallMs = options.stallMs ?? AGENT_RUN_STREAM_STALL_MS;
+  let stalled = false;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  const watchForStall = () => {
+    if (stallTimer !== undefined) clearTimeout(stallTimer);
+    if (!(stallMs > 0)) return;
+    stallTimer = setTimeout(() => {
+      stalled = true;
+      void reader.cancel().catch(() => undefined);
+    }, stallMs);
+  };
 
   const consumeBlock = (block: string) => {
     const lines = block.split(/\r?\n/);
@@ -4440,22 +4484,46 @@ async function streamAgentRunResponse(
     }
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (value) {
-      buffer += decoder.decode(value, { stream: !done });
-      let separator = buffer.search(/\r?\n\r?\n/);
-      while (separator >= 0) {
-        const block = buffer.slice(0, separator);
-        buffer = buffer.slice(buffer[separator] === '\r' ? separator + 4 : separator + 2);
-        consumeBlock(block);
-        separator = buffer.search(/\r?\n\r?\n/);
+  try {
+    watchForStall();
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        // Chrome says "network error", Firefox "NetworkError…", Node "terminated":
+        // the connection ended under the stream, not the run.
+        if (error instanceof DOMException && error.name === 'AbortError') throw error;
+        if (stalled) throw new AgentRunStreamDroppedError('stalled');
+        throw new AgentRunStreamDroppedError('disconnected', error instanceof Error ? error.message : undefined);
       }
+      const { value, done } = chunk;
+      if (value) {
+        watchForStall();
+        buffer += decoder.decode(value, { stream: !done });
+        let separator = buffer.search(/\r?\n\r?\n/);
+        while (separator >= 0) {
+          const block = buffer.slice(0, separator);
+          buffer = buffer.slice(buffer[separator] === '\r' ? separator + 4 : separator + 2);
+          consumeBlock(block);
+          separator = buffer.search(/\r?\n\r?\n/);
+        }
+      }
+      if (done) break;
     }
-    if (done) break;
+  } finally {
+    if (stallTimer !== undefined) clearTimeout(stallTimer);
   }
-  if (buffer.trim()) consumeBlock(buffer);
-  if (!completed) throw new Error('Agent run stream ended before completion.');
+  if (stalled && !completed) throw new AgentRunStreamDroppedError('stalled');
+  if (buffer.trim()) {
+    try {
+      consumeBlock(buffer);
+    } catch (error) {
+      // A block cut off mid-line by the connection ending is not a server error.
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+  }
+  if (!completed) throw new AgentRunStreamDroppedError('ended');
   return completed;
 }
 
