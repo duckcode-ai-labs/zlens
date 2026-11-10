@@ -2702,7 +2702,9 @@ export class AgentRunEngine {
         : err instanceof Error && err.name === "TimeoutError"
         ? requestedMode === 'research'
           ? 'This Research run reached its bounded deadline before finalization. Review the recorded branch receipts and trace, then narrow the investigation and retry. No result was accepted.'
-          : "This analytical run reached its time limit before it finished. A timeout alone does not prove a cross-model join or semantic-modeling problem. Open Trust & Steps to see the last recorded phase; retry the same bounded question or use Research for a longer budget. No result was accepted."
+          // Plain words and real next steps (new-user test B3, 2026-11-10): the old text pointed to a "Trust &
+          // Steps" control Ask does not have and spoke of cross-model joins to someone asking about basketball.
+          : "This question reached its time limit before it finished. Retry it, or ask a narrower question (one team, one season, one measure). No result was accepted."
         : err instanceof Error ? err.message : String(err);
       const failedRoute = progress.route;
       const failedPhase = progress.lifecycle.phase;

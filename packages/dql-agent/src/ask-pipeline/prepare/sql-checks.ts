@@ -14,7 +14,12 @@ import { tableName } from '@zlens/core';
  * not a reason to skip them.
  */
 
-export interface StatedValue { value: string; kind: 'text' | 'year' | 'fiscal_year' | 'quarter' }
+export interface StatedValue {
+  value: string;
+  kind: 'text' | 'year' | 'fiscal_year' | 'quarter';
+  /** The whole name a capitalised word belongs to ("Golden State Warriors" for "Golden"), when it has several words. */
+  name?: string;
+}
 
 const NOT_VALUES = new Set([
   'what', 'which', 'who', 'whom', 'how', 'when', 'where', 'why', 'show', 'list', 'give', 'find', 'get', 'tell', 'compare', 'top', 'bottom', 'total', 'totals', 'count', 'counts', 'number', 'sum', 'average', 'avg', 'lost', 'won', 'amount', 'amounts', 'revenue', 'by', 'for', 'and', 'or', 'the', 'in', 'of', 'on', 'at', 'to', 'from', 'with', 'per', 'is', 'are', 'was', 'were', 'a', 'an', 'all', 'each', 'every', 'month', 'months', 'year', 'years', 'quarter', 'week', 'day', 'fiscal', 'calendar', 'last', 'this', 'next', 'current', 'previous', 'i', 'we', 'our', 'my', 'please', 'also', 'only', 'and/or',
@@ -35,21 +40,34 @@ function opensAClause(tokens: string[], index: number): boolean {
 }
 
 function properNouns(text: string): string[] {
-  const found: string[] = [];
+  return properNounNames(text).flatMap((name) => name);
+}
+
+/**
+ * The capitalised words of a text, grouped into the names they form: words next to each other in the same
+ * clause ("Golden State Warriors") are one name, words parted by anything else ("Acme, Contoso") are not.
+ */
+function properNounNames(text: string): string[][] {
+  const names: string[][] = [];
   for (const sentence of text.split(/[.?!\n]+/)) {
-    const tokens = sentence.split(/[\s,;:()]+/).filter(Boolean);
+    // A comma, semicolon or bracket parts two names, as a word between them does.
+    const tokens = sentence.split(/\s+|(?=[,;:()])|(?<=[,;:()])/).filter(Boolean);
+    let current: string[] = [];
+    const close = () => { if (current.length) names.push(current); current = []; };
     tokens.forEach((token, index) => {
-      if (index === 0) return;
-      const word = token.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '');
+      if (/^[,;:()]$/.test(token)) { close(); return; }
+      const words = tokens.filter((item) => !/^[,;:()]$/.test(item));
+      const position = words.indexOf(token);
+      const word = token.replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').replace(/'s$/, '');
       // Capitalized mixed case (Splunk, Curry). ALL-CAPS tokens are field
       // names or acronyms the user typed, not values the data must hold.
-      if (!/^[A-Z][a-z][A-Za-z0-9&-]*$/.test(word)) return;
-      if (NOT_VALUES.has(word.toLowerCase())) return;
-      if (INSTRUCTION_WORDS.has(word.toLowerCase()) && opensAClause(tokens, index)) return;
-      found.push(word);
+      if (index === 0 || position === 0 || !/^[A-Z][a-z][A-Za-z0-9&-]*$/.test(word) || NOT_VALUES.has(word.toLowerCase())
+        || (INSTRUCTION_WORDS.has(word.toLowerCase()) && opensAClause(words, position))) { close(); return; }
+      current.push(word);
     });
+    close();
   }
-  return found;
+  return names;
 }
 
 /**
@@ -90,7 +108,14 @@ export function statedValues(question: string, intent?: AnalyticalIntentV1, opti
   for (const match of question.matchAll(/\bQ([1-4])\b/g)) add(`Q${match[1]}`, 'quarter');
   for (const match of question.matchAll(/\b(19|20)\d{2}\b/g)) if (!fiscal.has(match[0])) add(match[0], 'year');
   for (const match of question.matchAll(/["“‘]([^"”’]{2,80})["”’]/g)) add(match[1]!, 'text');
-  for (const word of properNouns(question)) if (!/^Q[1-4]$/.test(word)) add(word, 'text');
+  for (const name of properNounNames(question)) {
+    for (const word of name) {
+      if (/^Q[1-4]$/.test(word)) continue;
+      const before = values.length;
+      add(word, 'text');
+      if (name.length > 1 && values.length > before) values[values.length - 1]!.name = name.join(' ');
+    }
+  }
   if (intent) {
     const literals = [
       ...intent.filters.flatMap((filter) => filter.values),
@@ -111,6 +136,9 @@ export function statedValues(question: string, intent?: AnalyticalIntentV1, opti
 export function missingStatedValues(sql: string, stated: StatedValue[]): StatedValue[] {
   const lower = sql.toLowerCase();
   return stated.filter((item) => {
+    // A word of a longer name is applied when the statement spells the name by any of its own words: "Golden
+    // State Warriors" filtered as ILIKE '%warriors%' (new-user test, 2026-11-10: refused for "Golden", "State").
+    if (item.kind === 'text' && item.name) return !item.name.toLowerCase().split(/\s+/).filter((word) => word.length > 3).some((word) => lower.includes(word));
     if (item.kind === 'text') return !item.value.toLowerCase().split(/\s+/).filter((word) => word.length > 1).every((word) => lower.includes(word));
     if (item.kind === 'year') {
       if (lower.includes(item.value)) return false;

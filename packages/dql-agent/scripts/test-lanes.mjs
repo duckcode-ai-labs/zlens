@@ -186,10 +186,12 @@ const EXPECTED_TEST_FILES = 195;
 // (claude-cortex.test.ts, +6; Snowflake app end-to-end fixes D3, D5).
 // 2845 with meaning search through Snowflake Cortex (cortex.test.ts +8; project-embeddings.test.ts +1:
 // the app's ZLENS_EMBEDDINGS=cortex is never put back to word-based; search design S1-S5).
-const EXPECTED_TESTS = 2845;
+// 2848 with a whole new question in a chat read on its own (topic-shift.test.ts, +2) and a name of several
+// words applied by any of its words (sql-checks.test.ts, +1; new-user test B1/B2, 2026-11-10).
+const EXPECTED_TESTS = 2848;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2764.
+// The ordinary lane's share is the difference: 2767.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

@@ -596,6 +596,29 @@ function standsAloneAsNewQuestion(question: string): boolean {
 }
 
 /**
+ * A whole new question in an existing Ask chat, read on its own rather than as an edit of the previous answer
+ * (new-user test B2, 2026-11-10: "What was the total number of points scored in the 2016 regular season?",
+ * asked after other questions, inherited their filters and was refused with the validator's internal text;
+ * the same question in a fresh chat was answered). Narrower about pointing back than `referencesPriorTurn`:
+ * "and" or "then" inside a sentence ("Which teams did Kevin Durant play for, and in which seasons?") does not
+ * point back, nor does "that" as a relative pronoun ("teams that won"). A fragment ("and by month?", "what
+ * about 2016?"), a pronoun or demonstrative with no referent in the question ("how did he do?", "which of
+ * those…"), or words like "same", "instead", "again" keep the previous answer as the one being edited.
+ */
+export function readsAsNewQuestion(question: string): boolean {
+  const normalized = question.replace(/\s+/g, ' ').trim();
+  if (normalized.split(' ').filter(Boolean).length < 6) return false;
+  // Only a question word opens a new question: in a chat a command ("Show only 2017, and expand that…",
+  // "List them by…") edits the answer on screen.
+  if (!/^(who|what|which|when|where|why|how)\b/i.test(normalized)) return false;
+  if (/^(what|how) about\b/i.test(normalized)) return false;
+  if (/\b(it|its|he|him|his|she|her|hers|those|these|same|above|previous|prior|instead|again|aforementioned)\b/i.test(normalized)) return false;
+  // "that" as the thing acted on ("expand that", "break that down") points back; as a relative pronoun ("teams
+  // that won") it does not.
+  return !/\b(expand|show|change|break|split|sort|rank|filter|limit|do|redo|make|turn|keep|add|drop|remove)\s+that\b/i.test(normalized);
+}
+
+/**
  * Does the question explicitly point at what came before? Deictic and additive
  * connectives are both reliable signals that the user means "carry the previous
  * context", independent of whether the planner recognised any vocabulary.

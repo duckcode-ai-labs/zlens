@@ -1073,6 +1073,7 @@ export {
   conversationHistoryFromContext,
   conversationTurnContextState,
   isLikelyClarificationReply,
+  readsAsNewQuestion,
   recallRelevantTurns,
   renderConversationEnvelopeForPrompt,
 } from "./conversation/snapshot.js";

@@ -2129,7 +2129,9 @@ describe("AgentRunEngine", () => {
       stopReason: "blocked",
     });
     expect(run.summary).toContain("reached its time limit");
-    expect(run.summary).toContain("does not prove a cross-model join");
+    // Plain words and real next steps (new-user test B3, 2026-11-10), not "Open Trust & Steps".
+    expect(run.summary).toContain("Retry it, or ask a narrower question");
+    expect(run.summary).not.toContain("Trust & Steps");
     expect(run.events.at(-1)?.type).toBe("run.failed");
     expect(store.get("run-routing-timeout")?.summary).toContain("reached its time limit");
   });

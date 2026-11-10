@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConversationStore, type ConversationTurnInput } from './session-store.js';
-import { advanceThreadState, buildConversationSnapshot } from './snapshot.js';
+import { advanceThreadState, buildConversationSnapshot, readsAsNewQuestion } from './snapshot.js';
 import { isFilterOnlyRefinement } from '../metadata/catalog.js';
 import { buildAnalysisQuestionPlan } from '../metadata/analysis-planner.js';
 
@@ -169,5 +169,35 @@ describe('isFilterOnlyRefinement requires evidence of sameness', () => {
     const prior = buildAnalysisQuestionPlan('revenue by region in 2024');
     const next = buildAnalysisQuestionPlan('revenue by region in 2025');
     expect(isFilterOnlyRefinement(prior, next)).toBe(true);
+  });
+});
+
+describe('a whole new question in a chat is read on its own (new-user test B2, 2026-11-10)', () => {
+  it('reads complete questions as new, even with "and" or "that" inside them', () => {
+    for (const question of [
+      'What was the total number of points scored in the 2016 regular season?',
+      'Which team won the most regular season games in 2015?',
+      "Who were the Lakers' top 3 rebounders in the 2009 season?",
+      'Which teams did Kevin Durant play for, and in which seasons?',
+      'How many home games did the Boston Celtics win in the 2008 regular season?',
+      'Which teams that won more than 60 games made the finals?',
+    ]) expect(readsAsNewQuestion(question), question).toBe(true);
+  });
+
+  it('keeps fragments and questions that point back as edits of the previous answer', () => {
+    for (const question of [
+      'and by month?',
+      'What about the 2016 season?',
+      'How did he do in the playoffs that year?',
+      'Which of those teams made the playoffs?',
+      'Show the same numbers for the Lakers',
+      'Break it down by season',
+      'Now show only the home games please',
+      'What was it in 2014 instead?',
+      // The golden NBA conversation's second turn: a command that edits the answer on screen.
+      'Show only calendar year 2017, and expand that to the top ten players.',
+      'List the top ten players by points per game this season',
+      'Which players should we build around, and what would expand that list?',
+    ]) expect(readsAsNewQuestion(question), question).toBe(false);
   });
 });

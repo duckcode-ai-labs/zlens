@@ -1,0 +1,23 @@
+{
+  "key": "07189cdc4ce37793c320ac4af981189b",
+  "operation": "generate",
+  "text": "{\"version\":1,\"kind\":\"analytics\",\"reading\":\"Total revenue and beverage revenue for the customer named Ryan Byrd.\",\"measures\":[{\"ref\":\"metric:order_item.revenue\",\"scope\":[{\"ref\":\"dimension:customers.customer_name\",\"op\":\"eq\",\"values\":[\"Ryan byrd\"],\"source\":\"question\"}],\"alias\":\"total_revenue\"},{\"ref\":\"metric:order_item.drink_revenue\",\"scope\":[{\"ref\":\"dimension:customers.customer_name\",\"op\":\"eq\",\"values\":[\"Ryan byrd\"],\"source\":\"question\"}],\"alias\":\"beverage_revenue\"}],\"groupBy\":[],\"display\":[],\"filters\":[],\"expectedShape\":\"comparison\",\"unresolved\":[],\"provenance\":{\"metric:order_item.revenue\":\"q:total revenue\",\"metric:order_item.drink_revenue\":\"q:beverage revenue\",\"dimension:customers.customer_name\":\"q:Ryan byrd\"}}",
+  "providerName": "claude",
+  "recordedAt": "2026-11-10T14:54:23.172Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "07189cdc4ce37793c320ac4af981189b5db1030dcf2c8c7640542e638eae63b4",
+    "postCanonicalHash": "07189cdc4ce37793c320ac4af981189b5db1030dcf2c8c7640542e638eae63b4",
+    "appliedRuleClasses": []
+  }
+}
