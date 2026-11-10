@@ -9358,14 +9358,16 @@ export const api = {
    * Live preview of one field query while it is being built. The server runs
    * it through the ordinary governed Dataset runtime in an ephemeral one-tile
    * page: same validation, proofs, and execution, but no App receipt, story,
-   * or publication evidence. Pass a signal so a newer edit cancels this one.
+   * or publication evidence. It runs under the App's data rule, as the page
+   * run does: a saved query nobody certified yet runs here too, labelled so.
+   * Pass a signal so a newer edit cancels this one.
    */
   async previewDatasetTileQuery(
     input: { sourceId: string; query: TileQuery },
     signal?: AbortSignal,
   ): Promise<DatasetTileQueryPreview> {
     try {
-      return await request<DatasetTileQueryPreview>('/api/app-datasets/run', {
+      return await request<DatasetTileQueryPreview>('/api/app-datasets/tile-preview', {
         method: 'POST',
         body: JSON.stringify({ sourceId: input.sourceId, query: input.query }),
         ...(signal ? { signal } : {}),

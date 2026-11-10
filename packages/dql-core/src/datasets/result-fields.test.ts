@@ -274,3 +274,60 @@ describe('a LIMIT on a statement that returns one row (V8 B5)', () => {
     expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: kpi } })?.state).toBe('certified');
   });
 });
+
+describe('per-unit averages and totals that count (new-user test V9)', () => {
+  // A certified Ask saved query: Warriors points per game, 2016 regular
+  // season vs playoffs. Its first-click KPI showed 235.18, the two averages
+  // added up, under a note that says averages are never added up.
+  const ppg = savedQueryResultDescriptor({
+    sourceId: 'app:block:nba:ppg',
+    sourceRevision: 'sha256:rev1',
+    savedQuery: 'warriors_ppg_regular_vs_playoffs_2016',
+    qualifiedId: 'nba::block::warriors_ppg_regular_vs_playoffs_2016',
+    domain: 'nba',
+    certified: true,
+    lifecycle: 'certified',
+    columns: [{ name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'POINTS_PER_GAME', type: 'DOUBLE' }],
+    groupBy: ['GAME_TYPE'],
+    typesFrom: 'contract',
+  })!;
+
+  it('never sums a per-unit or per-game value, however it is spelled', () => {
+    for (const name of ['POINTS_PER_GAME', 'pointsPerGame', 'rebounds_per_36', 'pts_per36', 'ppg', 'team_rpg', 'cost_per_unit', 'per_capita_income']) {
+      expect(isNonAdditiveColumnName(name), name).toBe(true);
+    }
+    for (const name of ['SEASON_WINS', 'points', 'total_points', 'person_count', 'percentile_rank']) {
+      expect(isNonAdditiveColumnName(name), name).toBe(false);
+    }
+    expect(ppg.result?.asIs).toEqual(['POINTS_PER_GAME']);
+    expect(ppg.fields.find((field): field is DatasetMeasureField => field.kind === 'measure' && field.name === 'POINTS_PER_GAME')).toMatchObject({ aggregation: 'max', additivity: { entities: 'non_additive' } });
+  });
+
+  it('refuses the first-click KPI instead of adding the two averages up, and shows them by game type as they are', () => {
+    const kpi = validateTileQuery(ppg, { dimensions: [], measures: [{ measure: 'POINTS_PER_GAME' }] });
+    expect(kpi.outcome).toBe('rejected');
+    expect(kpi.diagnostics[0]).toMatchObject({ code: 'NON_ADDITIVE_RESULT_ROLLUP' });
+    expect(kpi.diagnostics[0]!.message).toContain("Averages can't be added up: Points per game is worked out on each row");
+    expect(kpi.diagnostics[0]!.message).toContain('or group by game type to show it as it is');
+    expect(validateTileQuery(ppg, { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] }).outcome).toBe('covered');
+  });
+
+  it('reads "total X" as a count of X, not money, unless X names money', () => {
+    const fields = savedQueryResultFields({
+      sourceId: 'app:block:nba:rebounders',
+      columns: [
+        { name: 'TOTAL_REBOUNDS', type: 'BIGINT' },
+        { name: 'total_games', type: 'BIGINT' },
+        { name: 'total_amount', type: 'DOUBLE' },
+        { name: 'order_total', type: 'DOUBLE' },
+        { name: 'net_revenue', type: 'DOUBLE' },
+      ],
+    }).fields;
+    const format = (name: string) => fields.find((field): field is DatasetMeasureField => field.kind === 'measure' && field.name === name)?.format?.kind;
+    expect(format('TOTAL_REBOUNDS')).toBe('number');
+    expect(format('total_games')).toBe('number');
+    expect(format('total_amount')).toBe('currency');
+    expect(format('order_total')).toBe('currency');
+    expect(format('net_revenue')).toBe('currency');
+  });
+});

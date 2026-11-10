@@ -58,7 +58,7 @@ import { themes, type ThemeMode } from '../../themes/notebook-theme';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { appCardHref, appHomePageId, appPageUrl } from './app-links';
-import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
+import { AppStudioLaunchSurface, AppStudioV2, launchAppName, type AppStudioLaunchConfig } from './AppStudioV2';
 import { appStudioAiConnected, appStudioDefaultLaunchMode, appStudioLaunchTab } from './app-studio-ai-voice';
 import { APP_STYLES } from './app-styles';
 import { appHeaderTitle, cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
@@ -785,7 +785,7 @@ export function AppsView(): JSX.Element {
     setBuilderMode(config.mode === 'ai' ? 'ai' : config.mode === 'quick' ? 'quick' : 'classic');
     setBuilderTemplate(config.template);
     setBuilderPrompt(config.mode === 'ai' ? config.prompt : 'A dashboard of live, checked numbers');
-    setBuilderName(config.mode === 'ai' ? '' : config.name.trim());
+    setBuilderName(launchAppName(config));
     // A new App starts in the domain chosen on the Start form, or none. Never
     // inherit the domain of the App opened for editing last; it would
     // silently scope AI and the catalog.
@@ -1241,7 +1241,8 @@ function AppLibrarySurface({
     return {
       mode,
       prompt: DEFAULT_PROMPT,
-      name: mode === 'quick' ? '' : 'Untitled Analytics App',
+      // Empty: "Untitled Analytics App" is the field's placeholder, never typed onto.
+      name: '',
       template: mode === 'ai' ? 'operational_dashboard' : 'blank',
     };
   });
@@ -1253,8 +1254,6 @@ function AppLibrarySurface({
       ...current,
       mode,
       template: mode === 'ai' ? 'operational_dashboard' : 'blank',
-      // Quick start names the App after its Domain unless the author types a name.
-      name: mode === 'quick' && current.name === 'Untitled Analytics App' ? '' : mode === 'manual' && !current.name.trim() ? 'Untitled Analytics App' : current.name,
     });
   }, [aiConnected]);
   // Setup's "Finish setup · Build an App" opens the form, even when Apps already exist.

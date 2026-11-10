@@ -608,13 +608,28 @@ function candidateSatisfiesStructuredRequirement(
 
   // A declared measure is decisive: generic words in titles or descriptions
   // can never substitute a different metric into requirement coverage.
+  // A source's approved Dataset fields count as its capabilities too: a saved
+  // query offers its result columns as fields (design D1) though the block
+  // declares no measures or dimensions of its own (new-user test V9: a
+  // notebook block's WINS by SEASON and GAME_TYPE read as "can't answer").
+  const fields = approvedDatasetFieldNames(candidate.capabilities.dataset);
   if (!capabilityValuesMatch(requirement.measures, [
     ...candidate.capabilities.measures,
     ...candidate.capabilities.outputs,
+    ...fields.measures,
   ])) return false;
-  if (!capabilityValuesMatch(requirement.dimensions, candidate.capabilities.dimensions)) return false;
-  if (!capabilityValuesMatch(requirement.filters, candidate.capabilities.filters)) return false;
+  if (!capabilityValuesMatch(requirement.dimensions, [...candidate.capabilities.dimensions, ...fields.physical])) return false;
+  if (!capabilityValuesMatch(requirement.filters, [...candidate.capabilities.filters, ...fields.physical])) return false;
   return true;
+}
+
+/** The names of a Dataset's approved measures and physical fields. */
+function approvedDatasetFieldNames(descriptor: DatasetDescriptor | undefined): { measures: string[]; physical: string[] } {
+  if (!descriptor) return { measures: [], physical: [] };
+  return {
+    measures: datasetMeasures(descriptor).filter((measure) => measure.status === 'approved').map((measure) => measure.name),
+    physical: datasetPhysicalFields(descriptor).filter((field) => field.status === 'approved').map((field) => field.name),
+  };
 }
 
 /**

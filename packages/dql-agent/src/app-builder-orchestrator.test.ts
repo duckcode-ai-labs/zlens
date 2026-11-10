@@ -523,6 +523,47 @@ describe('keyword planner on a saved query with result fields (design D1)', () =
   });
 });
 
+describe('AI plan over a notebook block with result fields (new-user test V9)', () => {
+  // A DQL block saved in a notebook cell declares no measures or dimensions
+  // of its own; its fields come from its result (design D1). The AI picked
+  // it, the right data, but its notes said both tiles "can't answer … with
+  // its approved fields yet" and listed 2 gaps.
+  const sourceId = 'app:block:nba:warriors-wins-by-game-type';
+  const result = savedQueryResultDescriptor({
+    sourceId, sourceRevision: 'sha256:wins', savedQuery: 'warriors_wins_by_game_type', qualifiedId: 'nba::block::warriors_wins_by_game_type',
+    lifecycle: 'draft', certified: false, typesFrom: 'probe',
+    columns: [{ name: 'SEASON', type: 'BIGINT' }, { name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'WINS', type: 'BIGINT' }],
+    groupBy: ['SEASON', 'GAME_TYPE'],
+  })!;
+  const notebookBlock: AppSourceCatalogRecord = {
+    ...source(sourceId, 'Warriors Wins By Game Type', 'draft'),
+    domain: 'nba',
+    sourcePath: 'notebooks/warriors.dqlnb#cell-3',
+    executionRef: 'notebooks/warriors.dqlnb#cell-3',
+    capabilities: { measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [], dataset: result },
+  };
+
+  it('counts its result fields as what it can answer, so the tiles it plans are not listed as gaps', async () => {
+    const question = 'What are the exact win counts per season and game type for the Warriors?';
+    const brief = await planAppBuildBrief({
+      prompt: 'Help a Warriors fan see how the Golden State Warriors did in each season',
+      candidates: [notebookBlock],
+      requiredSourceIds: [sourceId],
+      sourcePolicy: 'include_review_required',
+      complete: async () => JSON.stringify({
+        frame: { goal: 'Warriors wins by season and game type', metrics: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] },
+        requirements: [{ id: 'r1', question, role: 'breakdown', required: true, measures: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] }],
+        components: [{
+          id: 'c1', title: 'Warriors Wins by Season and Game Type', sourceId, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'It has wins by season and game type.',
+          query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] },
+        }],
+      }),
+    });
+    expect(brief.components.map((component) => [component.sourceId, component.requirementIds])).toEqual([[sourceId, ['r1']]]);
+    expect(brief.warnings).toEqual([]);
+  });
+});
+
 function datasetDescriptor(sourceId: string): DatasetDescriptor {
   return {
     version: 1,

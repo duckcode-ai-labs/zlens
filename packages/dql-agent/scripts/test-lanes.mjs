@@ -191,10 +191,12 @@ const EXPECTED_TEST_FILES = 196;
 // words applied by any of its words (sql-checks.test.ts, +1; new-user test B1/B2, 2026-11-10).
 // 2860 with the App Builder planner reply read whatever its shape and one retry
 // (app-builder-planner-json.test.ts +5, app-builder-orchestrator.test.ts +5; new-user test V8, item 4).
-const EXPECTED_TESTS = 2860;
+// 2861 with a saved query's result fields counted as what the App Builder planner can answer
+// (app-builder-orchestrator.test.ts +1; new-user test V9).
+const EXPECTED_TESTS = 2861;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2779.
+// The ordinary lane's share is the difference: 2780.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

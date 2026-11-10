@@ -417,6 +417,20 @@ export function manualLaunchLabel(template: StudioTemplate): string {
   return template === 'blank' ? 'Continue to data' : 'Continue to data (with an intro)';
 }
 
+/**
+ * A manual App's name when the author leaves the field empty. It is the
+ * field's placeholder, never its value: a pre-filled name looked like a
+ * placeholder, and what a new user typed was added to the end of it
+ * (new-user test V9).
+ */
+export const UNTITLED_APP_NAME = 'Untitled Analytics App';
+
+/** The name a new App starts with: what the author typed, else the manual default. Quick start names it after its Domain later. */
+export function launchAppName(config: Pick<AppStudioLaunchConfig, 'mode' | 'name'>): string {
+  if (config.mode === 'ai') return '';
+  return config.name.trim() || (config.mode === 'manual' ? UNTITLED_APP_NAME : '');
+}
+
 export function AppStudioLaunchSurface({
   config,
   domainOptions = [],
@@ -445,7 +459,8 @@ export function AppStudioLaunchSurface({
 }): JSX.Element {
   const noAi = aiConnected === false;
   const mode = appStudioLaunchTab(config.mode, aiConnected);
-  const canSubmit = mode === 'ai' ? Boolean(config.prompt.trim()) : mode === 'quick' ? true : Boolean(config.name.trim());
+  // Left empty, a manual App is named UNTITLED_APP_NAME (the placeholder) and a Quick start App after its Domain.
+  const canSubmit = mode === 'ai' ? Boolean(config.prompt.trim()) : true;
   const domainLabel = domainOptions.find((option) => option.value === config.domain)?.label ?? config.domain ?? '';
   return <section className="dql-app-studio-home" aria-labelledby="app-studio-home-title">
     <style>{APP_STUDIO_V2_STYLES}</style>
@@ -457,15 +472,15 @@ export function AppStudioLaunchSurface({
     <div className="dql-studio-v2-start-card">
       <div className="mode-switch" role="tablist" aria-label="Authoring mode">
         {noAi
-          ? <button type="button" role="tab" aria-selected={mode === 'quick'} className={mode === 'quick' ? 'on' : ''} onClick={() => onChange({ mode: 'quick', template: 'blank', name: config.name === 'Untitled Analytics App' ? '' : config.name })}><LayoutGrid size={16} /> {QUICK_START_TAB}</button>
+          ? <button type="button" role="tab" aria-selected={mode === 'quick'} className={mode === 'quick' ? 'on' : ''} onClick={() => onChange({ mode: 'quick', template: 'blank' })}><LayoutGrid size={16} /> {QUICK_START_TAB}</button>
           : <button type="button" role="tab" aria-selected={mode === 'ai'} className={mode === 'ai' ? 'on' : ''} onClick={() => onChange({ mode: 'ai', template: config.template === 'blank' ? 'operational_dashboard' : config.template })}><Sparkles size={16} /> Describe with AI</button>}
-        <button type="button" role="tab" aria-selected={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onChange({ mode: 'manual', template: 'blank', name: config.name || 'Untitled Analytics App' })}><LayoutDashboard size={16} /> Start manually</button>
+        <button type="button" role="tab" aria-selected={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onChange({ mode: 'manual', template: 'blank' })}><LayoutDashboard size={16} /> Start manually</button>
       </div>
       <label className="primary-field">
         <span>{mode === 'ai' ? 'What decision should this App support?' : 'What should this App be called?'}</span>
         {mode === 'ai'
           ? <textarea value={config.prompt} onChange={(event) => onChange({ prompt: event.target.value })} placeholder="Build a weekly revenue health App for finance leaders with trends, drivers, and customer detail." rows={4} />
-          : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={mode === 'quick' ? (domainLabel ? quickStartAppName({ domainLabel }) : 'Sales overview') : 'Revenue Operations'} />}
+          : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={mode === 'quick' ? (domainLabel ? quickStartAppName({ domainLabel }) : 'Sales overview') : UNTITLED_APP_NAME} />}
       </label>
       <label className="launch-domain-field">
         <span>Domain</span>

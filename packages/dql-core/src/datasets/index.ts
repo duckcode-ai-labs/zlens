@@ -89,6 +89,8 @@ export {
   duplicateColumnWords,
   duplicateColumnsQuestion,
   isLabelNumberColumnName,
+  isMoneyColumnName,
+  isPerUnitColumnName,
   proposeTableDataset,
   renderTableDatasetBlock,
   tableColumnKind,

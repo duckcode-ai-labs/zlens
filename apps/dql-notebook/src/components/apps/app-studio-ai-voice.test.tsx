@@ -135,6 +135,20 @@ describe('Build new App form without AI', () => {
     expect(markup).toMatch(/aria-selected="true" class="on"><svg[^]*?Quick start/);
     expect(markup).toContain('Start manually');
   });
+
+  it('shows "Untitled Analytics App" as the name field placeholder, never its value, and starts with it when left empty (new-user test V9)', () => {
+    const markup = launch({ mode: 'manual', template: 'blank', name: '' }, true);
+    const nameField = markup.match(/<input[^>]*placeholder="Untitled Analytics App"[^>]*>/)?.[0] ?? '';
+    expect(nameField).toContain('value=""');
+    expect(markup).not.toContain('value="Untitled Analytics App"');
+    // Start manually works with the field left empty.
+    expect(markup.match(/<button[^>]*class="launch-action"[^>]*>/)?.[0]).not.toContain('disabled');
+    expect(studio.launchAppName({ mode: 'manual', name: '' })).toBe('Untitled Analytics App');
+    expect(studio.launchAppName({ mode: 'manual', name: '  Warriors 2016 scoring ' })).toBe('Warriors 2016 scoring');
+    // Quick start names an empty App after its Domain later; AI names it from the plan.
+    expect(studio.launchAppName({ mode: 'quick', name: '' })).toBe('');
+    expect(studio.launchAppName({ mode: 'ai', name: 'Anything' })).toBe('');
+  });
 });
 
 describe('AI Data step with keyword suggestions', () => {

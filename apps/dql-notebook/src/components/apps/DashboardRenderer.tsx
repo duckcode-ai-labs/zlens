@@ -29,7 +29,7 @@ import { inferColumnKind, columnKindToChartRole, type ChartColumnRole } from '..
 import { classifyColumns } from '../../utils/semantic-fields';
 import { NODE_TYPE_COLORS, TYPE_LABELS, TYPE_TITLES } from '../lineage/lineage-constants';
 import { themes, type ThemeMode as NotebookThemeMode } from '../../themes/notebook-theme';
-import { encodedTileResult, mergeDashboardTileChartConfig, normalizeDashboardChartType, summarizeDashboardKpiResult } from './dashboard-chart-config';
+import { encodedTileResult, kpiRowsAreAverages, mergeDashboardTileChartConfig, normalizeDashboardChartType, summarizeDashboardKpiResult } from './dashboard-chart-config';
 import {
   chartToDashboardViz, coerceLayoutIntent, coerceReviewStatus, coerceTrustState, compactChartConfig,
   componentForDashboardViz, displayWithVisualization, getDashboardItemBlockId, getDqlGenUi, isRecord,
@@ -113,6 +113,8 @@ type DashboardLayoutItem = DashboardDocumentResponse['dashboard']['layout']['ite
 type DashboardRunTile = DashboardRunResponse['tiles'][number];
 type DashboardHierarchyCandidate = NonNullable<NonNullable<DashboardRunTile['dataset']>['hierarchy']>['candidates'][number];
 const SIDE_PANEL_HEIGHT = 'clamp(320px, calc(100vh - 220px), 760px)';
+/** Said on a KPI tile whose rows are averages: they are never added up into one number. */
+export const KPI_AVERAGE_ROWS_NOTE = 'Averages can\'t be added up, so each row is shown as it is.';
 const APP_CHART_TYPE_OPTIONS: Array<{ value: ChartType; label: string }> = [
   { value: 'table', label: 'Table' },
   ...CHART_TYPE_OPTIONS,
@@ -2989,13 +2991,14 @@ export function TileBody({
     : undefined;
   let dataView: JSX.Element;
   const groupedDatasetKpi = chart === 'kpi' && Boolean(item.query?.dimensions?.length) && displayResult.rows.length > 1;
+  const averagedKpi = chart === 'kpi' && !groupedDatasetKpi && kpiRowsAreAverages(displayResult, chartConfig.y);
   if (chart === 'kpi' && item.query && usesKpiCard(item.query, item.viz.style)) {
     // A KPI with a date or a target: the latest period, its change, the trend and the target (RFC 0009 step 4).
     dataView = <KpiCard result={displayResult} query={item.query} style={item.viz.style} label={item.title ?? 'This KPI'} />;
-  } else if (groupedDatasetKpi) {
+  } else if (groupedDatasetKpi || averagedKpi) {
     dataView = (
       <div style={{ width: '100%', alignSelf: 'stretch', display: 'grid', gap: 6 }}>
-        <small style={{ color: 'var(--text-secondary)', lineHeight: 1.35 }}>This tile is grouped. Its values are shown at the selected grain instead of being summed into a KPI.</small>
+        <small style={{ color: 'var(--text-secondary)', lineHeight: 1.35 }}>{averagedKpi ? KPI_AVERAGE_ROWS_NOTE : 'This tile is grouped. Its values are shown at the selected grain instead of being summed into a KPI.'}</small>
         <TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} emptyMessage={emptyMessage} />
       </div>
     );

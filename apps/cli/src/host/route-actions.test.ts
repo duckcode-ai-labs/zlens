@@ -35,6 +35,8 @@ describe('what each API request does (RFC 0010 HH-2)', () => {
     ['POST', '/api/app-datasets/saved-queries/draft', 'dataset.author', 'project'],
     ['POST', '/api/app-datasets/saved-queries/fields', 'app.author', 'project'],
     ['POST', '/api/app-datasets/run', 'app.view', 'project'],
+    // The App editor's live tile preview runs not-certified data, as an App draft does (new-user test V9).
+    ['POST', '/api/app-datasets/tile-preview', 'app.author', 'project'],
     ['POST', '/api/agent/hints/h-1/review', 'hint.review', 'hint'],
     ['POST', '/api/agent/hints/h-1/lifecycle', 'hint.review', 'hint'],
     ['PATCH', '/api/agent/hints/h-1', 'hint.review', 'hint'],
