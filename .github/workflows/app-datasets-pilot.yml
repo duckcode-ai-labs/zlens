@@ -83,14 +83,15 @@ jobs:
           ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/app-datasets-connectors
 
       - name: Publish an App on a certified, Ask-born saved query
-        # V8 B5: the App reads "1 of 1 tile certified" everywhere. Its own step,
-        # so the pilot suite's file list above stays as it is.
+        # V8 B5: the App reads "1 of 1 tile certified" everywhere. V9: so does
+        # an App over a certified Top N, and the Apps list follows the page.
+        # Their own step, so the pilot suite's file list above stays as it is.
         working-directory: apps/cli
         shell: bash
         run: |
-          npx vitest run src/datasets/certified-ask-saved-query-app.duckdb.test.ts --reporter=verbose | tee "$RUNNER_TEMP/certified-ask.log"
+          npx vitest run src/datasets/certified-ask-saved-query-app.duckdb.test.ts src/datasets/top-n-saved-query-app.duckdb.test.ts --reporter=verbose | tee "$RUNNER_TEMP/certified-ask.log"
           if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/certified-ask.log"; then
-            echo "The certified Ask-born App test skipped although a DuckDB connector root was configured." >&2
+            echo "A certified saved query App test skipped although a DuckDB connector root was configured." >&2
             exit 1
           fi
         env:

@@ -75,7 +75,8 @@ const REQUIRED_TEST_FILES = [
 // 194 with Claude through Snowflake Cortex (claude-cortex.test.ts, +1 file, +10 tests).
 // 195 with meaning search through Snowflake Cortex (embeddings/cortex.test.ts, +1 file, +8 tests).
 // 196 with the App Builder planner reply read whatever its shape (app-builder-planner-json.test.ts, +1 file, +5 tests).
-const EXPECTED_TEST_FILES = 196;
+// 197 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1 file, +1 test).
+const EXPECTED_TEST_FILES = 197;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -194,7 +195,8 @@ const EXPECTED_TEST_FILES = 196;
 // 2864 with a reading the host corrected carried by the answer, and a winning margin that is not a percentage
 // (ask-pipeline.test.ts +3), and which kinds a certified answer counts (certified-question.test.ts +1;
 // new-user test V9 retest).
-const EXPECTED_TESTS = 2864;
+// 2865 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1; new-user test V9).
+const EXPECTED_TESTS = 2865;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2783.

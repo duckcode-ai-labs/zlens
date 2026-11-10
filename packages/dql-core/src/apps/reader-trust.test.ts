@@ -10,6 +10,12 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
     expect(topRows?.state).toBe('review');
     expect(topRows?.label).toBe(NOT_CERTIFIED_YET);
     expect(topRows?.detail).toContain('Totals only the 10 rows top_beverage_customers keeps');
+    // A tile that shows a certified Top N's own rows, one each, is certified and says it covers only them (V9).
+    const shownRun = (trust: string) => ({ status: 'ok', dataset: { trust, validation: { outcome: 'adapted', adaptations: [{ kind: 'saved_query_rollup', message: 'Covers only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data.', showsTopRows: 10 }] } } });
+    const shown = readerTileTrust({ query: {} }, shownRun('certified'));
+    expect(shown?.state).toBe('certified');
+    expect(shown?.detail).toBe('Certified data. Covers only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data.');
+    expect(readerTileTrust({ query: {} }, shownRun('review_required'))).toMatchObject({ state: 'review', label: NOT_CERTIFIED_YET });
     expect(readerTileTrust({ semantic: {} }, { status: 'ok', tileType: 'semantic' })?.state).toBe('governed');
     expect(readerTileTrust({ block: {} }, { status: 'error' })?.state).toBe('blocked');
     expect(readerTileTrust({ text: { markdown: 'x' } }, { status: 'ok', tileType: 'text' })).toBeNull();
