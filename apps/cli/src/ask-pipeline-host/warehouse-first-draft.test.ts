@@ -333,7 +333,7 @@ describe('a table the question\'s words miss is still shown', () => {
     const tables = { invoices: TABLES.invoices!, ...ledgers(40) };
     const { prompts, result } = await ask({ tables }, 'invoices total', () => 'NO_SQL: no column holds the discount rate.');
     for (const name of Object.keys(tables)) expect(prompts[0]).toContain(`executable relation:main.${name} `);
-    expect(JSON.stringify(result)).toContain('searched all 41 tables');
+    expect(JSON.stringify(result)).toContain('Ask looked through every table it can read, and no other table has a column for it');
   });
 
   it('the value search still starts from the chosen tables', async () => {

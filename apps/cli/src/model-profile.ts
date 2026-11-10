@@ -422,7 +422,7 @@ async function codeRules(picked: Picked[], snapshot: WarehouseCatalogSnapshotV1,
         id: slug(`${canonical}_first_character`),
         domain: item.entity.domain,
         kind: 'custom',
-        expression: `Every ${column.name} in ${item.table} has ${length} characters, and the first one takes ${groups.length} values: ${groups.map((group) => `${group.first} (${count(group.rows)} rows)`).join(', ')}. The first character is a code, such as a type: filter on it with CAST(${column.name} AS VARCHAR) LIKE '${largest.first}%'.`,
+        expression: `Every ${column.name} in ${item.table} has ${length} characters, and the first one takes ${groups.length} values: ${groups.map((group) => `${group.first} (${count(group.rows)} rows)`).join(', ')}. The first character is a code, such as a type: filter on it when a question names one kind (CAST(${column.name} AS VARCHAR) LIKE '${largest.first}%' keeps the ${largest.first} rows), and count every kind when it names none.`,
         entities: [item.entity.id],
         query,
         measured: Object.fromEntries([['length', length], ...groups.map((group) => [`first_${group.first}`, group.rows])]),
@@ -520,8 +520,12 @@ async function shiftedCodes(
   if (later.length === 0 || later.length === rows.length) return undefined;
   const dated = later.find((row) => row.first && row.last);
   const codesText = later.map((row) => `${row.code} (${count(row.n)} rows)`).join(' or ');
+  // When in the period each kind's rows fall (before, during or after the main ones): how a reader, or the
+  // drafter, tells which kind is which (new-user test V8 retest: the preseason and the playoffs).
+  const ranges = rows.filter((row) => row.first && row.last && row.n >= MIN_SHARED_ROWS);
+  const rangesText = ranges.length >= 2 ? ` In ${period} ${example}, the rows run by the first character of ${coded.name}: ${ranges.map((row) => `${row.code} from ${row.first} to ${row.last}`).join('; ')}.` : '';
   return {
-    text: ` Rows whose ${coded.name} starts with ${codesText} all fall in the calendar year after their ${period}${dated ? ` (${period} ${example}'s ${dated.code} rows run ${dated.first} to ${dated.last})` : ''}: for those rows, calendar year Y is ${period} Y − 1, so the ${later.map((row) => row.code).join(', ')} rows of ${example + 1} are ${period} ${example}.`,
+    text: ` Rows whose ${coded.name} starts with ${codesText} all fall in the calendar year after their ${period}${dated ? ` (${period} ${example}'s ${dated.code} rows run ${dated.first} to ${dated.last})` : ''}: for those rows, calendar year Y is ${period} Y − 1, so the ${later.map((row) => row.code).join(', ')} rows of ${example + 1} are ${period} ${example}.${rangesText}`,
     query,
     measured: Object.fromEntries(later.flatMap((row) => [[`code_${row.code}_rows`, row.n], [`code_${row.code}_next_year`, row.next]])),
   };

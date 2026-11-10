@@ -119,10 +119,12 @@ describe('names, concepts and rules drafted from measured facts (RFC 0012, P3 an
       expression: 'local_team_game_facts has exactly 2 rows for every game_id (440 values), one per team_id: join it on game_id and team_id together, never on game_id alone; is_home = true picks one row per game_id.',
     });
     expect(rule('game_repeats').expression).toBe('src_games holds 442 rows for 440 distinct game_id: 2 rows repeat. Count with COUNT(DISTINCT game_id), or answer from a table that holds one row per key.');
-    expect(rule('game_id_first_character').expression).toBe('Every game_id in local_player_game_facts has 8 characters, and the first one takes 3 values: 1 (240 rows), 2 (2,190 rows), 4 (210 rows). The first character is a code, such as a type: filter on it with CAST(game_id AS VARCHAR) LIKE \'2%\'.');
+    expect(rule('game_id_first_character').expression).toBe('Every game_id in local_player_game_facts has 8 characters, and the first one takes 3 values: 1 (240 rows), 2 (2,190 rows), 4 (210 rows). The first character is a code, such as a type: filter on it when a question names one kind (CAST(game_id AS VARCHAR) LIKE \'2%\' keeps the 2 rows), and count every kind when it names none.');
     expect(rule('season_is_start_year').expression).toMatch(/^season is the year a season starts: in local_player_game_facts, season \d{4} runs from \d{4}-11-\d\d to \d{4}-03-\d\d \(7 of 8 seasons span two calendar years this way\)\./);
     // The playoff rows (game id 4…) all fall in the next calendar year (RFC 0012, F2).
     expect(rule('season_is_start_year').expression).toContain('Rows whose game_id starts with 4 (210 rows) all fall in the calendar year after their season (season 2006\'s 4 rows run 2007-03-01 to 2007-03-05): for those rows, calendar year Y is season Y − 1, so the 4 rows of 2007 are season 2006.');
+    // When each kind's rows fall in that season: before, during or after the main ones (V8 retest).
+    expect(rule('season_is_start_year').expression).toMatch(/In season 2006, the rows run by the first character of game_id: 1 from 2006-\d\d-\d\d to 2006-\d\d-\d\d; 2 from 2006-\d\d-\d\d to 2007-\d\d-\d\d; 4 from 2007-03-01 to 2007-03-05\./);
     // Season totals add up every game type: for one, sum the game rows (F2).
     expect(rule('player_season_sums_every_game_id')).toMatchObject({
       entities: ['player_season', 'player_game'],
