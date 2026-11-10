@@ -58,7 +58,8 @@ export function ProposedTileCard({
       {tile.text
         ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{tile.text.markdown.replace(/^#+\s*/, '')}</div>
         : tile.query && tile.sourceId
-          ? <DatasetQueryPreview sourceId={tile.sourceId} descriptor={descriptor} query={tile.query} visualization={tile.viz.type} themeMode={themeMode} height={bodyHeight - 20} />
+          // Drawn on its shelves, as it will be once applied: rows SEASON, colour GAME_TYPE, never SEASON as a value (new-user test V9).
+          ? <DatasetQueryPreview sourceId={tile.sourceId} descriptor={descriptor} query={tile.query} visualization={tile.viz.type} {...(tile.viz.encoding ? { encoding: tile.viz.encoding } : {})} themeMode={themeMode} height={bodyHeight - 20} />
           : <div className="draft-empty loading"><span>{humanize(tile.viz.type)} · runs when you apply</span></div>}
     </div>
   </article>;
