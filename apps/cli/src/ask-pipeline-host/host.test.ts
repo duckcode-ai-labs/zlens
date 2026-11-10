@@ -1209,22 +1209,29 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     };
     const nba = {
       sources: Object.fromEntries(Object.entries(tables).map(([name, columns]) => [name, { name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.${name}`, schema: 'nba', columns: Object.fromEntries(columns.map((column) => [column, { name: column }])) } }])),
-      modeling: { rules: { 'nba.team_season_sums_every_game_id': {
-        localId: 'team_season_sums_every_game_id', domain: 'nba', status: 'draft',
-        expression: "LOCAL_TEAM_SEASON_FACTS adds up every row of LOCAL_TEAM_GAME_FACTS, every first character of GAME_ID included: WINS totals 41,201, as WIN does in LOCAL_TEAM_GAME_FACTS. For one kind (one first character of GAME_ID), sum LOCAL_TEAM_GAME_FACTS filtered on it: CAST(GAME_ID AS VARCHAR) LIKE '2%' gives 36,288.",
-      } } },
+      modeling: { rules: {
+        'nba.team_season_sums_every_game_id': {
+          localId: 'team_season_sums_every_game_id', domain: 'nba', status: 'draft',
+          expression: "LOCAL_TEAM_SEASON_FACTS adds up every row of LOCAL_TEAM_GAME_FACTS, every first character of GAME_ID included: WINS totals 41,201, as WIN does in LOCAL_TEAM_GAME_FACTS. For one kind (one first character of GAME_ID), sum LOCAL_TEAM_GAME_FACTS filtered on it: CAST(GAME_ID AS VARCHAR) LIKE '2%' gives 36,288.",
+        },
+        'nba.game_id_first_character': {
+          localId: 'game_id_first_character', domain: 'nba', status: 'draft',
+          expression: "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (3,288 rows), 2 (45,948 rows), 4 (3,356 rows), 5 (26 rows). The first character is a code, such as a type: filter on it with CAST(GAME_ID AS VARCHAR) LIKE '2%'.",
+        },
+      } },
     };
     const totals = 'SELECT team_name, wins FROM nba.local_team_season_facts WHERE season = 2015 ORDER BY wins DESC LIMIT 1';
     const oneKind = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
-    const askNba = async (question: string, second: string) => {
+    const askNba = async (question: string, second: string, first: string = totals) => {
       const prompts: string[] = [];
+      const readings: string[] = [];
       const provider: AgentProvider = {
         name: 'ollama', available: async () => true,
         generate: async (messages) => {
-          if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return unreadable;
+          if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) { readings.push(messages[0]!.content); return unreadable; }
           const prompt = messages.map((message) => message.content).join('\n');
           prompts.push(prompt);
-          return prompt.includes('Read the question again') ? second : totals;
+          return /Read the question again|A first draft found no field for this/.test(prompt) ? second : first;
         },
       };
       const statements: string[] = [];
@@ -1252,19 +1259,24 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
         request: { question, requestedMode: 'ask' } as AgentRunRequest,
         route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
       });
-      return { prompts, statements: statements.filter((sql) => !sql.includes('information_schema')), result };
+      return { prompts, readings, statements: statements.filter((sql) => !sql.includes('information_schema')), result };
     };
 
     it('a question about one kind is answered from the table the total adds up, filtered on that kind', async () => {
-      const { prompts, statements, result } = await askNba('Which team had the most regular season wins in 2015?', oneKind);
+      const { prompts, readings, statements, result } = await askNba('Which team had the most regular season wins in 2015?', oneKind);
+      // The reading step is not told about kinds: telling it made it treat "regular season" as a value to match.
+      expect(readings[0]).not.toContain('KINDS OF GAME');
       expect(prompts).toHaveLength(2);
       expect(prompts[0]).toContain('model rule team_season_sums_every_game_id');
-      expect(prompts[1]).toContain('LOCAL_TEAM_SEASON_FACTS adds up all of LOCAL_TEAM_GAME_FACTS, every kind of GAME_ID together');
+      expect(prompts[0]).toContain('- kinds of game: the first character of GAME_ID says what kind of game a row is (1, 2, 4, 5');
+      expect(prompts[1]).toContain('the statement reads LOCAL_TEAM_SEASON_FACTS, which adds up all of LOCAL_TEAM_GAME_FACTS, every kind of GAME_ID together');
+      expect(prompts[1]).toContain('the first character of GAME_ID codes kinds of game: 1 (3,288 rows), 2 (45,948 rows)');
       expect(prompts[1]).toContain('nba.local_team_game_facts');
       expect(statements).toHaveLength(1);
       expect(statements[0]).toContain("FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%'");
       expect(result.status).toBe('completed');
-      expect(JSON.stringify(result)).not.toContain('every kind of GAME_ID together, so it counts every kind');
+      expect(JSON.stringify(result)).not.toContain('it counts every kind of game together');
+      expect(result.answer).toContain('it counts only games whose GAME_ID starts with 2, one kind of game');
       const story = result.askPipelineReceipt?.story ?? [];
       expect(story.some((entry) => entry.title.startsWith('The SQL reads LOCAL_TEAM_SEASON_FACTS, a total of every kind of GAME_ID'))).toBe(true);
     });
@@ -1275,7 +1287,29 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(statements).toHaveLength(1);
       expect(statements[0]).toContain('FROM nba.local_team_season_facts WHERE season = 2015');
       expect(result.status).toBe('completed');
-      expect(JSON.stringify(result)).toContain('it comes from LOCAL_TEAM_SEASON_FACTS, which adds up all of LOCAL_TEAM_GAME_FACTS, every kind of GAME_ID together, so it counts every kind');
+      expect(result.answer).toContain('it counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+    });
+
+    it('a drafter that finds no field for a named kind is shown the kinds before every table is searched', async () => {
+      const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const { prompts, statements, result } = await askNba('Which team won the most playoff games in 2015?', playoffs, 'NO_SQL: No column identifies playoff games.');
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain('A first draft found no field for this ("No column identifies playoff games.")');
+      expect(prompts[1]).toContain('the first character of GAME_ID codes kinds of game');
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toContain("CAST(game_id AS VARCHAR) LIKE '4%'");
+      expect(result.status).toBe('completed');
+      expect(result.answer).toContain('it counts only games whose GAME_ID starts with 4, one kind of game');
+      const drafts = (result.askPipelineReceipt?.dispatches ?? []).filter((dispatch) => dispatch.purpose === 'intent:draft');
+      expect(drafts.map((dispatch) => [dispatch.label, dispatch.outcome])).toEqual([['draft', 'declined'], ['widen', 'sql']]);
+    });
+
+    it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {
+      const every = 'SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY team_name ORDER BY wins DESC LIMIT 1';
+      const { prompts, statements, result } = await askNba('Which team won the most games in 2015?', every, every);
+      expect(prompts).toHaveLength(1);
+      expect(statements[0]).toContain('FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY');
+      expect(result.answer).toContain('it counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
     });
   });
 

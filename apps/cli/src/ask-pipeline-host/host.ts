@@ -266,10 +266,140 @@ export function summaryKindsRead(
   return found;
 }
 
-/** The drafter's second look when its statement read a total of every kind of a code. */
-export function secondLookNote(totals: Array<{ summary: string; detail: string; code: string; expression: string }>): string {
-  const lines = totals.map((item) => `${item.summary} adds up all of ${item.detail}, every kind of ${item.code} together (the model's rule: ${item.expression})`);
-  return `The statement reads ${lines.join('; ')}. Read the question again. If it asks about one kind (one category that ${totals.map((item) => item.code).join(' or ')} codes, such as one part of a season or one type), answer from ${totals.map((item) => item.detail).join(' or ')}, filtered on that kind as the rule shows. If it asks about every kind together, return the same statement unchanged.`;
+/**
+ * A coded key the model's rules describe, as the warehouse draft writes it ("Every GAME_ID in T has 8 characters,
+ * and the first one takes 4 values: 1 (49,628 rows), 2 (577,985 rows), …"): the first character of a value says
+ * what kind of row it is (a game type). The other rules that say which kind is which ("Rows whose GAME_ID starts
+ * with 4 … fall in the calendar year after their SEASON") come with it.
+ */
+export interface CodeKinds {
+  code: string;
+  table: string;
+  values: Array<{ first: string; rows: number }>;
+  expressions: string[];
+  /** When each kind's rows fall in one recent period, measured on the warehouse (`kindDatesSql`). */
+  dates?: { period: string; value: string; ranges: Array<{ first: string; from: string; to: string }> };
+}
+
+/**
+ * When each kind's rows fall in the period before the latest one: the preseason in early October, the playoffs from
+ * April to June. A drafter that sees the dates tells which kind is which (new-user test V8 retest: a playoff question
+ * was answered from the regular season's code).
+ */
+export function kindDatesSql(table: string, code: string, date: string, period: string, quote: (identifier: string) => string): string {
+  const kind = `SUBSTR(CAST(${quote(code)} AS VARCHAR), 1, 1)`;
+  return `SELECT ${kind} AS kind, MIN(${quote(period)}) AS period, MIN(${quote(date)}) AS first_day, MAX(${quote(date)}) AS last_day FROM ${table} WHERE ${quote(period)} = (SELECT MAX(${quote(period)}) - 1 FROM ${table}) GROUP BY ${kind} ORDER BY 1`;
+}
+
+export function kindDatesFrom(rows: Array<Record<string, unknown>>, period: string): CodeKinds['dates'] | undefined {
+  const pick = (row: Record<string, unknown>, name: string) => row[name] ?? row[name.toUpperCase()];
+  const day = (value: unknown) => value instanceof Date ? value.toISOString().slice(0, 10) : typeof value === 'string' || typeof value === 'number' ? String(value).slice(0, 10) : '';
+  const ranges = rows
+    .map((row) => ({ first: String(pick(row, 'kind') ?? ''), from: day(pick(row, 'first_day')), to: day(pick(row, 'last_day')) }))
+    .filter((range) => /^[A-Za-z0-9]$/.test(range.first) && /^\d{4}-\d\d-\d\d$/.test(range.from) && /^\d{4}-\d\d-\d\d$/.test(range.to));
+  const value = rows.length ? String(pick(rows[0]!, 'period') ?? '') : '';
+  return ranges.length >= 2 && value ? { period, value, ranges } : undefined;
+}
+
+const kindDatesText = (kinds: CodeKinds) => kinds.dates ? `; in ${kinds.dates.period} ${kinds.dates.value} the rows run ${kinds.dates.ranges.map((range) => `${range.first} from ${range.from} to ${range.to}`).join(', ')}` : '';
+
+export function codeKindsFrom(rules: Record<string, { expression: string; status?: string }> | undefined): CodeKinds[] {
+  const live = Object.values(rules ?? {}).filter((rule) => rule.status !== 'deprecated' && rule.expression?.trim());
+  const found: CodeKinds[] = [];
+  for (const rule of live) {
+    const match = /^Every ([A-Za-z0-9_$"]+) in ([A-Za-z0-9_$."]+) has \d+ characters, and the first one takes \d+ values: ([^.]+)\./.exec(rule.expression.trim());
+    if (!match) continue;
+    const code = match[1]!.replace(/"/g, '');
+    if (found.some((item) => item.code.toLowerCase() === code.toLowerCase())) continue;
+    const values = [...match[3]!.matchAll(/([A-Za-z0-9]) \(([\d,]+) rows?\)/g)].map((value) => ({ first: value[1]!, rows: Number(value[2]!.replace(/,/g, '')) }));
+    if (values.length < 2) continue;
+    const mentions = new RegExp(`(^|[^A-Za-z0-9_$])${code.replace(/\$/g, '\\$')} starts with `, 'i');
+    const more = live.filter((other) => other !== rule && mentions.test(other.expression)).map((other) => other.expression.trim());
+    found.push({ code, table: match[2]!.replace(/"/g, ''), values, expressions: [rule.expression.trim(), ...more] });
+  }
+  return found;
+}
+
+/**
+ * Which first characters of a coded key a statement keeps: CAST(GAME_ID AS VARCHAR) LIKE '4%',
+ * SUBSTR(CAST(GAME_ID AS VARCHAR), 1, 1) IN ('1', '4'), LEFT(GAME_ID, 1) = '2'. `filtered` when it filters on them at all.
+ */
+export function kindFilterOf(sql: string, code: string): { filtered: boolean; kinds: string[] } {
+  const name = code.replace(/[^A-Za-z0-9_$]/g, '').replace(/\$/g, '\\$');
+  const kinds = new Set<string>();
+  let filtered = false;
+  for (const match of sql.matchAll(new RegExp(`(?<![A-Za-z0-9_$])"?${name}"?(?![A-Za-z0-9_$])`, 'gi'))) {
+    const before = sql.slice(Math.max(0, match.index! - 40), match.index!);
+    const after = sql.slice(match.index! + match[0].length, match.index! + match[0].length + 120);
+    const like = /^\s*(?:AS\s+[A-Za-z]+(?:\s*\(\s*\d+\s*\))?\s*\)|::\s*[A-Za-z]+|\))?\s*(?:NOT\s+)?I?LIKE\s+'([A-Za-z0-9])%'/i.exec(after);
+    if (like) { filtered = true; kinds.add(like[1]!); continue; }
+    if (/(?:SUBSTR|SUBSTRING|LEFT|STARTSWITH|STARTS_WITH)\s*\(\s*(?:(?:CAST|TO_VARCHAR|TO_CHAR)\s*\(\s*)?(?:[A-Za-z0-9_$"]+\.)*$/i.test(before)) {
+      filtered = true;
+      const clause = after.split(/\b(?:AND|OR|GROUP|ORDER|THEN|WHEN|ELSE|END|LIMIT|HAVING)\b/i)[0]!;
+      for (const literal of clause.matchAll(/'([A-Za-z0-9])'/g)) kinds.add(literal[1]!);
+    }
+  }
+  return { filtered, kinds: [...kinds] };
+}
+
+/** "game" for GAME_ID: what one kind of row is called, from the coded key's own name. */
+export function kindNoun(code: string): string {
+  return code.split('.').pop()!.replace(/"/g, '').replace(/_?(id|key|code|number|no)$/i, '').replace(/_/g, ' ').trim().toLowerCase() || 'row';
+}
+
+const orList = (items: string[]) => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`;
+
+/** The drafter's CONTEXT line for a coded key: kinds are told apart by it, filtered when named, all counted when not. */
+export function kindsContextLine(kinds: CodeKinds): string {
+  const example = kinds.values[kinds.values.length - 1]!.first;
+  return `- kinds of ${kindNoun(kinds.code)}: the first character of ${kinds.code} says what kind of ${kindNoun(kinds.code)} a row is (${kinds.values.map((value) => value.first).join(', ')}${kindDatesText(kinds)}; see the model rules on ${kinds.code}). When the question names one kind (for example one part of a season, or one type), filter on its first character, as CAST(${kinds.code} AS VARCHAR) LIKE '${example}%' keeps the ${example} rows, reading a table that has ${kinds.code}. When the question names no kind, count every kind: no filter on the first character of ${kinds.code}.`;
+}
+
+/**
+ * The drafter's second look at a statement that counts every kind of a coded key (it reads a total of every kind,
+ * or a table with the key and no filter on it) while the question may name one kind.
+ */
+export function kindsLookNote(kinds: CodeKinds[], totals: Array<{ summary: string; detail: string; code: string; expression: string }>): string {
+  const codes = [...new Set([...kinds.map((item) => item.code), ...totals.map((item) => item.code)])];
+  const facts = [
+    ...kindFacts(kinds),
+    ...totals.map((item) => `the statement reads ${item.summary}, which adds up all of ${item.detail}, every kind of ${item.code} together (the model's rule: ${item.expression})`),
+  ];
+  const where = totals.length ? `answer from ${orList([...new Set(totals.map((item) => item.detail))])}` : `answer from a table that has ${orList(codes)}`;
+  return `${facts.join('; ')}. As written, the statement counts every kind together. Read the question again. If it names one kind (one category that ${orList(codes)} codes, such as one part of a season or one type), ${where}, filtered on that kind's first character as the rules show. If it names no kind, return the same statement unchanged.`;
+}
+
+/** The drafter's note after it found no field for part of a question, on tables whose coded key tells kinds apart. */
+export function kindsDeclineNote(kinds: CodeKinds[], declined: string): string {
+  const codes = orList(kinds.map((item) => item.code));
+  return `A first draft found no field for this ("${declined.slice(0, 240)}"). But ${kindFacts(kinds).join('; ')}. If what is missing is one kind (one category that ${codes} codes, such as one part of a season or one type), write the statement from a table that has ${codes}, filtered on that kind's first character as the rules show. If what is missing is not a kind, reply NO_SQL as before.`;
+}
+
+function kindFacts(kinds: CodeKinds[]): string[] {
+  return kinds.map((item) => `the first character of ${item.code} codes kinds of ${kindNoun(item.code)}: ${item.values.map((value) => `${value.first} (${value.rows.toLocaleString('en-US')} rows)`).join(', ')}${kindDatesText(item)} (the model's rules: ${item.expressions.join(' ')})`);
+}
+
+/** When each kind's rows fall, by snapshot, connection and key: measured once (`kindDatesSql`); undefined when it could not be. */
+const KIND_DATES = new Map<string, CodeKinds['dates'] | undefined>();
+
+const QUESTION_STOP = new Set(['which', 'what', 'when', 'where', 'whom', 'whose', 'many', 'much', 'most', 'least', 'more', 'less', 'does', 'have', 'with', 'from', 'that', 'this', 'there', 'their', 'they', 'them', 'been', 'were', 'will', 'would', 'could', 'should', 'each', 'every', 'over', 'under', 'between', 'during', 'about', 'show', 'give', 'list', 'tell', 'find', 'highest', 'lowest', 'best', 'worst', 'total', 'number', 'count', 'average', 'than', 'then', 'also', 'only', 'just', 'into', 'ever', 'time', 'times', 'year', 'years', 'ours', 'your', 'some', 'same', 'other', 'like', 'make', 'made', 'together', 'overall', 'please', 'currently', 'lately', 'recent', 'recently', 'data', 'database', 'dataset', 'table', 'tables', 'rows', 'record', 'records']);
+const stemOf = (word: string) => {
+  const one = word.endsWith('ies') ? `${word.slice(0, -3)}y` : word.endsWith('ss') ? word : word.endsWith('s') ? word.slice(0, -1) : word;
+  return one;
+};
+
+/**
+ * Words of the question the reading left out that no table or column is named for (a "preseason" the reading
+ * dropped): a sign that a restriction the question states may be missing from the statement.
+ */
+export function droppedQuestionWords(question: string, reading: string, known: string[]): string[] {
+  const words = (text: string) => text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3 && !/^\d+$/.test(word));
+  const covered = new Set([...words(reading), ...known.flatMap((name) => name.toLowerCase().split(/[^a-z0-9]+/))].map(stemOf));
+  // "score" and "scored", "game" and "games": one word, when the shorter is five letters or more or the same.
+  const coveredWord = (word: string) => covered.has(word) || [...covered].some((other) => Math.min(other.length, word.length) >= 5 && (other.startsWith(word) || word.startsWith(other)));
+  return [...new Set(words(question)
+    .filter((word) => !QUESTION_STOP.has(word) && !/(ed|ing|ly)$/.test(word))
+    .filter((word) => !coveredWord(stemOf(word))))];
 }
 
 export function relationColumnsProbeSql(relations: string[], maxRelations = 8, offset = 0, driver = 'snowflake', location?: string): string | undefined {
@@ -2650,6 +2780,41 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         .sort((a, b) => Number(b.named) - Number(a.named) || a.rule.localId.localeCompare(b.rule.localId))
         .slice(0, MODEL_RULES_IN_DRAFT)
         .map(({ rule }) => `- model rule ${rule.localId}: ${clipText(rule.expression, MODEL_RULE_CHARS)}`);
+      // KINDS OF ROWS a coded key tells apart (a game type), for the tables in this draft: a kind the question
+      // names is filtered on, and a question that names none counts every kind (new-user test V8 retest: playoff
+      // and preseason questions lost their kind, and "the 2012 season" was read as the regular season only).
+      const readsKindsOf = (tables: string[], kinds: CodeKinds) => tables.some((relation) => knownColumns(relation).some((column) => column.replace(/"/g, '').toLowerCase() === kinds.code.toLowerCase()))
+        || summaryKindsRead(deps.getManifest().manifest?.modeling?.rules, tables).some((item) => item.code.toLowerCase() === kinds.code.toLowerCase());
+      // When each kind's rows fall, measured once per snapshot on a table with the key, a date and a period.
+      const withKindDates = async (kinds: CodeKinds): Promise<CodeKinds> => {
+        if (!connection) return kinds;
+        const cacheKey = `${deps.getManifest().snapshotId}|${connectionKey(connection)}|${kinds.code.toLowerCase()}`;
+        if (KIND_DATES.has(cacheKey)) { const dates = KIND_DATES.get(cacheKey); return dates ? { ...kinds, dates } : kinds; }
+        const ruleTable = current.entries.flatMap((entry) => entry.kind === 'relation' && entryPhysicalRelation(entry) && sameTable(entryPhysicalRelation(entry)!, kinds.table, 'tail') ? [entryPhysicalRelation(entry)!] : []);
+        const candidates = [...relations, ...ruleTable].map((relation) => {
+          const columns = knownColumns(relation);
+          return {
+            relation,
+            code: columns.find((column) => column.replace(/"/g, '').toLowerCase() === kinds.code.toLowerCase()),
+            date: columns.find((column) => /(^|_)date$/i.test(column.replace(/"/g, ''))),
+            period: columns.find((column) => /^(season|year|fiscal_year|season_year)$/i.test(column.replace(/"/g, ''))),
+          };
+        });
+        const table = candidates.find((item) => item.code && item.date && item.period);
+        let dates: CodeKinds['dates'];
+        if (table) {
+          try {
+            const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier.replace(/"/g, ''));
+            const result = await deps.executor.executeQuery(kindDatesSql(table.relation, table.code!, table.date!, table.period!, quote), [], {}, connection, { maxRows: 10, ...(request.signal ? { signal: request.signal } : {}), ...(request.runBudget ? { deadlineMs: Math.min(10_000, request.runBudget.remainingMs()) } : {}) });
+            dates = kindDatesFrom(result.rows ?? [], table.period!.replace(/"/g, ''));
+          } catch { dates = undefined; }
+        }
+        KIND_DATES.set(cacheKey, dates);
+        return dates ? { ...kinds, dates } : kinds;
+      };
+      const codeKinds: CodeKinds[] = [];
+      for (const kinds of codeKindsFrom(deps.getManifest().manifest?.modeling?.rules)) codeKinds.push(readsKindsOf(relations, kinds) ? await withKindDates(kinds) : kinds);
+      const kindLines = codeKinds.filter((kinds) => readsKindsOf(relations, kinds)).map(kindsContextLine);
       const briefing = view.pack?.domainBriefing;
       const hintLines = (view.pack?.appliedHints ?? []).slice(0, 5)
         .map((hint) => hint.lesson?.rule || hint.guidance)
@@ -2714,6 +2879,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         ...(briefing ? [`- domain ${briefing.name}${briefing.description ? `: ${briefing.description.slice(0, 300)}` : ''}${briefing.caveats.length ? `; caveats: ${briefing.caveats.slice(0, 3).join('; ')}` : ''}${briefing.requiredFilters.length ? `; required filters: ${briefing.requiredFilters.slice(0, 3).join('; ')}` : ''}`] : []),
         ...termLines,
         ...modelRuleLines,
+        ...kindLines,
         ...metricLines,
         ...joinLines,
         ...keyLines,
@@ -2980,23 +3146,31 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           failures = [];
           unnamed = unnamedKeysOf(chosen.sql);
         }
-        // ONE KIND FROM A TOTAL OF EVERY KIND (new-user test B1; still wrong in the V7 retest, 2026-11-10). A table
-        // the model's rule says adds up every row of another, every kind of a code included, cannot answer for one
-        // kind: asked for the most "regular season" wins in 2015, the drafter read the season totals every time (91,
-        // not 73), in a fresh chat too. One focused second look puts the table it totals in front of the drafter
-        // with the rule, and asks again: a question about one kind is answered from that table, filtered; a
-        // question about every kind together comes back unchanged.
+        // ONE KIND, OR EVERY KIND (new-user test B1, and the V8 retest, 2026-11-10). A coded key's first character
+        // tells kinds of rows apart (a game type). A statement that counts every kind, because it reads a table the
+        // model's rule says adds up every kind or a table with the key and no filter on it, gets one focused second
+        // look when the question may name a kind: it reads a total, the reading left a clause open, or the reading
+        // dropped a word of the question no table or column is named for ("preseason"). The drafter sees the kinds
+        // and the rules, and answers a named kind from a table with the key, filtered; a question that names no kind
+        // comes back unchanged.
         const modelRules = deps.getManifest().manifest?.modeling?.rules;
         const totalsRead = summaryKindsRead(modelRules, chosen.relations);
-        if (totalsRead.length > 0) {
+        const unfiltered = codeKinds.filter((kinds) => readsKindsOf(chosen.relations, kinds) && !kindFilterOf(chosen.sql, kinds.code).filtered);
+        const known = relations.flatMap((relation) => [relation, ...knownColumns(relation)]);
+        // Only a reading can drop a word: a statement drafted from the question itself saw every word.
+        const dropped = intent?.reading?.trim() ? droppedQuestionWords(question, intent.reading, known) : [];
+        if (totalsRead.length > 0 || (unfiltered.length > 0 && (open.trim().length > 0 || dropped.length > 0))) {
           const details = totalsRead.flatMap((item) => {
             const entry = current.entries.find((candidate) => candidate.kind === 'relation' && entryPhysicalRelation(candidate) !== undefined && sameTable(entryPhysicalRelation(candidate)!, item.detail, 'tail'));
             return entry ? [entryPhysicalRelation(entry)!] : [];
           });
-          if (details.length > 0) {
+          if (totalsRead.length === 0 || details.length > 0) {
             await includeRelations(details);
-            hostStep({ phase: 'schema', title: `The SQL reads ${totalsRead.map((item) => item.summary).join(', ')}, a total of every kind of ${totalsRead[0]!.code}: asking the AI whether the question means one kind`, state: 'done', detail: totalsRead.map((item) => item.expression).join(' ') });
-            const second = await attemptDraft(secondLookNote(totalsRead));
+            const kindsHere = unfiltered.length ? unfiltered : codeKinds.filter((kinds) => totalsRead.some((item) => item.code.toLowerCase() === kinds.code.toLowerCase()));
+            const code = totalsRead[0]?.code ?? kindsHere[0]!.code;
+            const why = totalsRead.length ? `reads ${totalsRead.map((item) => item.summary).join(', ')}, a total of every kind of ${code}` : `counts every kind of ${code}${dropped.length ? ` and the reading left out ${dropped.slice(0, 3).map((word) => `"${word}"`).join(', ')}` : ', and the reading left part of the question open'}`;
+            hostStep({ phase: 'schema', title: `The SQL ${why}: asking the AI whether the question means one kind`, state: 'done', detail: [...kindsHere.flatMap((item) => item.expressions), ...totalsRead.map((item) => item.expression)].join(' ') });
+            const second = await attemptDraft(kindsLookNote(kindsHere, totalsRead));
             if (second && 'sql' in second && second.sql.trim() !== chosen.sql.trim()) {
               const secondFailures = await failedChecks(second.sql);
               if (secondFailures.length === 0) {
@@ -3010,8 +3184,19 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           }
         }
         const applied = appliedConditions(chosen.sql);
-        // A TOTAL OF EVERY KIND IS SAID: when the statement still reads one, the answer counts every kind together.
-        const mixedKinds = summaryKindsRead(modelRules, chosen.relations);
+        // WHICH KINDS IT COUNTS IS SAID, in words a reader can check: every kind together, or only some.
+        const finalTotals = summaryKindsRead(modelRules, chosen.relations);
+        const kindCaveats = [...new Set([...codeKinds.map((item) => item.code), ...finalTotals.map((item) => item.code)].map((code) => code.toLowerCase()))].flatMap((lower) => {
+          const kinds = codeKinds.find((item) => item.code.toLowerCase() === lower);
+          const code = kinds?.code ?? finalTotals.find((item) => item.code.toLowerCase() === lower)!.code;
+          const total = finalTotals.some((item) => item.code.toLowerCase() === lower);
+          if (!total && !(kinds && readsKindsOf(chosen.relations, kinds))) return [];
+          const noun = kindNoun(code);
+          const filter = total ? { filtered: false, kinds: [] as string[] } : kindFilterOf(chosen.sql, code);
+          if (filter.filtered) return filter.kinds.length ? [`caveat: it counts only ${noun}s whose ${code} starts with ${orList(filter.kinds.sort())}, one kind of ${noun}${filter.kinds.length > 1 ? ' each' : ''}`] : [];
+          const every = kinds ? ` (${code} starting with ${orList(kinds.values.map((value) => value.first))})` : '';
+          return [`caveat: it counts every kind of ${noun} together${every}; to count one kind, name it in the question`];
+        });
         // AI-DRAFTED WORDS ARE SAID, every time they stand behind an answer.
         // They help find a table; they change no trust label.
         const draftedWords = draftedMeaningRelations(deps.getManifest().manifest, deps.projectRoot)
@@ -3029,7 +3214,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(stated.length ? [`stated values applied: ${stated.map((item) => item.value).join(', ')}`] : []),
             ...(required.length ? [`required filters present: ${required.map((item) => item.text).join(', ')}`] : []),
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
-            ...mixedKinds.map((item) => `caveat: it comes from ${item.summary}, which adds up all of ${item.detail}, every kind of ${item.code} together, so it counts every kind`),
+            ...kindCaveats,
             ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
             ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
@@ -3094,8 +3279,17 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
       }
       const shown = [...relations];
-      const searched = (names: string[]) => wholeSchema ? `all ${names.length} tables` : names.join(', ');
-      const first = await attemptDraft();
+      let first = await attemptDraft();
+      // A KIND THE DRAFTER DID NOT SEE (new-user test V8 retest: "the Celtics' playoff record in 2008" was refused,
+      // "no column identifies playoff games"). When the tables carry a coded key whose first character tells kinds
+      // apart, the drafter is shown the kinds before every table is searched for a field that is not there.
+      const kindsHere = codeKinds.filter((kinds) => readsKindsOf(relations, kinds));
+      if (first && 'declined' in first && kindsHere.length > 0) {
+        hostStep({ phase: 'schema', title: `The AI found no field for part of the question: showing it the kinds of ${kindsHere.map((kinds) => kindNoun(kinds.code)).join(', ')} that ${kindsHere.map((kinds) => kinds.code).join(', ')} tells apart`, state: 'done', detail: kindsHere.flatMap((kinds) => kinds.expressions).join(' ') });
+        const again = await attemptDraft(kindsDeclineNote(kindsHere, first.declined), 'widen');
+        if (again && !('declined' in again)) return finalize(again);
+        if (again) first = again;
+      }
       if (!first || !('declined' in first)) return finalize(first);
       // THE WIDER LOOK: a decline over the tables first chosen is not a
       // decline over the project. Search every table for a column the missing
@@ -3122,7 +3316,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       }
       if (wider.length === 0) {
         hostStep({ phase: 'search', title: 'Searched every table for the missing field: none has it', state: 'missed', detail: `looked for ${words.slice(0, 4).join(', ') || 'the missing field'} beyond ${shown.join(', ')}` });
-        return { declined: `${first.declined.replace(/[.\s]+$/, '')} (searched ${searched(shown)}, and no other table has a column for ${words.slice(0, 3).join(', ') || 'it'})` };
+        return { declined: `${first.declined.replace(/[.\s]+$/, '')} (Ask looked through ${wholeSchema ? 'every table it can read' : 'the tables it chose'}, and no other table has a column for it)` };
       }
       // A table found in the brief list moves up to full detail, beside the chosen ones.
       const found = new Set(wider.map((relation) => physicalRelationIdentity(relation)));
@@ -3130,7 +3324,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       relations = [...draftTables, ...wider, ...relations.filter((relation) => !chosenTables.has(physicalRelationIdentity(relation)) && !found.has(physicalRelationIdentity(relation)))];
       hostStep({ phase: 'search', title: `Searched every table for the missing field: found ${wider.join(', ')}`, state: 'done', detail: `looked for ${words.slice(0, 4).join(', ')}; the first draft over ${shown.join(', ')} found none` });
       const second = await attemptDraft(`A first draft over ${shown.join(', ')} found no field for this ("${first.declined.slice(0, 240)}"). The tables ${wider.join(', ')} have columns named for it and were added; use them, joining on a key both tables carry.`, 'widen');
-      if (second && 'declined' in second) return { declined: `${second.declined.replace(/[.\s]+$/, '')} (searched ${searched(relations)})` };
+      if (second && 'declined' in second) return { declined: `${second.declined.replace(/[.\s]+$/, '')} (Ask also looked in the tables that have a column named for it)` };
       return finalize(second);
     };
     // THE SECOND LOOK at an AI-drafted result, where the project turns it on
