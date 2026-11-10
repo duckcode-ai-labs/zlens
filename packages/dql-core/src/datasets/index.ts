@@ -127,6 +127,7 @@ export {
   savedQueryResultDescriptor,
   savedQueryResultFields,
   savedQueryResultRollup,
+  sqlReturnsOneRow,
   topRowsOnlyMessage,
 } from './result-fields.js';
 export type { SavedQueryResultColumn, SavedQueryRollupCheck } from './result-fields.js';

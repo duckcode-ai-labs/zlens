@@ -7,8 +7,10 @@ import {
   savedQueryResultFields,
   savedQueryKeepsFirstRows,
   savedQueryResultRollup,
+  sqlReturnsOneRow,
 } from './result-fields.js';
 import { validateTileQuery } from '../apps/tile-query.js';
+import { readerTileTrust } from '../apps/reader-trust.js';
 
 const monthly = (certified = true) => savedQueryResultDescriptor({
   sourceId: 'app:block:commerce:monthly',
@@ -217,5 +219,48 @@ describe('a Top N saved query (0.2.4)', () => {
 
   it('survives a round trip through the descriptor normalizer', () => {
     expect(normalizeDatasetDescriptor(JSON.parse(JSON.stringify(topBeverage(['customer_name']))))?.result?.keepsFirstRows).toBe(10);
+  });
+});
+
+describe('a LIMIT on a statement that returns one row (V8 B5)', () => {
+  // Ask added its row guard to a one-row COUNT(*); certified and put on an App,
+  // the KPI read "Not certified yet: … (it is a Top 501)".
+  const wins = "SELECT COUNT(*) AS wins FROM nba.team_games WHERE team = 'GSW' AND game_id LIKE '2%'\nLIMIT 501";
+
+  it('is not a Top N: the limit keeps every row', () => {
+    expect(sqlReturnsOneRow(wins)).toBe(true);
+    expect(savedQueryKeepsFirstRows(wins)).toBeUndefined();
+    expect(sqlReturnsOneRow('select count(distinct player_id) filter (where pts > 0) as scorers, max(pts) from t limit 1')).toBe(true);
+    expect(sqlReturnsOneRow("select listagg(name, ',') within group (order by name) from t")).toBe(true);
+    expect(sqlReturnsOneRow('with g as (select team, count(*) n from t group by team) select sum(n) from g')).toBe(true);
+  });
+
+  it('keeps the Top N of anything that can return more rows', () => {
+    expect(sqlReturnsOneRow('select team, count(*) from t group by team')).toBe(false);
+    expect(sqlReturnsOneRow('select a, sum(x) over (partition by a) from t')).toBe(false);
+    expect(sqlReturnsOneRow('select count(*) from a union all select count(*) from b')).toBe(false);
+    expect(sqlReturnsOneRow('select a, (select max(x) from u) from t')).toBe(false);
+    expect(sqlReturnsOneRow("select a from t where note = 'count(*)'")).toBe(false);
+    expect(sqlReturnsOneRow('select a from t')).toBe(false);
+    expect(savedQueryKeepsFirstRows('SELECT player_name, SUM(reb) AS rebounds FROM t GROUP BY 1 ORDER BY 2 DESC LIMIT 3')).toBe(3);
+  });
+
+  it('a KPI over it is the certified total, not a Top 501', () => {
+    const descriptor = savedQueryResultDescriptor({
+      sourceId: 'app:block:nba:warriors_wins',
+      sourceRevision: 'sha256:rev1',
+      savedQuery: 'warriors_regular_season_wins_2016',
+      qualifiedId: 'nba::block::warriors_regular_season_wins_2016',
+      domain: 'nba',
+      certified: true,
+      lifecycle: 'certified',
+      columns: [{ name: 'wins', type: 'BIGINT' }],
+      groupBy: [],
+      typesFrom: 'contract',
+      keepsFirstRows: savedQueryKeepsFirstRows(wins),
+    })!;
+    const kpi = validateTileQuery(descriptor, { dimensions: [], measures: [{ measure: 'wins' }] });
+    expect(kpi.adaptations.some((adaptation) => adaptation.topRowsOnly)).toBe(false);
+    expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: kpi } })?.state).toBe('certified');
   });
 });

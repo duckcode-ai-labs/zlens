@@ -84,11 +84,32 @@ To be certified, a saved query must:
 - pass every test it declares.
 
 Tests are optional: a saved query with no tests can be certified, and the receipt
-records the missing tests as a warning. `--enterprise` rules require at least
-one test.
+records the missing tests as a warning. The editor says so under **Tests**
+("Tests are optional"). `--enterprise` rules require at least one test.
 
 A description that still says "review required" also stops certification.
 The saved query editor offers to remove those words or let you edit the description.
+
+### A saved query AI wrote
+
+When AI wrote the saved query (an Ask answer, an agent's draft, notebook
+research), certifying needs a person to say they reviewed it. ZLens knows from
+what the saved query keeps: the question Ask answered (`source_question`) or
+a tag such as `ai-generated`. **Save as saved query** on an Ask answer keeps
+the question.
+
+- In the saved query editor, Certify stops with **Confirm you reviewed what AI
+  wrote**. Check the SQL and its rows, then click **I reviewed it — certify**.
+- In an App, the review says **AI wrote this SQL**, and **I vouch for this —
+  certify** is your review.
+
+Only then does the receipt record the check **No unreviewed AI-written
+content** (`ai-reviewed`).
+
+Certifying adds no tag of its own. A certified saved query is available to
+Apps because it is certified, so it needs no `app-source` tag: certifying
+takes it off a saved query AI wrote, and never adds it to one that did not
+carry it before.
 
 Other checks are warnings: an AI-facing description (LLM context), tests,
 grain, declared outputs, entities and a review cadence. They are recorded on

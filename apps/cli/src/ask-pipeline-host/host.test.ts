@@ -1095,7 +1095,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     expect(result.trustState).toBe('review_required');
   });
 
-  it('a drafted statement that leaves out a value the question states is fixed once, then run with a row guard', async () => {
+  it('a drafted statement that leaves out a value the question states is fixed once, then run (one row: no row guard)', async () => {
     const provider = drafter('');
     const prompts: string[] = [];
     provider.generate = async (messages) => {
@@ -1109,8 +1109,10 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     const result = await ask(routeFor(provider, statements));
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('NOTE: The previous statement was not run because it does not apply "Splunk" from the question');
+    // A COUNT(*) with no GROUP BY returns one row: no row guard, so a saved
+    // query made from it is not read as a "Top 501" (V8 B5).
     expect(statements.filter((sql) => !sql.includes('information_schema'))).toEqual([
-      "SELECT COUNT(*) AS lost_deals FROM sales.opportunities WHERE LOWER(stage) = 'closed lost' AND LOWER(competitor) = 'splunk'\nLIMIT 501",
+      "SELECT COUNT(*) AS lost_deals FROM sales.opportunities WHERE LOWER(stage) = 'closed lost' AND LOWER(competitor) = 'splunk'",
     ]);
     expect(result.status).toBe('completed');
     expect(result.answer).toContain("it filters on LOWER(stage) = 'closed lost' AND LOWER(competitor) = 'splunk'");

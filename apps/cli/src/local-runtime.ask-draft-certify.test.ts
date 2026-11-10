@@ -100,8 +100,8 @@ async function call(base: string, method: string, path: string, body?: unknown):
   return { status: response.status, body: text ? JSON.parse(text) : null };
 }
 
-async function certify(base: string, source: string, path: string, metadata: Record<string, unknown>): Promise<Record<string, any>> {
-  const started = await call(base, 'POST', '/api/block-studio/certifications', { source, path, metadata });
+async function certify(base: string, source: string, path: string, metadata: Record<string, unknown>, extra: Record<string, unknown> = { aiReviewed: true }): Promise<Record<string, any>> {
+  const started = await call(base, 'POST', '/api/block-studio/certifications', { source, path, metadata, ...extra });
   expect(started.status, JSON.stringify(started.body)).toBe(202);
   let operation: Record<string, any> = started.body.operation;
   for (let attempt = 0; attempt < 500 && ['queued', 'running'].includes(String(operation.status)); attempt += 1) {
@@ -124,6 +124,12 @@ describe('an Ask review draft certified without edits', () => {
       const saved = await call(base, 'POST', '/api/block-studio/save', { path: draft.path, source: opened.body.source, metadata: opened.body.metadata });
       expect(saved.status, JSON.stringify(saved.body)).toBe(200);
       expect(saved.body.source).toContain('"app-source"');
+
+      // AI wrote it: Certify stops until the person says they reviewed it (V8).
+      const unreviewed = await certify(base, saved.body.source, saved.body.path, saved.body.metadata, {});
+      expect(unreviewed.outcome).toBe('draft_saved_with_blockers');
+      expect(unreviewed.checklist.aiReviewed).toBe(false);
+      expect(unreviewed.checklist.issues.map((issue: { code: string }) => issue.code)).toContain('ai_review_required');
 
       const certified = await certify(base, saved.body.source, saved.body.path, saved.body.metadata);
       expect(certified.outcome, JSON.stringify(certified.blockers ?? certified)).toBe('certified');

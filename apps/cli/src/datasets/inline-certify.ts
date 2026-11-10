@@ -38,7 +38,12 @@ export interface SavedQueryReview {
   blockers: string[];
   /** The plain-word checks the receipt records once it is certified. */
   checks: string[];
+  /** AI wrote its SQL: said before "I vouch for this — certify", which is the person's review of it. */
+  aiWritten?: string;
 }
+
+/** What the review says when AI wrote the saved query: vouching for it is saying you reviewed it. */
+export const AI_WRITTEN_VOUCH = 'AI wrote this SQL. \u201cI vouch for this \u2014 certify\u201d says you read it and its result.';
 
 /** What one row of a saved query is: its declared grain, else its grouping columns, else its key fields. */
 export function savedQueryRowSentence(input: { grain?: string; dimensions?: readonly string[]; keyFields?: readonly string[] }): string | undefined {
@@ -60,6 +65,8 @@ export function savedQueryReview(input: {
   grain?: string;
   dimensions?: readonly string[];
   keyFields?: readonly string[];
+  /** AI wrote the saved query (Ask, an agent, notebook research). */
+  aiWritten?: boolean;
 }): SavedQueryReview {
   const { verdict } = input;
   const issues = verdict.checklist.issues;
@@ -88,7 +95,7 @@ export function savedQueryReview(input: {
     ...(owner ? [`Owner: ${owner}`] : []),
     ...(row ? [`One row: ${row}`] : []),
   ];
-  return { runs, tests, testsSentence, ...(owner ? { owner } : {}), ownerRequired: !owner, ...(row ? { row } : {}), blockers, checks };
+  return { runs, tests, testsSentence, ...(owner ? { owner } : {}), ownerRequired: !owner, ...(row ? { row } : {}), blockers, checks, ...(input.aiWritten ? { aiWritten: AI_WRITTEN_VOUCH } : {}) };
 }
 
 /** One side of a join as Modeling knows it: its table, and the grain and keys of its model when set. */
