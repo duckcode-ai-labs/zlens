@@ -74,7 +74,8 @@ const REQUIRED_TEST_FILES = [
 // 193 with one answer to "is this the same table?" (physical-binding.test.ts, +1 file, +6 tests; simplification plan Z1).
 // 194 with Claude through Snowflake Cortex (claude-cortex.test.ts, +1 file, +10 tests).
 // 195 with meaning search through Snowflake Cortex (embeddings/cortex.test.ts, +1 file, +8 tests).
-const EXPECTED_TEST_FILES = 195;
+// 196 with the App Builder planner reply read whatever its shape (app-builder-planner-json.test.ts, +1 file, +5 tests).
+const EXPECTED_TEST_FILES = 196;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -188,10 +189,12 @@ const EXPECTED_TEST_FILES = 195;
 // the app's ZLENS_EMBEDDINGS=cortex is never put back to word-based; search design S1-S5).
 // 2848 with a whole new question in a chat read on its own (topic-shift.test.ts, +2) and a name of several
 // words applied by any of its words (sql-checks.test.ts, +1; new-user test B1/B2, 2026-11-10).
-const EXPECTED_TESTS = 2849;
+// 2859 with the App Builder planner reply read whatever its shape and one retry
+// (app-builder-planner-json.test.ts +5, app-builder-orchestrator.test.ts +5; new-user test V8, item 4).
+const EXPECTED_TESTS = 2859;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2767.
+// The ordinary lane's share is the difference: 2778.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
