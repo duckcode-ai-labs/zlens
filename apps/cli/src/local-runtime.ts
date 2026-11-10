@@ -407,6 +407,7 @@ import {
   CORTEX_DEFAULT_MODEL,
   isCortexClaudeProvider,
   isCortexEmbeddingModel,
+  CORTEX_DEFAULT_EMBEDDING_MODEL,
   CORTEX_EMBEDDING_MODELS,
   useCortexEmbeddingSql,
   buildBlockBusinessFingerprint,
@@ -20527,12 +20528,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const catalog = openMetadataCatalog(projectRoot);
         let indexedProvider: string | undefined;
         try { indexedProvider = catalog.state('vector_provider') ?? undefined; } finally { catalog.close(); }
+        const cortexByInstall = typeof settings.provider !== 'string' && readEnv('ZLENS_EMBEDDINGS')?.trim().toLowerCase() === 'cortex';
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({
           settings: {
-            provider: typeof settings.provider === 'string' ? settings.provider : 'hashed',
+            // With no project setting, what the install chose (the ZLens app for Snowflake: Cortex), not "hashed".
+            provider: typeof settings.provider === 'string' ? settings.provider : cortexByInstall ? 'cortex' : 'hashed',
             endpoint: typeof settings.endpoint === 'string' ? settings.endpoint : '',
-            model: typeof settings.model === 'string' ? settings.model : '',
+            model: typeof settings.model === 'string' ? settings.model : cortexByInstall ? (readEnv('ZLENS_CORTEX_EMBED_MODEL')?.trim() || CORTEX_DEFAULT_EMBEDDING_MODEL) : '',
             // Never return the key itself.
             apiKeySet: typeof settings.apiKey === 'string' && settings.apiKey.trim().length > 0,
           },

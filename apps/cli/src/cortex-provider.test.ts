@@ -177,6 +177,13 @@ describe('meaning search through Snowflake Cortex (Settings » AI » Search)', (
     };
     const call = await startWith(project({ driver: 'snowflake', account: 'acct', username: 'u', password: 'p' }), executor);
     expect((await call('GET', '/api/settings/embeddings')).json.cortex).toEqual({ available: true });
+    // The ZLens app for Snowflake starts with Cortex search: Settings shows it on, with the default model.
+    vi.stubEnv('ZLENS_EMBEDDINGS', 'cortex');
+    expect((await call('GET', '/api/settings/embeddings')).json).toMatchObject({
+      settings: { provider: 'cortex', model: 'snowflake-arctic-embed-l-v2.0' },
+      cortex: { available: true, installDefault: true },
+    });
+    vi.stubEnv('ZLENS_EMBEDDINGS', '');
     expect((await call('GET', '/api/settings/embeddings/models')).json.catalog.cortex.map((option: { model: string }) => option.model))
       .toEqual(['snowflake-arctic-embed-l-v2.0', 'snowflake-arctic-embed-m-v1.5']);
     expect((await call('PUT', '/api/settings/embeddings', { provider: 'cortex', model: 'text-embedding-3-small' })).status).toBe(400);
