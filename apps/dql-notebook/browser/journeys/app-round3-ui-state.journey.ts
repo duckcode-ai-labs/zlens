@@ -108,7 +108,8 @@ test('a new App is on the Apps list as soon as you go Back, with one wording for
   const launcher = page.locator('#app-studio-launcher');
   if (!(await launcher.isVisible())) await page.getByRole('button', { name: 'Build new App' }).click();
   await launcher.getByRole('tab', { name: 'Start manually' }).click();
-  await launcher.getByPlaceholder('Revenue Operations').fill('Sales Manager Manual');
+  // "Untitled Analytics App" is the placeholder, never a value typed onto (new-user test V9).
+  await launcher.getByPlaceholder('Untitled Analytics App').fill('Sales Manager Manual');
   await launcher.getByRole('button', { name: /^Continue to data/ }).click();
   await page.getByRole('button', { name: 'Skip, start empty' }).click();
   // A new App says "Not published yet" in Studio, never "Unpublished changes" or "local draft".

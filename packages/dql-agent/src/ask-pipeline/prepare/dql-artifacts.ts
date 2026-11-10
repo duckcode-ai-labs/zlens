@@ -1,5 +1,6 @@
 import type { DqlArtifactReference } from '@zlens/core';
 import { renderSemanticDqlArtifact, semanticDqlArtifactName } from '../../semantic-bridge/compose.js';
+import { clipText } from '../vocabulary.js';
 import type { SemanticCompileRequest } from './types.js';
 
 /**
@@ -45,7 +46,8 @@ const sqlBlockSource = (name: string, reading: string, sql: string) => [
   `block "${name}" {`,
   '  type = "custom"',
   '  status = "draft"',
-  `  description = "${reading.replace(/"/g, "'").slice(0, 200)}"`,
+  // Cut at a sentence end or a word, never mid-word (V9: it stopped mid-word).
+  `  description = "${clipText(reading.replace(/"/g, "'"), 200)}"`,
   '  query = """',
   ...sql.split('\n').map((line) => `    ${line}`),
   '  """',

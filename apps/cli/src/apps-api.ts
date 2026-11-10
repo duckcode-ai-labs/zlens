@@ -1192,7 +1192,8 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
     });
     // A host's reader sees only the Apps they may open, not ones that refuse them on click.
     const may = ctx.mayViewApp;
-    const apps = may ? (await Promise.all(all.map(async (app) => ((await may(app.id).catch(() => false)) ? app : null)))).filter((app): app is (typeof all)[number] => app !== null) : all;
+    const shown = may ? (await Promise.all(all.map(async (app) => ((await may(app.id).catch(() => false)) ? app : null)))).filter((app): app is (typeof all)[number] => app !== null) : all;
+    const apps = await withCurrentTileTrust(projectRoot, shown);
     sendJson(res, 200, { apps, ...(problems.length ? { problems } : {}) });
     return true;
   }
@@ -2218,6 +2219,74 @@ function appUpdatedAt(appDir: string, dashboardPaths: string[]): string | undefi
     }
   }
   return latest > 0 ? new Date(latest).toISOString() : undefined;
+}
+
+/**
+ * Each listed App's tile count as it is now (V9): the count stored in
+ * `dql.app.json` at publish goes stale when a source or a rule changes after
+ * it, and the Apps card said "All tiles certified" over a page that said
+ * "0 of 1 tile certified". An App whose count cannot be worked out here keeps
+ * its stored one.
+ */
+async function withCurrentTileTrust(projectRoot: string, apps: AppListEntry[]): Promise<AppListEntry[]> {
+  if (!apps.some((app) => app.dashboards.length > 0)) return apps;
+  let catalogUnreadable = false;
+  let options: CreateStoredAppBuildDraftOptions;
+  try {
+    const { ensureAgentProjectReady, matchAppBlockSourceRefs, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
+    await ensureAgentProjectReady(projectRoot);
+    options = {
+      resolvePublishedDatasetSources: (sourceIds, sourcePolicy) => {
+        try {
+          return resolveAppSourceCatalogRecords(projectRoot, sourceIds, sourcePolicy);
+        } catch (error) {
+          catalogUnreadable = true;
+          throw error;
+        }
+      },
+      resolvePublishedBlockSources: (refs) => matchAppBlockSourceRefs(projectRoot, refs, APP_SOURCE_POLICY),
+    };
+  } catch {
+    return apps;
+  }
+  const blocks = collectBlockCandidates(projectRoot);
+  return apps.map((app) => {
+    if (app.dashboards.length === 0) return app;
+    catalogUnreadable = false;
+    const tileTrust = currentPublishedAppTileTrust(join(projectRoot, app.filePath), options, blocks);
+    return tileTrust && !catalogUnreadable ? { ...app, tileTrust } : app;
+  });
+}
+
+/**
+ * A published App's tile count from its pages as they are now: their sources
+ * read from the current catalog, as opening the App in Studio reads them, and
+ * each tile labelled by the check the editor, the publish dialog and the
+ * page's run apply (`appBuildDraftTrust`). Undefined with no data tiles, or
+ * when a tile's data has no fields here yet (a saved query's columns are read
+ * on its first run after a fresh checkout): the page's run is then the only
+ * evidence, never a guess.
+ */
+function currentPublishedAppTileTrust(
+  appDir: string,
+  options: CreateStoredAppBuildDraftOptions,
+  blocks: ReturnType<typeof collectBlockCandidates>,
+): { certified: number; total: number } | undefined {
+  const pages = findDashboardsForApp(appDir)
+    .map((path) => loadDashboardDocument(path).document)
+    .filter((page): page is DashboardDocument => Boolean(page));
+  if (pages.length === 0) return undefined;
+  const restored = rehydratePublishedAppSources(pages, APP_SOURCE_POLICY, options);
+  const sources = new Map(restored.sources.map((source) => [source.id, source]));
+  const fieldsUnknown = restored.pages.some((page) => page.layout.items.some((tile) => {
+    if (!tile.query) return false;
+    const source = tile.sourceId ? sources.get(tile.sourceId) : undefined;
+    // A source that no longer resolves is a placeholder (lifecycle unknown): its tiles are not certified, and the run says so too.
+    return Boolean(source && source.lifecycle !== 'unknown' && !source.capabilities?.dataset);
+  }));
+  if (fieldsUnknown) return undefined;
+  const trust = appBuildDraftTrust({ pages: restored.pages, sources: restored.sources }, { blocks });
+  return trust.total > 0 ? publishedAppTileTrust(trust) : undefined;
 }
 
 function collectAppsList(projectRoot: string): AppListEntry[] {
@@ -8810,7 +8879,7 @@ export function appDescriptionFor(projectRoot: string, draft: Pick<AppBuildDraft
  * queries as they are now.
  */
 export function appBuildDraftTrust(
-  draft: AppBuildDraft,
+  draft: Pick<AppBuildDraft, 'pages' | 'sources'>,
   current: {
     descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined;
     recordFor?: (sourceId: string) => AppSourceCatalogRecord | undefined;
