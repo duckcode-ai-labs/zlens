@@ -30,7 +30,8 @@ export function searchModeLabel(settings: { provider: string; model?: string } |
   if (!semantic || !settings || settings.provider === 'hashed') return 'Search: word-based';
   if (settings.provider === 'ollama') return `Search: meaning-based · local Ollama${settings.model ? ` (${settings.model})` : ''}`;
   if (settings.provider === 'openai') return `Search: meaning-based · OpenAI${settings.model ? ` (${settings.model})` : ''}`;
-  if (settings.provider === 'cortex') return `Search: meaning-based · Snowflake Cortex${settings.model ? ` (${settings.model})` : ''}`;
+  // The model is under Technical details: the long name squeezed the card's text into a narrow column.
+  if (settings.provider === 'cortex') return 'Search: meaning-based · Snowflake Cortex';
   return 'Search: meaning-based';
 }
 
@@ -50,5 +51,5 @@ export const CORTEX_EMBEDDINGS_OPTION = 'Use Snowflake Cortex for meaning-based 
 /** The line under the Cortex switch. */
 export function cortexEmbeddingsHint(input: { available: boolean; reason?: string }): string {
   if (!input.available) return input.reason ?? 'Snowflake Cortex search is not available for this project.';
-  return 'Descriptions of your tables, columns and metrics are embedded with AI_EMBED on your Snowflake connection. Re-indexing a catalog costs about a cent of Snowflake credits.';
+  return 'Descriptions of your tables, columns and metrics are embedded with AI_EMBED on your Snowflake connection. A small project costs about a cent of Snowflake credits to index (hundreds of tables, about $0.35 the first time); after that only new text is embedded.';
 }

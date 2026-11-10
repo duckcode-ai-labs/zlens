@@ -38,8 +38,8 @@ describe('Search settings: word-based unless you turn on local embeddings', () =
   });
 
   it('offers Snowflake Cortex search only where the project connection is Snowflake, and says what it costs', () => {
-    expect(searchModeLabel({ provider: 'cortex', model: 'snowflake-arctic-embed-m-v1.5' }, true)).toBe('Search: meaning-based · Snowflake Cortex (snowflake-arctic-embed-m-v1.5)');
-    expect(cortexEmbeddingsHint({ available: true })).toMatch(/AI_EMBED on your Snowflake connection.*about a cent/);
+    expect(searchModeLabel({ provider: 'cortex', model: 'snowflake-arctic-embed-l-v2.0' }, true)).toBe('Search: meaning-based · Snowflake Cortex');
+    expect(cortexEmbeddingsHint({ available: true })).toMatch(/AI_EMBED on your Snowflake connection.*small project costs about a cent.*only new text/);
     expect(cortexEmbeddingsHint({ available: false, reason: 'Snowflake Cortex search needs the project connection to be Snowflake.' })).toBe('Snowflake Cortex search needs the project connection to be Snowflake.');
     // Before the settings load (and on a project that is not on Snowflake) the switch is not there.
     const html = renderToStaticMarkup(<EmbeddingSettings t={themes.paper} />);
