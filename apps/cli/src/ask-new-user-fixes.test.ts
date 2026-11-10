@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { codeKindsFrom, droppedQuestionWords, kindFilterOf, kindNoun, kindDatesFrom, kindDatesSql, kindsContextLine, kindsDeclineNote, kindsLookNote, summaryKindsRead } from './ask-pipeline-host/host.js';
+import { codeKindsFrom, droppedQuestionWords, holdsCode, joinKindNames, kindFilterOf, kindNamesFrom, kindNamesMessages, kindNoun, kindDatesFrom, kindDatesSql, kindsAnswerLine, kindsContextLine, kindsDeclineNote, kindsLookNote, readingWithoutKindClaims, summaryKindsRead } from './ask-pipeline-host/host.js';
 import { activeProviderForDeadline, askTraceReason, deadlineScaleForProvider } from './local-runtime.js';
 
 /**
@@ -103,7 +103,10 @@ describe('kinds of game: a kind the question names is applied, and an answer say
     expect(kindFilterOf("SELECT 1 FROM T WHERE SUBSTR(CAST(GAME_ID AS VARCHAR), 1, 1) IN ('1', '4') AND SEASON = 2015", 'GAME_ID')).toEqual({ filtered: true, kinds: ['1', '4'] });
     expect(kindFilterOf("SELECT 1 FROM T WHERE LEFT(TO_VARCHAR(g.GAME_ID), 1) = '2'", 'GAME_ID')).toEqual({ filtered: true, kinds: ['2'] });
     expect(kindFilterOf('SELECT COUNT(DISTINCT GAME_ID) FROM T WHERE SEASON = 2015', 'GAME_ID')).toEqual({ filtered: false, kinds: [] });
-    expect(kindFilterOf("SELECT 1 FROM T WHERE GAMES_GAME_ID LIKE '4%'", 'GAME_ID')).toEqual({ filtered: false, kinds: [] });
+    // A column named for the key with a prefix holds the same key (SRC_GAMES.GAMES_GAME_ID, V9 retest).
+    expect(kindFilterOf("SELECT 1 FROM T WHERE GAMES_GAME_ID LIKE '4%'", 'GAME_ID')).toEqual({ filtered: true, kinds: ['4'] });
+    expect(kindFilterOf('SELECT COUNT(DISTINCT GAMES_GAME_ID) FROM NBA.TRANSFORMED.SRC_GAMES', 'GAME_ID')).toEqual({ filtered: false, kinds: [] });
+    expect(kindFilterOf("SELECT 1 FROM T WHERE PLAYGAME_ID LIKE '4%'", 'GAME_ID')).toEqual({ filtered: false, kinds: [] });
   });
 
   it('names the kind after the key, and tells the drafter to filter a named kind and count every kind otherwise', () => {
@@ -141,5 +144,75 @@ describe('kinds of game: a kind the question names is applied, and an answer say
     expect(droppedQuestionWords('Which team won the most preseason games in 2018?', 'Which team had the most wins in the 2018 season?', known)).toEqual(['preseason']);
     expect(droppedQuestionWords('How many points did LeBron James score in the 2012 playoffs?', 'Total points scored by LeBron James in the 2012 season, restricted to playoff games.', known)).toEqual([]);
     expect(droppedQuestionWords('How many games are in our data?', 'The number of games.', known)).toEqual([]);
+  });
+});
+
+describe('game types in plain words, and a reading that agrees with its answer (V9 retest)', () => {
+  const rule = "Every GAME_ID in LOCAL_PLAYER_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (49,628 rows), 2 (577,985 rows), 4 (40,377 rows), 5 (349 rows). The first character is a code, such as a type.";
+  const kinds = codeKindsFrom({ r: { expression: rule } })[0]!;
+  const names = { '1': 'preseason games', '2': 'regular-season games', '4': 'playoff games', '5': 'play-in games' };
+  const named = { ...kinds, names };
+
+  it('finds the key under a prefixed column name, and only there', () => {
+    expect(holdsCode('GAME_ID', 'GAME_ID')).toBe(true);
+    expect(holdsCode('"GAMES_GAME_ID"', 'GAME_ID')).toBe(true);
+    expect(holdsCode('PLAYGAME_ID', 'GAME_ID')).toBe(false);
+    expect(holdsCode('GAME_DATE', 'GAME_ID')).toBe(false);
+  });
+
+  it('reads the names a rule gives its kinds', () => {
+    const withNames = codeKindsFrom({ r: { expression: 'Every GAME_ID in T has 8 characters, and the first one takes 2 values: 2 (regular-season games, 577,985 rows), 4 (playoff games, 40,377 rows).' } })[0]!;
+    expect(withNames.values).toEqual([{ first: '2', rows: 577985 }, { first: '4', rows: 40377 }]);
+    expect(withNames.names).toEqual({ '2': 'regular-season games', '4': 'playoff games' });
+    expect(kinds.names).toBeUndefined();
+  });
+
+  it('asks once for the names a reader uses, from the rules and the dates, and keeps only clean, distinct ones', () => {
+    const dates = { period: 'SEASON', value: '2021', ranges: [{ first: '1', from: '2021-10-03', to: '2021-10-15' }, { first: '4', from: '2022-04-16', to: '2022-06-16' }] };
+    const messages = kindNamesMessages({ ...kinds, dates });
+    expect(messages[1]!.content).toContain('KEY: the first character of GAME_ID says what kind of game a row is: 1 (49,628 rows), 2 (577,985 rows)');
+    expect(messages[1]!.content).toContain('WHEN EACH KIND FALLS: in SEASON 2021, 1 from 2021-10-03 to 2021-10-15, 4 from 2022-04-16 to 2022-06-16.');
+    expect(messages[1]!.content).toContain('Reply as {"1": "…", "2": "…", "4": "…", "5": "…"}');
+    expect(kindNamesFrom('Here: {"1": "Preseason games", "2": "regular-season games", "4": "playoff games", "5": "play-in games"}', kinds)).toEqual(names);
+    expect(kindNamesFrom('{"1": "preseason games", "2": null, "4": "games; DROP TABLE x", "5": "a very long name of five words"}', kinds)).toEqual({ '1': 'preseason games' });
+    expect(kindNamesFrom('{"1": "games", "2": "games"}', kinds)).toBeUndefined();
+    expect(kindNamesFrom('no json', kinds)).toBeUndefined();
+  });
+
+  it('says which games an answer counts in the names a reader uses, with the code beside them', () => {
+    expect(joinKindNames(['regular-season games', 'playoff games'])).toBe('regular-season and playoff games');
+    expect(joinKindNames(['preseason games', 'regular-season games', 'playoff games', 'play-in games'])).toBe('preseason, regular-season, playoff and play-in games');
+    expect(joinKindNames(['returns', 'exchanges'])).toBe('returns and exchanges');
+    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: true, kinds: ['4'] })).toBe('it counts only playoff games (GAME_ID starting with 4)');
+    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: true, kinds: ['4', '2'] })).toBe('it counts only regular-season and playoff games (GAME_ID starting with 2 or 4)');
+    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: false, kinds: [] })).toBe('it counts every kind of game together: preseason, regular-season, playoff and play-in games (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+    // Without names, the code says it, as before.
+    expect(kindsAnswerLine(kinds, 'GAME_ID', { filtered: true, kinds: ['4'] })).toBe('it counts only games whose GAME_ID starts with 4, one kind of game');
+    expect(kindsAnswerLine(kinds, 'GAME_ID', { filtered: false, kinds: [] })).toBe('it counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+    expect(kindsAnswerLine({ ...kinds, names: { '4': 'playoff games' } }, 'GAME_ID', { filtered: false, kinds: [] })).toBe('it counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+  });
+
+  const terms = ['preseason games', 'preseason', 'regular-season games', 'regular-season', 'playoff games', 'playoff', 'play-in games', 'play-in', 'game type', 'game-type', 'postseason'];
+  it.each([
+    ['K1', 'Total points LeBron James scored in the 2012 season (the project has no field distinguishing playoff games from regular-season games, so the playoff restriction cannot be applied).', 'Total points LeBron James scored in the 2012 season'],
+    ['K2', "Team with the most wins in 2018; this project's team game data (LOCAL_TEAM_GAME_FACTS) is regular-season only — no preseason/playoff game-type distinction is modeled.", 'Team with the most wins in 2018'],
+    ['K4', 'Boston Celtics wins and losses in the 2008 season. No vocabulary entry (metric, dimension, column, or block) distinguishes playoff games from regular-season games, so the record as asked cannot be built from the available refs.', 'Boston Celtics wins and losses in the 2008 season'],
+    ['PO-1', "Playoff games the Golden State Warriors won in 2016 — the only certified definition available (nba.warriors_regular_season_wins_2016) explicitly scopes to regular-season games only, and no playoff/game-type flag is present among the vocabulary's columns or relations.", 'Playoff games the Golden State Warriors won in 2016'],
+    ['PO-2', "Playoff games the Golden State Warriors won in 2015; this project's game data models only regular-season games (no playoff flag or playoff scope exists in any relation or metric).", 'Playoff games the Golden State Warriors won in 2015'],
+    ['G1', 'Postseason games the Miami Heat won in 2012 — this project has no column or dimension distinguishing postseason/playoff games from regular-season games — SEASON and DIM_SEASONS only identify the year, not the game type.', 'Postseason games the Miami Heat won in 2012'],
+    ['G3', 'Preseason games the Los Angeles Lakers played and won in 2019; this project has no column or dimension that distinguishes preseason games from regular-season or playoff games.', 'Preseason games the Los Angeles Lakers played and won in 2019'],
+    ['G4', "Golden State Warriors points per game in the 2016 regular season and playoffs, but only the regular-season side can be computed because the project does not expose a game-type (regular season vs playoffs) distinction for team game facts.", 'Golden State Warriors points per game in the 2016 regular season and playoffs'],
+  ])('leaves out the claim that game types cannot be told apart (%s)', (_name, reading, expected) => {
+    expect(readingWithoutKindClaims(reading, terms)).toBe(expected);
+  });
+
+  it.each([
+    'Total points LeBron James scored in the 2012 playoffs, playoff games only.',
+    'Total points in the 2016 regular season (excluding preseason and playoffs).',
+    'Games the Warriors won in 2015, counting every game together: preseason, regular season and playoffs.',
+    'Biggest arena by capacity; no game filter applies.',
+    'Wins by team in 2018; no other filter applies.',
+  ])('keeps a reading that makes no such claim: %s', (reading) => {
+    expect(readingWithoutKindClaims(reading, terms)).toBeUndefined();
   });
 });

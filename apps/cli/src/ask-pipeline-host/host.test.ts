@@ -1224,7 +1224,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     };
     const totals = 'SELECT team_name, wins FROM nba.local_team_season_facts WHERE season = 2015 ORDER BY wins DESC LIMIT 1';
     const oneKind = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
-    const askNba = async (question: string, second: string, first: string = totals) => {
+    const askNba = async (question: string, second: string, first: string = totals, manifest: unknown = nba) => {
       const prompts: string[] = [];
       const readings: string[] = [];
       const provider: AgentProvider = {
@@ -1251,7 +1251,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
         }) } as unknown as QueryExecutor,
         resolveConnection: async () => connection,
         getSemanticLayer: () => undefined,
-        getManifest: () => ({ snapshotId: 'snapshot:schema-lane-kinds', manifest: nba as never }),
+        getManifest: () => ({ snapshotId: 'snapshot:schema-lane-kinds', manifest: manifest as never }),
         selectProvider: async () => provider,
         compileSemantic: async () => { throw new Error('no semantic layer'); },
         priorIntent: () => undefined,
@@ -1304,6 +1304,17 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(result.answer).toContain('it counts only games whose GAME_ID starts with 4, one kind of game');
       const drafts = (result.askPipelineReceipt?.dispatches ?? []).filter((dispatch) => dispatch.purpose === 'intent:draft');
       expect(drafts.map((dispatch) => [dispatch.label, dispatch.outcome])).toEqual([['draft', 'declined'], ['widen', 'sql']]);
+    });
+
+    it('says the game types in the names the rule gives them, with the code beside them (V9 retest)', async () => {
+      const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
+      const manifest = { ...nba, modeling: { rules: { ...nba.modeling.rules, 'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule } } } };
+      const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const one = await askNba('Which team won the most playoff games in 2015?', playoffs, 'NO_SQL: No column identifies playoff games.', manifest);
+      expect(one.result.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+      const every = 'SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY team_name ORDER BY wins DESC LIMIT 1';
+      const all = await askNba('Which team won the most games in 2015?', every, every, manifest);
+      expect(all.result.answer).toContain('it counts every kind of game together: preseason, regular-season, playoff and play-in games (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
     });
 
     it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {

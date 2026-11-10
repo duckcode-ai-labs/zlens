@@ -3363,3 +3363,33 @@ describe('the second look at an AI-drafted result', () => {
     if (answered.kind === 'answered') expect(JSON.stringify(answered.receipt.story)).not.toContain('Checked the result');
   });
 });
+
+describe('the answer reads the reading the host corrected, and a winning margin is not a percentage (new-user test V9 retest)', () => {
+  const vocabulary = buildVocabularyIndex({ relations: [{ schema: 'nba', name: 'team_game_facts', columnCompleteness: 'complete', columns: [{ name: 'game_id', dataType: 'NUMBER' }, { name: 'team_won', dataType: 'BOOLEAN' }] }] });
+  const said = 'Playoff games the Warriors won in 2016 (the project has no playoff flag, so the playoff restriction cannot be applied).';
+  const provider: AgentProvider = { name: 'ollama', available: async () => true, generate: async () => JSON.stringify({ version: 1, kind: 'analytics', reading: said, measures: [{ ref: 'column:nba.team_game_facts.team_won', aggregation: 'sum' }], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'scalar' }) };
+  const run = (proof: string[]) => runAskPipeline({ question: 'How many playoff games did the Warriors win in 2016?', vocabulary, provider, explorationAuto: true, clauseCoverage: false, prepareDeps: { draftSql: async () => ({ sql: "SELECT SUM(CASE WHEN team_won THEN 1 ELSE 0 END) AS playoff_wins FROM nba.team_game_facts WHERE CAST(game_id AS VARCHAR) LIKE '4%'", relations: ['nba.team_game_facts'], proof }) }, executeDeps: { run: async () => ({ columns: ['playoff_wins'], rows: [{ playoff_wins: 16 }], rowCount: 1, executionTimeMs: 1 }) } });
+
+  it('a reading the host corrected is the one the answer and the receipt carry', async () => {
+    const outcome = await run(['reading: Playoff games the Warriors won in 2016', 'caveat: it counts only playoff games (GAME_ID starting with 4)']);
+    expect(outcome.kind).toBe('answered');
+    expect(outcome.text).toContain('I read this as: Playoff games the Warriors won in 2016.');
+    expect(outcome.text).not.toContain('cannot be applied');
+    expect(outcome.text).toContain('it counts only playoff games (GAME_ID starting with 4)');
+    expect(outcome.receipt.reading).toBe('Playoff games the Warriors won in 2016');
+  });
+
+  it('without a correction the reading stands as read', async () => {
+    const outcome = await run([]);
+    expect(outcome.kind).toBe('answered');
+    expect(outcome.receipt.reading).toBe(said);
+  });
+
+  it('a margin is a percentage only when its values are fractions', () => {
+    const make = (alias: string) => parseIntent({ version: 1, kind: 'analytics', reading: 'x', measures: [{ derived: { kind: 'ratio', numerator: 'column:nba.team_game_facts.game_id', denominator: 'column:nba.team_game_facts.game_id' }, alias }], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'scalar' }).intent!;
+    expect(describeResultColumns(make('winning_margin'), { columns: ['WINNING_MARGIN'], rows: [{ WINNING_MARGIN: 73 }] }, vocabulary)[0]).toMatchObject({ kind: 'number' });
+    expect(formatValue(73, describeResultColumns(make('winning_margin'), { columns: ['WINNING_MARGIN'], rows: [{ WINNING_MARGIN: 73 }] }, vocabulary)[0])).toBe('73');
+    expect(describeResultColumns(make('gross_margin'), { columns: ['gross_margin'], rows: [{ gross_margin: 0.23 }] }, vocabulary)[0]).toMatchObject({ kind: 'percent', unit: 'fraction' });
+    expect(describeResultColumns(make('win_pct'), { columns: ['win_pct'], rows: [{ win_pct: 0.61 }] }, vocabulary)[0]).toMatchObject({ kind: 'percent', unit: 'fraction' });
+  });
+});
