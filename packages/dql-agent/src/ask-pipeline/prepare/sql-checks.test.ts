@@ -137,6 +137,17 @@ describe('the checks an AI-drafted statement passes before it runs', () => {
     expect(aggregatesRows('SELECT a FROM t')).toBe(false);
   });
 
+  it('adds no row guard to a statement that returns one row: saved, it read as a Top 501 (V8 B5)', () => {
+    const wins = "SELECT COUNT(*) AS wins FROM nba.team_games WHERE team = 'GSW' AND game_id LIKE '2%';";
+    expect(withRowGuard(wins, 501)).toBe(wins.replace(/;$/, ''));
+    expect(withRowGuard('WITH g AS (SELECT * FROM t GROUP BY a) SELECT ROUND(SUM(x) / COUNT(*), 2) AS avg_x FROM g', 501)).not.toMatch(/LIMIT/);
+    // One row per group, a window, a union and a scalar subquery per row still get it.
+    expect(withRowGuard('SELECT team, COUNT(*) FROM t GROUP BY team', 501)).toMatch(/LIMIT 501$/);
+    expect(withRowGuard('SELECT a, SUM(x) OVER () FROM t', 501)).toMatch(/LIMIT 501$/);
+    expect(withRowGuard('SELECT COUNT(*) FROM a UNION ALL SELECT COUNT(*) FROM b', 501)).toMatch(/LIMIT 501$/);
+    expect(withRowGuard('SELECT a, (SELECT MAX(x) FROM u) AS top FROM t', 501)).toMatch(/LIMIT 501$/);
+  });
+
   it('a column of the one side summed across a join that repeats its key is found; a distinct count and the many side are not', () => {
     const sql = 'SELECT SUM(oi.product_price) - SUM(o.order_cost) AS profit FROM dev.order_items oi JOIN dev.orders o ON oi.order_id = o.order_id';
     expect(joinKeyPairs(sql)[0]).toMatchObject({ left: { relation: 'dev.order_items', column: 'order_id', qualifier: 'oi' }, right: { relation: 'dev.orders', column: 'order_id', qualifier: 'o' } });

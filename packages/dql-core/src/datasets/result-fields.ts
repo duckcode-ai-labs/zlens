@@ -349,7 +349,8 @@ export function topRowsOnlyMessage(savedQuery: string, rows: number): string {
 /**
  * N when a saved query keeps only its first N rows: an outermost `LIMIT N`
  * or `FETCH FIRST N ROWS ONLY`. A limit inside a subquery or CTE is not the
- * result's limit and is ignored.
+ * result's limit and is ignored, and so is a limit on a statement that returns
+ * one row by construction (`SELECT COUNT(*) … LIMIT 501`): it keeps every row.
  */
 export function savedQueryKeepsFirstRows(sql: string | undefined): number | undefined {
   if (!sql?.trim()) return undefined;
@@ -366,5 +367,114 @@ export function savedQueryKeepsFirstRows(sql: string | undefined): number | unde
   }
   const match = outer.match(/\blimit\s+(\d+)\b/i) ?? outer.match(/\bfetch\s+(?:first|next)\s+(\d+)\s+rows?\s+only\b/i);
   const rows = match ? Number(match[1]) : NaN;
-  return Number.isSafeInteger(rows) && rows > 0 ? rows : undefined;
+  if (!Number.isSafeInteger(rows) || rows <= 0) return undefined;
+  return sqlReturnsOneRow(sql) ? undefined : rows;
+}
+
+/** Aggregate functions: with no GROUP BY, a select list that uses one returns one row. */
+const ONE_ROW_AGGREGATES = new Set([
+  'count', 'count_if', 'countif', 'sum', 'sum_if', 'avg', 'avg_if', 'min', 'max', 'median', 'mode',
+  'stddev', 'stddev_samp', 'stddev_pop', 'variance', 'var_samp', 'var_pop', 'corr', 'covar_samp', 'covar_pop',
+  'any_value', 'arbitrary', 'approx_count_distinct', 'approx_distinct', 'bool_and', 'bool_or', 'booland_agg', 'boolor_agg',
+  'every', 'listagg', 'string_agg', 'group_concat', 'array_agg', 'percentile_cont', 'percentile_disc', 'quantile',
+  'quantile_cont', 'quantile_disc', 'approx_percentile', 'approx_quantile', 'hll', 'kurtosis', 'skewness',
+]);
+
+/** Index of the `)` that closes the `(` at `open`, or -1. */
+function closingParen(text: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+/** A select list with every scalar subquery (`(SELECT …)`) replaced by a placeholder. */
+function withoutSubqueries(list: string): string {
+  let out = '';
+  let index = 0;
+  while (index < list.length) {
+    if (list[index] === '(' && /^\(\s*(?:select|with)\b/i.test(list.slice(index))) {
+      const close = closingParen(list, index);
+      if (close < 0) return out;
+      out += ' 0 ';
+      index = close + 1;
+      continue;
+    }
+    out += list[index];
+    index += 1;
+  }
+  return out;
+}
+
+/** Whether a select list calls an aggregate that is not a window function (`SUM(x) OVER (…)`). */
+function selectsAnAggregate(list: string): boolean {
+  const text = withoutSubqueries(list);
+  for (const call of text.matchAll(/\b([A-Za-z_][\w$]*)\s*\(/g)) {
+    if (!ONE_ROW_AGGREGATES.has(call[1]!.toLowerCase())) continue;
+    const open = call.index! + call[0].length - 1;
+    const close = closingParen(text, open);
+    if (close < 0) return false;
+    let rest = text.slice(close + 1);
+    // `WITHIN GROUP (ORDER BY …)` and `FILTER (WHERE …)` still belong to the aggregate.
+    for (const clause of [/^\s*within\s+group\s*\(/i, /^\s*filter\s*\(/i]) {
+      const found = clause.exec(rest);
+      if (!found) continue;
+      const end = closingParen(rest, found[0].length - 1);
+      rest = end < 0 ? '' : rest.slice(end + 1);
+    }
+    if (/^\s*over\b/i.test(rest)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a statement returns at most one row by construction: its outermost
+ * SELECT aggregates (`COUNT(*)`, `SUM(x)`…) with no GROUP BY, and nothing
+ * unions more rows onto it. A row limit on such a statement keeps every row,
+ * so it is neither a guard worth adding nor a Top N. Best effort: anything
+ * this cannot read is reported as not one row.
+ */
+export function sqlReturnsOneRow(sql: string | undefined): boolean {
+  if (!sql?.trim()) return false;
+  const scan = sql
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/'(?:[^']|'')*'/g, "''")
+    .trim()
+    .replace(/;\s*$/, '');
+  if (scan.includes(';')) return false;
+  // The statement at its own level: what parentheses hold is left out, but a
+  // `()` marks where they were, and `positions` maps each character back.
+  let depth = 0;
+  let outer = '';
+  const positions: number[] = [];
+  for (let index = 0; index < scan.length; index += 1) {
+    const char = scan[index]!;
+    if (char === '(') {
+      if (depth === 0) { outer += char; positions.push(index); }
+      depth += 1;
+    } else if (char === ')') {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) { outer += char; positions.push(index); }
+    } else if (depth === 0) {
+      outer += char;
+      positions.push(index);
+    }
+  }
+  if (/\b(?:union|intersect|except|minus)\b/i.test(outer)) return false;
+  const select = [...outer.matchAll(/\bselect\b/gi)].pop();
+  if (!select) return false;
+  const tail = outer.slice(select.index! + select[0].length);
+  if (/\bgroup\s+by\b/i.test(tail)) return false;
+  const from = /\bfrom\b/i.exec(tail);
+  const start = positions[select.index! + select[0].length] ?? scan.length;
+  const end = from ? positions[select.index! + select[0].length + from.index] ?? scan.length : scan.length;
+  return selectsAnAggregate(scan.slice(start, end));
 }

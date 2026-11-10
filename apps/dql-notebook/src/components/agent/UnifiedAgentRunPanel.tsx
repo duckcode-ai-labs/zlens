@@ -221,6 +221,8 @@ interface AgentBlockSave {
   source: string;
   name: string;
   dqlArtifact?: AgentConversationDqlArtifact;
+  /** The question AI answered: the saved query keeps it, so Certify asks for a review. */
+  question?: string;
 }
 
 const ACTIVE_RUNS_STORAGE_KEY = 'dql.agent.active-runs.v1';
@@ -1124,6 +1126,7 @@ export function UnifiedAgentRunPanel({
         source,
         name: dqlArtifact?.name ?? `${run.question.slice(0, 48).trim() || 'saved_answer'}`,
         dqlArtifact,
+        question: run.question,
       });
       return;
     }
@@ -1259,6 +1262,7 @@ export function UnifiedAgentRunPanel({
             } satisfies Cell}
             initialContent={blockToSave.source}
             initialName={blockToSave.name}
+            aiQuestion={blockToSave.question}
             onClose={() => setBlockToSave(null)}
             onSaved={() => setBlockToSave(null)}
           />
@@ -1432,6 +1436,7 @@ export function UnifiedAgentRunPanel({
           } satisfies Cell}
           initialContent={blockToSave.source}
           initialName={blockToSave.name}
+          aiQuestion={blockToSave.question}
           onClose={() => setBlockToSave(null)}
           onSaved={() => setBlockToSave(null)}
         />

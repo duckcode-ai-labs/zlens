@@ -81,6 +81,8 @@ export interface SavedQueryCertifyReview {
   row?: string;
   blockers: string[];
   checks: string[];
+  /** AI wrote its SQL: vouching for it says you reviewed it. */
+  aiWritten?: string;
 }
 
 /** A join's short review before "I vouch for this join — certify" (T4). */
@@ -5337,6 +5339,8 @@ export const api = {
     expectedSourceFingerprint?: string;
     clientRevision: string;
     idempotencyKey: string;
+    /** The person said they reviewed what AI wrote ("I reviewed it — certify"). */
+    aiReviewed?: boolean;
   }): Promise<{
     operation: LocalOperation<BlockCertificationOperationResult>;
     draft: BlockStudioOpenPayload;
@@ -5351,6 +5355,7 @@ export const api = {
         metadata: payload.metadata,
         expectedSourceFingerprint: payload.expectedSourceFingerprint,
         clientRevision: payload.clientRevision,
+        ...(payload.aiReviewed ? { aiReviewed: true } : {}),
       }),
     });
   },
@@ -6697,6 +6702,8 @@ export const api = {
     reviewRequired?: boolean;
     datasetRefs?: Cell["datasetRefs"];
     lineage?: Record<string, unknown>;
+    /** The question Ask answered when AI wrote the content (written as `source_question`). */
+    sourceQuestion?: string;
   }): Promise<{
     path: string;
     content: string;

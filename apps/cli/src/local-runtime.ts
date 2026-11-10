@@ -13648,6 +13648,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       enterprise?: boolean;
       reportProgress?: (progress: { phase: string; progress: number; message: string }) => void;
       timer?: PhaseTimer;
+      /** A person said they reviewed the AI-written source; required to certify a block AI wrote. */
+      aiReviewed?: boolean;
     } = {},
   ) => {
     const timer = options.timer ?? createPhaseTimer();
@@ -13759,6 +13761,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       testResults,
       certificationErrors: certification.errors,
       extraBlockers: blockers,
+      aiReviewed: options.aiReviewed === true,
     });
     return {
       certification,
@@ -22469,6 +22472,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             ...(parsedBlock.grain ? { grain: parsedBlock.grain } : {}),
             dimensions: parsedBlock.dimensions ?? [],
             keyFields: descriptor?.grain.keyFields ?? [],
+            aiWritten: blockHasGeneratedOrigin(blockSource),
           });
         };
         if (reviewing) {
@@ -22479,7 +22483,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             ? await (async () => {
               const blockSource = readFileSync(savedQueryFile, 'utf-8');
               const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
-              return savedQueryReviewOf(blockSource, await certifyBlockStudioSource(blockSource, blockPath, { enterprise }));
+              // "I vouch for this — certify" is the review of what AI wrote, so it is not a blocker here.
+              return savedQueryReviewOf(blockSource, await certifyBlockStudioSource(blockSource, blockPath, { enterprise, aiReviewed: true }));
             })()
             : undefined;
           const formatNotes = (check?.checks ?? [])
@@ -22561,7 +22566,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           }
           const candidate = declaredOwner ? onDisk : withBlockOwner(onDisk, requestedOwner);
           const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
-          const verdict = await certifyBlockStudioSource(candidate, blockPath, { enterprise });
+          // The person clicked "I vouch for this — certify" after a review that said AI wrote it.
+          const verdict = await certifyBlockStudioSource(candidate, blockPath, { enterprise, aiReviewed: true });
           const review = savedQueryReviewOf(candidate, verdict);
           const blockers = Array.from(new Set(verdict.checklist.blockers));
           if (!verdict.certification.certified || blockers.length > 0) {
@@ -27759,7 +27765,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           reviewRequired,
           datasetRefs,
           lineage,
+          sourceQuestion,
         } = body as {
+          sourceQuestion?: string;
           name: string;
           domain?: string;
           owner?: string;
@@ -27822,6 +27830,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // rules run read-only so the answer can say whether the draft is ready
         // for the explicit Certify action in Block Studio, and what blocks it.
         setBlockStudioStatus(projectRoot, created.path, "draft");
+        // An Ask answer saved here keeps the question AI answered, so Certify
+        // knows AI wrote it and asks for an explicit review (V8). Saving it is
+        // the person's reuse decision, as a Block Studio save is: the draft
+        // stays an App source, and certifying takes the marker off again.
+        const askedQuestion = typeof sourceQuestion === 'string' ? sourceQuestion.replace(/[\r\n]+/g, ' ').trim().slice(0, 500) : '';
+        if (askedQuestion) {
+          const createdAbsolute = join(projectRoot, created.path);
+          const written = readFileSync(createdAbsolute, "utf-8");
+          if (!/\bsource_question\s*=/.test(written)) {
+            const withQuestion = written.replace(/(\bblock\s+"[^"]*"\s*\{)/, `$1\n  source_question = "${escapeDqlString(askedQuestion)}"`);
+            writeFileSync(createdAbsolute, markBlockStudioSourceReusable(withQuestion), "utf-8");
+          }
+        }
         const source = readFileSync(join(projectRoot, created.path), "utf-8");
         const status = "draft" as const;
         let blockers: string[] = reviewRequired
@@ -28594,6 +28615,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         operationCoordinator.run(operation.id, async (signal, report) => {
           const result = await certifyBlockStudioSource(draftSource, draftPath, {
             enterprise: certificationEnterprise,
+            aiReviewed: body.aiReviewed === true,
             reportProgress: (progress) => {
               if (signal.aborted) throw Object.assign(new Error('Certification cancelled.'), { code: 'OPERATION_CANCELLED' });
               report(progress);
@@ -28623,7 +28645,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
           report({ phase: 'publishing', progress: 82, message: 'Publishing the certified saved query.' });
           const publishedDraftSource = certifiedBesideDraft ? stripDraftEditName(draftSource) : draftSource;
-          const certifiedSource = setBlockStudioStatusInSource(withoutAskOriginReuseTag(publishedDraftSource), 'certified');
+          // Certifying never adds the app-source marker the draft save stamped (V8).
+          const certifiedSource = setBlockStudioStatusInSource(certifiedWithoutAddedReuseTag(publishedDraftSource, source), 'certified');
           const certifiedMetadata = parseBlockSourceMetadata(certifiedSource);
           const savedPath = saveBlockStudioArtifacts(projectRoot, {
             currentPath: canonicalPath ?? draftPath,
@@ -28818,7 +28841,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // AI-filled advisory warnings, not hard blockers. Enterprise-grade certification
         // (all of those required) is an opt-in for the cloud tier — request it explicitly.
         const certificationEnterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : body.enterprise === true;
-        const result = await certifyBlockStudioSource(source, blockPath, { enterprise: certificationEnterprise, timer });
+        const result = await certifyBlockStudioSource(source, blockPath, { enterprise: certificationEnterprise, timer, aiReviewed: body.aiReviewed === true });
         const blockers = Array.from(new Set(result.checklist.blockers));
         if (!result.certification.certified || blockers.length > 0) {
           if (blockPath && result.preview) writeBlockStudioRunSummary(projectRoot, blockPath, source, result.preview.result);
@@ -43653,7 +43676,7 @@ type BlockStudioDiagnostic = {
   references?: string[];
   correction?: string;
   technicalDetails?: string;
-  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description' | 'fill_certification_fields';
+  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description' | 'fill_certification_fields' | 'confirm_ai_review';
   /** For `fix_description`: the description the one-click fix would write. */
   suggestedDescription?: string;
   location?: { line?: number; column?: number };
@@ -46156,9 +46179,20 @@ export function markBlockStudioSourceReusable(source: string): string {
 export function withoutAskOriginReuseTag(source: string): string {
   const parsed = parseBlockSourceMetadata(source);
   if (!parsed.tags.some((tag) => tag.trim().toLowerCase() === APP_SOURCE_REUSABLE_TAG)) return source;
+  if (!blockHasGeneratedOrigin(source)) return source;
+  return withoutReuseTag(source);
+}
+
+/**
+ * Whether AI wrote a block's source: Ask, an agent or notebook research left
+ * their origin on it (the question it answered, or a generated tag). Such a
+ * block certifies only once a person says they reviewed it.
+ */
+export function blockHasGeneratedOrigin(source: string): boolean {
+  const parsed = parseBlockSourceMetadata(source);
   const field = (key: string) => source.match(new RegExp(`\\b${key}\\s*=\\s*"([^"]*)"`))?.[1];
   const askedTimes = source.match(/\basked_times\s*=\s*(\d+)/)?.[1];
-  const generated = hasGeneratedAppSourceOrigin({
+  return hasGeneratedAppSourceOrigin({
     tags: parsed.tags,
     draftMetadata: {
       sourceQuestion: field('source_question'),
@@ -46169,7 +46203,24 @@ export function withoutAskOriginReuseTag(source: string): string {
       ...(askedTimes ? { askedTimes: Number(askedTimes) } : {}),
     },
   });
-  if (!generated) return source;
+}
+
+/**
+ * A certified source without the `app-source` marker that ZLens itself adds
+ * on save. A certified saved query is an App source because it is certified
+ * (docs: "it carries no app-source tag"), so certifying never adds it: the
+ * marker stays only when the source the person certified already carried it.
+ */
+export function certifiedWithoutAddedReuseTag(certifiedSource: string, submittedSource: string): string {
+  const submittedTags = parseBlockSourceMetadata(submittedSource).tags;
+  const hadIt = submittedTags.some((tag) => tag.trim().toLowerCase() === APP_SOURCE_REUSABLE_TAG);
+  return hadIt ? withoutAskOriginReuseTag(certifiedSource) : withoutReuseTag(certifiedSource);
+}
+
+/** A source with the `app-source` marker taken out of its tags. */
+function withoutReuseTag(source: string): string {
+  const parsed = parseBlockSourceMetadata(source);
+  if (!parsed.tags.some((tag) => tag.trim().toLowerCase() === APP_SOURCE_REUSABLE_TAG)) return source;
   const remaining = parsed.tags.filter((tag) => tag.trim().toLowerCase() !== APP_SOURCE_REUSABLE_TAG);
   if (remaining.length === 0) return source.replace(/^[ \t]*tags\s*=\s*\[[^\]]*\][ \t]*\r?\n/im, '');
   return source.replace(/\btags\s*=\s*\[[\s\S]*?\]/i, `tags = [${remaining.map((tag) => JSON.stringify(tag)).join(', ')}]`);
@@ -46236,6 +46287,8 @@ function buildBlockStudioCertificationChecklist(input: {
   testResults: TestResultSummary | null;
   certificationErrors: Array<{ rule: string; message: string }>;
   extraBlockers?: string[];
+  /** A person said they reviewed the AI-written source (Block Studio's "I reviewed it", an App's "I vouch for this"). */
+  aiReviewed?: boolean;
 }) {
   const parsed = parseBlockSourceMetadata(input.source);
   const sql = extractBlockStudioSql(input.source) ?? '';
@@ -46351,6 +46404,20 @@ function buildBlockStudioCertificationChecklist(input: {
       action: 'edit_source',
     });
   }
+  // AI wrote it (Ask, an agent, notebook research): certifying says a person
+  // checked it, so that takes an explicit "I reviewed it", never a default.
+  const aiReviewed = !blockHasGeneratedOrigin(input.source) || input.aiReviewed === true;
+  if (!aiReviewed) {
+    issues.push({
+      severity: 'error',
+      code: 'ai_review_required',
+      title: 'Confirm you reviewed what AI wrote',
+      field: 'Review',
+      message: 'AI wrote this saved query. Read its SQL and its result, then confirm you reviewed them before certifying.',
+      correction: 'Check the SQL and the rows it returns, then click "I reviewed it — certify".',
+      action: 'confirm_ai_review',
+    });
+  }
   const uniqueIssues = issues.filter((issue, index, all) => all.findIndex((candidate) => (
     candidate.code === issue.code
     && candidate.message === issue.message
@@ -46366,7 +46433,7 @@ function buildBlockStudioCertificationChecklist(input: {
     tests: Boolean(input.testResults && input.testResults.failed === 0 && input.testResults.assertions.length > 0),
     chart: Boolean(input.validation.chartConfig?.chart),
     lineage: extractSqlTablesLight(sql).length > 0 || input.validation.semanticRefs.metrics.length > 0,
-    aiReviewed: true,
+    aiReviewed,
     blockers: uniqueIssues.map((issue) => issue.message),
     issues: uniqueIssues,
     checkedAt: new Date().toISOString(),

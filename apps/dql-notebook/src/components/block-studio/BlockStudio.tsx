@@ -1134,7 +1134,7 @@ export function BlockStudio() {
     }
   };
 
-  const handleCertify = async (override?: { source: string; metadata: BlockStudioMetadata }): Promise<boolean> => {
+  const handleCertify = async (override?: { source?: string; metadata?: BlockStudioMetadata; aiReviewed?: boolean }): Promise<boolean> => {
     if (
       !state.blockStudioMetadata?.name.trim()
       || !state.blockStudioMetadata.owner.trim()
@@ -1152,7 +1152,7 @@ export function BlockStudio() {
       setCertificationResult(null);
       const draftToCertify = override?.source ?? state.blockStudioDraft;
       const metadataToCertify = override?.metadata ?? state.blockStudioMetadata;
-      const sourceToSave = state.blockStudioMetadata.reviewStatus === 'certified' && (state.blockStudioDirty || Boolean(override))
+      const sourceToSave = state.blockStudioMetadata.reviewStatus === 'certified' && (state.blockStudioDirty || Boolean(override?.source))
         ? setBlockStringField(draftToCertify, 'status', 'draft')
         : draftToCertify;
       const clientRevision = `${state.blockStudioMetadata.sourceFingerprint ?? 'new'}:${Date.now()}`;
@@ -1166,6 +1166,7 @@ export function BlockStudio() {
         expectedSourceFingerprint: state.blockStudioMetadata.sourceFingerprint,
         clientRevision,
         idempotencyKey,
+        ...(override?.aiReviewed ? { aiReviewed: true } : {}),
       });
       trackOperation(accepted.operation);
       setCertificationOperationId(accepted.operation.id);
@@ -2114,6 +2115,7 @@ export function BlockStudio() {
                   }}
                   onRun={() => void handleRun()}
                   onEditFields={() => setEditorMode('visual')}
+                  onConfirmAiReview={() => void handleCertify({ aiReviewed: true })}
                   onFix={(issue) => void (issue.action === 'fill_certification_fields'
                     ? handleFillCertificationFields()
                     : handleFixAndRun(issue.technicalDetails ?? issue.message, { requireCertificationReady: true }))}
@@ -3471,7 +3473,7 @@ export function BlockDetailView({
                   <CheckCircle2 size={13} color="var(--status-success)" strokeWidth={2} style={{ flexShrink: 0 }} />
                   <span style={{ fontFamily: t.fontMono, color: t.textSecondary }}>{test}</span>
                 </div>
-              )) : <span style={{ fontSize: 11.5, color: t.textMuted }}>No tests yet — add assertions in the builder before certification.</span>}
+              )) : <span style={{ fontSize: 11.5, color: t.textMuted }}>No tests yet. Tests are optional: add assertions in the builder to check the result each time it is certified.</span>}
             </div>
           </div>
           <div>
@@ -6690,6 +6692,7 @@ function CertificationChecklistPanel({
   onFix,
   onFixDescription,
   onEditFields,
+  onConfirmAiReview,
 }: {
   result: {
     ok?: boolean;
@@ -6728,6 +6731,8 @@ function CertificationChecklistPanel({
   onFix: (issue: BlockStudioDiagnostic) => void;
   onFixDescription?: (description: string) => void;
   onEditFields?: () => void;
+  /** "I reviewed it — certify": the explicit review of a saved query AI wrote. */
+  onConfirmAiReview?: () => void;
 }) {
   const checklist = result.checklist;
   const testsAreBlocking = Boolean(
@@ -6808,7 +6813,9 @@ function CertificationChecklistPanel({
                       ? 'Edit the description myself'
                       : issue.action === 'fill_certification_fields' && onEditFields
                         ? 'Open the Certification fields'
-                        : 'Edit source';
+                        : issue.action === 'confirm_ai_review'
+                          ? 'Edit the SQL'
+                          : 'Edit source';
             const handleAction = issue.action === 'review_metrics' || issue.action === 'configure_runtime'
               ? onReviewMetrics
               : issue.action === 'run_again'
@@ -6837,6 +6844,11 @@ function CertificationChecklistPanel({
                 <div style={{ fontSize: 11.5, lineHeight: 1.45, color: t.textSecondary }}>{issue.message}</div>
                 {issue.correction && <div style={{ fontSize: 11.5, lineHeight: 1.45, color: t.textPrimary }}><strong>How to fix:</strong> {issue.correction}</div>}
                 <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+                  {issue.action === 'confirm_ai_review' && onConfirmAiReview && (
+                    <button type="button" onClick={onConfirmAiReview} style={primaryImportButtonStyle(t)}>
+                      I reviewed it — certify
+                    </button>
+                  )}
                   {issue.action === 'fix_description' && issue.suggestedDescription && onFixDescription && (
                     <button type="button" onClick={() => onFixDescription(issue.suggestedDescription!)} style={primaryImportButtonStyle(t)}>
                       Remove "review required" from the description and certify

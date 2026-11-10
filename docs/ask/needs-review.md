@@ -45,7 +45,9 @@ certify first.
    **Details** box.
 4. Click **Certify**. If the draft has no Domain yet and your project has
    Domains, the saved query editor asks for one first: a Domain, or **Global /
-   cross-domain** for an answer that spans Domains.
+   cross-domain** for an answer that spans Domains. AI wrote the draft, so
+   Certify then asks you to confirm you reviewed it: click **I reviewed it —
+   certify**.
 
 When it passes, the saved query is **Certified** and is saved in its Domain under its
 name. A certified saved query is available to Apps because it is certified, so it
