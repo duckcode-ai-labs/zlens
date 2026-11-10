@@ -245,6 +245,27 @@ function probePredicate(relation: ProbeIdentifier): string {
  * only, a bounded predicate list, a row cap. It reads column names and types,
  * never row values, so it is a metadata point lookup rather than discovery.
  */
+
+/**
+ * The summary tables a statement reads that the model's rules say add up every kind of a code, as written by
+ * the warehouse draft ("<SUMMARY> adds up every row of <DETAIL>, every first character of <CODE> included: …").
+ */
+export function summaryKindsRead(
+  rules: Record<string, { localId?: string; id?: string; expression: string; status?: string }> | undefined,
+  relations: string[],
+): Array<{ summary: string; detail: string; code: string; rule: string }> {
+  const found: Array<{ summary: string; detail: string; code: string; rule: string }> = [];
+  for (const rule of Object.values(rules ?? {})) {
+    if (rule.status === 'deprecated') continue;
+    const match = /^([A-Za-z0-9_$."]+) adds up every row of ([A-Za-z0-9_$."]+), every first character of ([A-Za-z0-9_$"]+) included/.exec(rule.expression.trim());
+    if (!match) continue;
+    const summary = match[1]!.replace(/"/g, '');
+    if (!relations.some((relation) => sameTable(relation, summary, 'tail'))) continue;
+    found.push({ summary, detail: match[2]!.replace(/"/g, ''), code: match[3]!.replace(/"/g, ''), rule: rule.localId ?? rule.id ?? 'unnamed' });
+  }
+  return found;
+}
+
 export function relationColumnsProbeSql(relations: string[], maxRelations = 8, offset = 0, driver = 'snowflake', location?: string): string | undefined {
   const groups = new Map<string, ProbeIdentifier[]>();
   const seen = new Set<string>();
@@ -2952,6 +2973,11 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           unnamed = unnamedKeysOf(chosen.sql);
         }
         const applied = appliedConditions(chosen.sql);
+        // A SUMMARY THAT MIXES EVERY KIND IS SAID (new-user test B1, 2026-11-10). A table the model's rule says
+        // adds up every row of another, every kind of a code included, answers for all kinds together: "won the
+        // most regular season games" read from it counted preseason and playoffs too (91, not 73) under "checks
+        // passed". When the statement still reads one, the answer says so.
+        const mixedKinds = summaryKindsRead(deps.getManifest().manifest?.modeling?.rules, chosen.relations);
         // AI-DRAFTED WORDS ARE SAID, every time they stand behind an answer.
         // They help find a table; they change no trust label.
         const draftedWords = draftedMeaningRelations(deps.getManifest().manifest, deps.projectRoot)
@@ -2969,6 +2995,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(stated.length ? [`stated values applied: ${stated.map((item) => item.value).join(', ')}`] : []),
             ...(required.length ? [`required filters present: ${required.map((item) => item.text).join(', ')}`] : []),
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
+            ...mixedKinds.map((item) => `caveat: ${item.summary} adds up every row of ${item.detail}, every kind of ${item.code} included (model rule ${item.rule}), so this answer counts all of them; for one kind, ask for it by name`),
             ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
             ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),

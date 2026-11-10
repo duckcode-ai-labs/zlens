@@ -396,6 +396,7 @@ import {
   ConversationStore,
   advanceThreadStateAsync,
   loadConversationSnapshot,
+  readsAsNewQuestion,
   recallRelevantTurns,
   type ConversationStoreLike,
   type MemoryStoreLike,
@@ -746,6 +747,7 @@ import {
   getEffectiveProviderConfig,
   isProviderSettingsId,
   modelProviderAllowed,
+  allowedModelProviders,
   listProviderSettings,
   saveProviderSettings,
   type ProviderSettingsId,
@@ -1848,7 +1850,7 @@ const ASK_TRACE_GAP_SENTENCES: Record<string, string> = {
  * gap's own message quotes the question's literals and what the warehouse holds ("no stored value matches …", "2
  * customers share the name …"), so only the kind of gap is said.
  */
-export function askTraceReason(run: Pick<AgentRun, 'stopReason' | 'status' | 'artifacts' | 'evaluations'>, options: { values?: boolean } = {}): string {
+export function askTraceReason(run: Pick<AgentRun, 'stopReason' | 'status' | 'artifacts' | 'evaluations'> & { summary?: string }, options: { values?: boolean } = {}): string {
   const gap = traceAnswerProjection(run)?.gap as { message?: unknown; kind?: unknown } | undefined;
   const gapMessage = options.values === false
     ? (typeof gap?.kind === 'string' ? ASK_TRACE_GAP_SENTENCES[gap.kind] ?? '' : '')
@@ -1866,6 +1868,8 @@ export function askTraceReason(run: Pick<AgentRun, 'stopReason' | 'status' | 'ar
     blocked: 'Refused: no governed answer was available.',
   };
   if (gapMessage && (run.stopReason === 'blocked' || run.stopReason === 'needs_clarification')) return gapMessage;
+  // Out of time is not a refusal: nothing refused the question, it ran out of time (new-user test B3).
+  if (run.stopReason === 'blocked' && /reached its time limit|more time than Ask allows/.test(run.summary ?? '')) return 'Stopped: reached the time limit before an answer.';
   return byStop[run.stopReason] ?? 'No reason was recorded.';
 }
 
@@ -1982,6 +1986,31 @@ export const EMBEDDING_MODEL_CATALOG = {
       description: 'English only and a little cheaper; finds fewer tables when they have no descriptions.' },
   ],
 } as const;
+
+/**
+ * The provider Ask runs on, for its time budget: the one saved in Settings, else the one the install chose by
+ * allowing only it. The ZLens app for Snowflake allows only Cortex (ZLENS_MODEL_PROVIDERS=cortex) and saves
+ * nothing, so reading the saved one alone left it on the base 45 s budget (new-user test B3, 2026-11-10).
+ */
+export function activeProviderForDeadline(projectRoot: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const saved = getActiveProvider(projectRoot);
+  if (saved) return saved;
+  const allowed = allowedModelProviders(env);
+  return allowed?.length === 1 ? allowed[0] : undefined;
+}
+
+/**
+ * How many times the base Ask budget a provider gets. A local model or a subscription CLI costs 10–90 s per
+ * call (×6). Claude through Snowflake Cortex answers through SQL (AI_COMPLETE) wherever Snowflake refuses its
+ * REST API: each call is a whole, unstreamed statement of 8–20 s, and a trend or vague question makes 4–6 of
+ * them (×4, three minutes). Other hosted APIs still pay real latency on large prompts (×2).
+ */
+export function deadlineScaleForProvider(provider: string | undefined): number {
+  if (provider === 'ollama' || provider === 'claude-code' || provider === 'codex') return 6;
+  if (provider === 'cortex') return 4;
+  if (provider === 'anthropic' || provider === 'openai' || provider === 'gemini' || provider === 'custom-openai') return 2;
+  return 1;
+}
 
 export function normalizeAgentRunDomain(value: unknown): string | undefined {
   const domain = agentRunString(value);
@@ -5443,13 +5472,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // one process; a leaked process-wide scale would couple them. Production
     // servers are one project per process, where this default belongs.
     if (process.env.VITEST) return;
-    const active = getActiveProvider(projectRoot);
-    const slowLocalOrCli = active === 'ollama' || active === 'claude-code' || active === 'codex';
-    // Hosted APIs still pay real latency on large-repo analyst prompts
-    // (extended thinking, 80-candidate workspaces), so they get headroom
-    // too — just less of it.
-    const hostedApi = active === 'anthropic' || active === 'openai' || active === 'gemini' || active === 'custom-openai' || active === 'cortex';
-    setProcessDefaultDeadlineScale(slowLocalOrCli ? 6 : hostedApi ? 2 : 1);
+    setProcessDefaultDeadlineScale(deadlineScaleForProvider(activeProviderForDeadline(projectRoot)));
   };
   syncDeadlineScaleToActiveProvider();
   // This opaque value lets the Ask browser cache distinguish a newly started
@@ -7889,6 +7912,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     priorIntent: async (request) => {
       const store = getConversationStore();
       if (!store || !request.threadId) return undefined;
+      // A NEW QUESTION IS NOT AN EDIT (new-user test B2, 2026-11-10). A whole question that does not point back
+      // is read on its own, as it would be in a fresh chat, unless the thread's topic tracker finds it carries on
+      // the same topic. Binding every question to the previous reading made an unrelated question keep (or
+      // explicitly drop) each of the old reading's fields, and steered its SQL toward the old tables: "Which team
+      // won the most regular season games in 2015?" came back 91 (all game types) inside a chat, 73 in a new one.
+      const relation = agentRunString(agentRunRecord(request.conversationContext?.conversationEnvelope ?? request.conversationContext?.serverSnapshot)?.topicRelation);
+      if (readsAsNewQuestion(request.question) && relation !== 'continuation') return undefined;
       const turns = (await store.recentTurns(request.threadId, 6)).sort((a, b) => b.seq - a.seq);
       // A RE-ASK IS NOT AN EDIT. A question that repeats, word for word, the
       // question of an earlier turn is read the way that turn was read: with

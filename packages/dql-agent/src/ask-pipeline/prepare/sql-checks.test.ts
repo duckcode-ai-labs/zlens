@@ -104,6 +104,17 @@ describe('the checks an AI-drafted statement passes before it runs', () => {
     expect(statedValues(question).map((item) => item.value)).toEqual(['Mumbai', 'Indians']);
   });
 
+  it('a name of several words is applied by any of its own words; separate names each still count', () => {
+    const stated = statedValues("What was the Golden State Warriors' win-loss record in each of the last 5 seasons?");
+    expect(stated.map((item) => [item.value, item.name])).toEqual([['Golden', 'Golden State Warriors'], ['State', 'Golden State Warriors'], ['Warriors', 'Golden State Warriors']]);
+    expect(missingStatedValues("SELECT season, SUM(won) FROM team_games WHERE team_nickname ILIKE '%warriors%' GROUP BY season", stated)).toEqual([]);
+    expect(missingStatedValues('SELECT season, SUM(won) FROM team_games GROUP BY season', stated).map((item) => item.value)).toEqual(['Golden', 'State', 'Warriors']);
+    // Names parted by a comma or a word are separate: each one is still required.
+    const several = statedValues('Sales for Acme, Contoso and Fabrikam');
+    expect(several.every((item) => item.name === undefined)).toBe(true);
+    expect(missingStatedValues("SELECT * FROM s WHERE c IN ('Acme', 'Contoso')", several).map((item) => item.value)).toEqual(['Fabrikam']);
+  });
+
   it('a ref the reading put where a value goes is a field, not a value the SQL must spell', () => {
     const intent = { version: 1, kind: 'analytics', reading: 'x', measures: [], groupBy: [], display: [], filters: [{ ref: 'column:main.match.team_1', op: 'eq', values: ['column:main.match.match_winner'], source: 'question' }], unresolved: [], provenance: {}, expectedShape: 'grouped' } as never;
     expect(statedValues('which team won', intent)).toEqual([]);

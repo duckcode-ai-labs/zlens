@@ -1137,12 +1137,18 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     const exited = resolution.reason === 'provider_error' && resolution.code === 'provider_exit';
     const quota = resolution.reason === 'provider_error' && resolution.code === 'provider_quota';
     const authentication = resolution.reason === 'provider_error' && resolution.code === 'provider_auth';
+    // Out of time before the reading settled (the run's own deadline, not the model's): say so plainly.
+    const outOfTime = resolution.reason === 'provider_error' && /run deadline|RUN_DEADLINE_INSUFFICIENT/i.test(resolution.detail);
     const message = timedOut ? 'the AI model took too long to read the question; retry the same question'
+      : outOfTime ? 'this question needed more time than Ask allows; retry it, or ask a narrower question (one team, one season, one measure)'
       : exited ? 'the AI model exited before answering; retry the same question'
       : quota ? `the AI model's usage limit is reached; wait for it to reset or switch the provider (${resolution.detail})`
       : authentication ? `the AI model needs authentication; reauthenticate the configured provider and retry (${resolution.detail})`
-      : resolution.reason === 'provider_error' ? `the AI model did not respond (${resolution.detail})` : resolution.reason === 'unparseable' ? 'the AI reply was not a readable interpretation' : `the interpretation named things that do not exist: ${resolution.detail}`;
-    receipt.failure = { stage: 'resolve', reason: timedOut ? 'provider_timeout' : exited ? 'provider_exit' : quota ? 'provider_quota' : authentication ? 'provider_auth' : resolution.reason, message: timedOut || exited ? `${message} (${resolution.detail})` : message, problems: resolution.problems };
+      : resolution.reason === 'provider_error' ? `the AI model did not respond (${resolution.detail})` : resolution.reason === 'unparseable' ? 'the AI reply was not a readable interpretation'
+      // The validator's own words (field ids, provenance) are for the receipt, not the person asking.
+      : 'Ask could not match this question to the project\'s fields; rephrase it, or ask it in a new chat';
+    const detailed = timedOut || exited || outOfTime || (resolution.reason !== 'provider_error' && resolution.reason !== 'unparseable');
+    receipt.failure = { stage: 'resolve', reason: timedOut || outOfTime ? 'provider_timeout' : exited ? 'provider_exit' : quota ? 'provider_quota' : authentication ? 'provider_auth' : resolution.reason, message: detailed ? `${message} (${resolution.detail})` : message, problems: resolution.problems };
     return { kind: 'failed', stage: 'resolve', message, text: composeFailedText('resolve', message), receipt };
   }
   if (resolution.status === 'conversation' || resolution.status === 'definition') {
@@ -1427,7 +1433,15 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     // given the reading, never the "should we" wording it would decline.
     const drafted = await schemaLane(why, intent, { caveats: judgment, ...(operators.length > 0 ? { draftQuestion: intent.reading } : {}) });
     if (drafted) return drafted;
-    const message = open.length ? open.join('; ') : 'the AI could not write SQL that answers it from the tables it searched';
+    // A clause question is written for the person; a validator problem names field ids and provenance, so it
+    // goes on the receipt and the person reads one sentence (new-user test B2: "keep it (provenance
+    // \"inherited\") or list it as \"removed:<why>\"" was shown as the answer).
+    const clauseQuestions = intent.unresolved.filter((clause) => clause.material).map((clause) => clause.question ?? clause.clause);
+    const problems = resolution.status === 'resolved' ? resolution.problems : [];
+    if (problems.length > 0 && !receipt.failure) receipt.failure = { stage: 'resolve', reason: 'invalid', message: problems.map((problem) => problem.message).join('; '), problems };
+    const message = clauseQuestions.length ? clauseQuestions.join('; ')
+      : problems.length ? 'Ask could not match this question to the project\'s fields, and the AI could not write SQL for it; rephrase it, or ask it in a new chat'
+      : 'the AI could not write SQL that answers it from the tables it searched';
     return { kind: 'gap', gap: 'not_modeled', message, nearest: [], text: `No query was run: ${message.replace(/[.\s]+$/, '')}.`, receipt, intent, offerExploration: false };
   }
   // Whatever produced this reading — the interpreter, a follow-up edit, the
