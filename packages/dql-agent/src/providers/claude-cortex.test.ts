@@ -14,6 +14,11 @@ import {
   snowflakeKeyPairJwt,
   snowflakeKeyPairToken,
   snowflakeTokenFileToken,
+  cortexFailureInWords,
+  cortexSqlComplete,
+  isCortexRestRefusal,
+  messagesRequestAsPrompt,
+  resetCortexRoute,
 } from './claude-cortex.js';
 import { retiresSampling } from './claude.js';
 import { supportsReasoningEffort } from './reasoning-effort.js';
@@ -197,5 +202,84 @@ describe('Snowflake sign-in tokens', () => {
     expect(read).toHaveBeenCalledWith('/run/pat');
     const headers = (fetch.mock.calls[1] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
     expect(headers).toMatchObject({ authorization: 'Bearer pat-from-file', 'x-snowflake-authorization-token-type': 'PROGRAMMATIC_ACCESS_TOKEN' });
+  });
+});
+
+describe('when Snowflake refuses the Cortex REST API', () => {
+  const refused = () => new Response(JSON.stringify({ code: '003001', message: 'This account is not allowed to access this endpoint. Please contact Snowflake support.', request_id: 'r1', error_code: '003001' }), { status: 403 });
+  const answer = (text: string) => [{ R: JSON.stringify({ choices: [{ messages: text }], usage: { prompt_tokens: 40, completion_tokens: 6 } }) }];
+  afterEach(() => resetCortexRoute());
+
+  it('tells a refusal of the endpoint from any other 403', () => {
+    expect(isCortexRestRefusal(403, '{"code":"003001","message":"This account is not allowed to access this endpoint."}')).toBe(true);
+    expect(isCortexRestRefusal(403, '{"message":"Insufficient privileges"}')).toBe(false);
+    expect(isCortexRestRefusal(400, '003001')).toBe(false);
+  });
+
+  it('turns a Messages request into the one text AI_COMPLETE takes', () => {
+    expect(messagesRequestAsPrompt({ system: 'Answer in JSON.', messages: [{ role: 'user', content: 'What is 17 + 25?' }] })).toBe('Answer in JSON.\n\nWhat is 17 + 25?');
+    expect(messagesRequestAsPrompt({ messages: [{ role: 'user', content: 'Hi' }, { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] }, { role: 'user', content: 'Total?' }] }))
+      .toBe('User:\nHi\n\nAssistant:\nHello\n\nUser:\nTotal?');
+  });
+
+  it('answers through AI_COMPLETE on the same connection, then stays on SQL until it tries REST again', async () => {
+    const fetch = vi.fn(async () => refused());
+    vi.stubGlobal('fetch', fetch);
+    const calls: Array<{ sql: string; binds: unknown[] }> = [];
+    const sql = async (statement: string, binds: unknown[]) => { calls.push({ sql: statement, binds }); return answer('{"answer": 42}'); };
+    const provider = new CortexClaudeProvider({ host: 'myorg-acct.snowflakecomputing.com', token: staticToken('t'), sql });
+    expect(provider.route()).toBe('rest');
+    expect(await provider.generate([{ role: 'system', content: 'JSON only.' }, { role: 'user', content: 'What is 17 + 25?' }], { maxTokens: 50 })).toBe('{"answer": 42}');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(calls[0]!.sql).toContain('AI_COMPLETE');
+    expect(calls[0]!.binds).toEqual([CORTEX_DEFAULT_MODEL, 'JSON only.\n\nWhat is 17 + 25?', JSON.stringify({ max_tokens: 50 })]);
+    expect(provider.route()).toBe('sql');
+    // Remembered: the next request does not try the refused endpoint first.
+    expect(await provider.generate([{ role: 'user', content: 'Again?' }], { maxTokens: 5 })).toBe('{"answer": 42}');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    resetCortexRoute('myorg-acct.snowflakecomputing.com');
+    expect(provider.route()).toBe('rest');
+  });
+
+  it('streams the SQL answer as Anthropic server-sent events, and refuses tool calls with a plain reason', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => refused()));
+    const provider = new CortexClaudeProvider({ host: 'h.snowflakecomputing.com', token: staticToken('t'), sql: async () => answer('Revenue rose 8%.') });
+    const deltas: string[] = [];
+    expect(await provider.generateStream([{ role: 'user', content: 'Why?' }], { maxTokens: 20 }, (delta) => deltas.push(delta))).toBe('Revenue rose 8%.');
+    expect(deltas.join('')).toBe('Revenue rose 8%.');
+    const tools = await cortexSqlComplete(async () => answer('x'), JSON.stringify({ model: 'm', tools: [{ name: 't' }], messages: [] }));
+    expect(tools.status).toBe(503);
+    expect(await tools.text()).toContain('tool calls have no route through Cortex SQL');
+  });
+
+  it('keeps other errors as they are, and reports a failed SQL call plainly', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"message":"Insufficient privileges"}', { status: 403 })));
+    const provider = new CortexClaudeProvider({ host: 'h2.snowflakecomputing.com', token: staticToken('t'), sql: async () => answer('never') });
+    await expect(provider.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5 })).rejects.toThrow('403');
+    expect(provider.route()).toBe('rest');
+    const failed = await cortexSqlComplete(async () => { throw new Error('Unknown function AI_COMPLETE'); }, JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'Q' }] }));
+    expect(failed.status).toBe(502);
+    expect(await failed.text()).toContain('Cortex through SQL failed: Unknown function AI_COMPLETE');
+  });
+
+  it('says what went wrong in plain words, keeping the HTTP status the diagnostics read', async () => {
+    const restOnly = 'claude: 403 {"code":"003001","message":"This account is not allowed to access this endpoint. Please contact Snowflake support."}';
+    expect(cortexFailureInWords(restOnly)).toBe('Snowflake refuses the Cortex REST API for this account (HTTP 403, error 003001). Ask Snowflake support to enable it.');
+    expect(cortexFailureInWords('claude: 403 {"code":"003001","message":"not allowed"}')).toContain('error 003001');
+    const sqlToo = 'claude: 502 {"type":"error","error":{"type":"api_error","message":"Cortex through SQL failed: Warehouse is suspended."}}';
+    expect(cortexFailureInWords(sqlToo)).toBe('Snowflake refuses the Cortex REST API for this account, and Cortex through SQL failed too: Warehouse is suspended (HTTP 502).');
+    const noGrant = 'claude: 502 {"type":"error","error":{"type":"api_error","message":"Cortex through SQL failed: SQL compilation error: Unknown function AI_COMPLETE"}}';
+    expect(cortexFailureInWords(noGrant)).toContain('grant it the SNOWFLAKE.CORTEX_USER database role');
+    expect(cortexFailureInWords(noGrant)).toContain('(HTTP 502)');
+    expect(cortexFailureInWords('claude: 400 {"message":"Model claude-x is not available in your region."}')).toContain('CORTEX_ENABLED_CROSS_REGION');
+    expect(cortexFailureInWords('claude: 503 {"type":"error","error":{"message":"Snowflake refuses the Cortex REST API for this account, and tool calls have no route through Cortex SQL."}}'))
+      .toContain('needs tool calls');
+    // Anything else stays as Snowflake said it.
+    expect(cortexFailureInWords('claude: 429 {"message":"Too many requests"}')).toBeUndefined();
+
+    // The provider throws the plain words, and a missing grant is named.
+    vi.stubGlobal('fetch', vi.fn(async () => refused()));
+    const provider = new CortexClaudeProvider({ host: 'h3.snowflakecomputing.com', token: staticToken('t'), sql: async () => { throw new Error('SQL compilation error: Unknown function AI_COMPLETE'); } });
+    await expect(provider.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5 })).rejects.toThrow(/cannot use Cortex.*CORTEX_USER.*HTTP 502/);
   });
 });

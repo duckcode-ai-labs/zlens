@@ -63,7 +63,9 @@ repository (`/<db>/<schema>/<repo>`).
    <n>`; in the provider's own account this works before the version is in any channel), repeat the
    checks of step 4 on it, then `DROP APPLICATION ZLENS_RELEASE_CHECK CASCADE`.
 
-7. **Release** it once its review is `APPROVED`:
+7. **Release** it once its review is `APPROVED`. A channel holds at most two versions: drop the
+   oldest first (`ALTER APPLICATION PACKAGE ZLENS MODIFY RELEASE CHANNEL DEFAULT DROP VERSION <old>;`,
+   once no directive names it).
 
    ```sql
    ALTER APPLICATION PACKAGE ZLENS MODIFY RELEASE CHANNEL DEFAULT ADD VERSION <n>;

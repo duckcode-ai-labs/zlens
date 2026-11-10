@@ -102,6 +102,12 @@ export function completeProviderHttpDispatch(input: {
  */
 export interface ProviderHttpTransport {
   prepare(input: { url: string; body: Record<string, unknown>; headers: Record<string, string> }): Promise<{ url: string; body: string; headers: Record<string, string> }>;
+  /**
+   * Sends the prepared request itself, in place of `fetch`, when the transport has a route of its
+   * own (Claude through Snowflake Cortex answers through SQL when the account refuses its REST API).
+   * It returns the provider's own response shape, so parsing, retries and accounting stay as they are.
+   */
+  send?(prepared: { url: string; body: string; headers: Record<string, string> }, init: Omit<RequestInit, 'body' | 'headers'>): Promise<Response>;
 }
 
 export async function fetchProviderHttpDispatch(input: {
@@ -119,11 +125,13 @@ export async function fetchProviderHttpDispatch(input: {
     const prepared = input.transport
       ? await input.transport.prepare({ url: input.url, body: dispatchedBody, headers: { ...(input.init.headers as Record<string, string> | undefined) } })
       : { url: input.url, body: JSON.stringify(dispatchedBody), headers: input.init.headers };
-    const response = await fetch(prepared.url, {
-      ...input.init,
-      headers: prepared.headers,
-      body: prepared.body,
-    });
+    const response = input.transport?.send
+      ? await input.transport.send(prepared as { url: string; body: string; headers: Record<string, string> }, input.init)
+      : await fetch(prepared.url, {
+        ...input.init,
+        headers: prepared.headers,
+        body: prepared.body,
+      });
     completeProviderHttpDispatch(input, {
       outcome: response.ok ? 'ok' : 'error',
       settlement: 'transport',

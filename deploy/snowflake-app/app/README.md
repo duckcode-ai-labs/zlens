@@ -30,6 +30,15 @@ and an extra-small warehouse for its queries. ZLens starts by itself. Then:
 5. **Open it:** *Launch app* on the app's page (it opens a new window), or
    `CALL ZLENS_APP.app_public.app_url();` for its address. It opens straight into the project.
 
+**ZLens sets itself up from your tables.** Once it has the database, ZLens reads every schema in it
+the app can see, then drafts the models (entities, their keys and the joins between them) from those
+tables. A strip at the top says so while it runs, in a minute or two, then points to the drafts in
+**Modeling**: nothing is saved until you review them. To read the tables again later (after new
+grants, say): **Settings » Database » Apply and synchronize**.
+
+**Ask with Claude** uses Snowflake Cortex. Where Snowflake refuses the Cortex REST API for the account,
+ZLens asks Cortex through SQL (`AI_COMPLETE`) instead; **Settings » AI » Test** says which one answers.
+
 Until steps 1 and 2 are done, whoever opens ZLens sees which of them is still missing. ZLens picks up
 changes within a minute, without a restart. Anyone but the named user is told the app is set up for
 one person.

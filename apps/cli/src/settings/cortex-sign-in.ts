@@ -1,10 +1,11 @@
-import { readSnowflakePrivateKey, readSnowflakeTokenFile, type ConnectionConfig } from '@zlens/connectors';
+import { readSnowflakePrivateKey, readSnowflakeTokenFile, type ConnectionConfig, type QueryExecutor } from '@zlens/connectors';
 import {
   CortexClaudeProvider,
   cortexBaseUrl,
   snowflakeHost,
   snowflakeKeyPairToken,
   snowflakeTokenFileToken,
+  type CortexSqlRunner,
   type CortexToken,
 } from '@zlens/agent';
 
@@ -134,6 +135,23 @@ function cortexToken(connection: ConnectionConfig): () => Promise<CortexToken> {
   return async () => ({ token: connection.password ?? '', type });
 }
 
+// Cortex's SQL route runs on the server's one query path (RFC 0010 HH-3): the server hands over its
+// executor when it starts. Without it (a one-shot CLI command) Cortex has the REST API only.
+let cortexSqlExecutor: Pick<QueryExecutor, 'executePositional'> | undefined;
+
+/** The server's executor, for Cortex through SQL (`AI_COMPLETE`) when Snowflake refuses the REST API. */
+export function useCortexSqlExecutor(executor: Pick<QueryExecutor, 'executePositional'> | undefined): void {
+  cortexSqlExecutor = executor;
+}
+
+/** Cortex through SQL (`AI_COMPLETE`) on the same connection: the route when Snowflake refuses the REST API. */
+function cortexSql(executor: Pick<QueryExecutor, 'executePositional'>, connection: ConnectionConfig): CortexSqlRunner {
+  return async (sql, binds) => {
+    const result = await executor.executePositional(sql, binds, connection);
+    return result.rows as Array<Record<string, unknown>>;
+  };
+}
+
 /**
  * Claude through Snowflake Cortex for this project, signed in with its Snowflake
  * connection. Throws the plain-sentence reason when Cortex cannot sign in.
@@ -146,6 +164,7 @@ export function createCortexProvider(projectRoot: string, options: { connection?
     host: snowflakeHost(found.connection)!,
     ...(options.model?.trim() ? { model: options.model.trim() } : {}),
     token: cortexToken(found.connection),
+    ...(cortexSqlExecutor ? { sql: cortexSql(cortexSqlExecutor, found.connection) } : {}),
   });
 }
 
