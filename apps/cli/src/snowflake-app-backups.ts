@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -66,7 +66,9 @@ export interface SnowflakeAppBackupsOptions {
 
 export const SNAPSHOT_PREFIX = 'ZLENS_BACKUP_';
 /** What a project export leaves out: what ZLens rebuilds by itself, and the drivers it installs. */
-const EXPORT_EXCLUDES = ['./.dql/cache', './.dql/connectors', './.dql/runtimes', './node_modules', './.git'];
+const EXPORT_EXCLUDES = ['./.dql/cache', './.dql/connectors', './.dql/runtimes', './node_modules', './.git', './.zlens-restore-*'];
+/** What a restore keeps: the drivers ZLens installed, which the copy leaves out. */
+const KEPT_IN_DQL = new Set(['connectors', 'runtimes']);
 const STATE_FILE = join('.dql', 'local', 'snowflake-app-backup.json');
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
@@ -264,18 +266,37 @@ export class SnowflakeAppBackups {
         await this.options.query(`GET @${stage}/${file} 'file://${dir}/'`);
         const archive = join(dir, file);
         if (!existsSync(archive)) throw new Error(`Snowflake did not return ${file}.`);
-        // Check the archive reads before anything is removed.
-        this.run('tar', ['-tzf', archive]);
+        // Unpack beside the project, on the same volume, and swap only once the whole copy is out: a copy that
+        // fails to unpack leaves the project as it was. (ZLens runs as a non-root user, so tar must not try to
+        // set times on folders it does not own: -m and --no-overwrite-dir.)
+        const staging = join(this.options.workspace, `.zlens-restore-${stamp(this.now())}`);
+        mkdirSync(staging, { recursive: true });
+        try {
+          this.run('tar', ['-xzf', archive, '-C', staging, '-m', '--no-same-owner', '--no-overwrite-dir']);
+        } catch (error) {
+          rmSync(staging, { recursive: true, force: true });
+          throw new Error(`The copy ${file} did not unpack; the project is unchanged. ${error instanceof Error ? error.message : String(error)}`);
+        }
         for (const name of readdirSync(this.options.workspace)) {
+          const path = join(this.options.workspace, name);
+          if (path === staging) continue;
           if (name === '.dql') {
-            for (const inner of readdirSync(join(this.options.workspace, '.dql'))) {
-              if (inner !== 'connectors' && inner !== 'runtimes') rmSync(join(this.options.workspace, '.dql', inner), { recursive: true, force: true });
+            for (const inner of readdirSync(path)) if (!KEPT_IN_DQL.has(inner)) rmSync(join(path, inner), { recursive: true, force: true });
+            continue;
+          }
+          rmSync(path, { recursive: true, force: true });
+        }
+        for (const name of readdirSync(staging)) {
+          if (name === '.dql') {
+            mkdirSync(join(this.options.workspace, '.dql'), { recursive: true });
+            for (const inner of readdirSync(join(staging, '.dql'))) {
+              if (!KEPT_IN_DQL.has(inner)) renameSync(join(staging, '.dql', inner), join(this.options.workspace, '.dql', inner));
             }
             continue;
           }
-          rmSync(join(this.options.workspace, name), { recursive: true, force: true });
+          renameSync(join(staging, name), join(this.options.workspace, name));
         }
-        this.run('tar', ['-xzf', archive, '-C', this.options.workspace]);
+        rmSync(staging, { recursive: true, force: true });
         this.writeState({ restoredFrom: file, restoredAt: this.now().toISOString() });
       } finally {
         rmSync(dir, { recursive: true, force: true });

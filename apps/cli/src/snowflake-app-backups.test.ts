@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -56,15 +56,18 @@ function fakeSnowflake(options: { stage?: string; snapshots?: Array<{ name: stri
 }
 
 /** tar as a list of what it was asked to do: -czf writes the archive, -xzf puts a restored project down. */
-function fakeTar() {
+function fakeTar(failUnpack = false) {
   const runs: string[][] = [];
   const run = (command: string, args: string[]) => {
     runs.push([command, ...args]);
     if (command === 'tar' && args[0] === '-czf') writeFileSync(args[1]!, 'tarball');
     if (command === 'tar' && args[0] === '-xzf') {
+      if (failUnpack) throw new Error('tar: Unexpected EOF in archive');
       const into = args[args.indexOf('-C') + 1]!;
       mkdirSync(join(into, 'domains'), { recursive: true });
       writeFileSync(join(into, 'domains', 'restored.dql'), 'restored');
+      mkdirSync(join(into, '.dql', 'local'), { recursive: true });
+      writeFileSync(join(into, '.dql', 'local', 'agent-runs.sqlite'), 'history');
     }
   };
   return { run, runs };
@@ -151,13 +154,29 @@ describe('backups of the ZLens app for Snowflake', () => {
     expect(backups.projectIsEmpty()).toBe(true);
     await expect(backups.restoreExport('../../etc/passwd')).rejects.toThrow('Not a ZLens backup');
     await backups.restoreExport('zlens-zlens_app-20261108_220000.tar.gz');
-    // The archive is checked before anything is removed.
-    expect(tar.runs.map((call) => call[1])).toEqual(['-tzf', '-xzf']);
+    // Unpacked beside the project first (never onto the volume's own folder), without setting folder times.
+    const unpack = tar.runs.find((call) => call[1] === '-xzf')!;
+    expect(unpack).toEqual(expect.arrayContaining(['-m', '--no-same-owner', '--no-overwrite-dir']));
+    expect(unpack[unpack.indexOf('-C') + 1]).toMatch(/\/\.zlens-restore-/);
     expect(existsSync(join(root, '.dql', 'connectors', 'driver.js'))).toBe(true);
     expect(existsSync(join(root, '.dql', 'local', 'drafts.json'))).toBe(false);
+    expect(readFileSync(join(root, '.dql', 'local', 'agent-runs.sqlite'), 'utf8')).toBe('history');
     expect(existsSync(join(root, 'dql.config.json'))).toBe(false);
     expect(readFileSync(join(root, 'domains', 'restored.dql'), 'utf8')).toBe('restored');
     expect(backups.projectIsEmpty()).toBe(false);
+  });
+
+  it('leaves the project as it was when the copy does not unpack', async () => {
+    const root = workspace();
+    mkdirSync(join(root, 'domains'), { recursive: true });
+    writeFileSync(join(root, 'domains', 'sales.dql'), 'mine');
+    writeFileSync(join(root, 'dql.config.json'), '{}');
+    const snowflake = fakeSnowflake({ stage: 'MY_DB.TOOLS.ZLENS_BACKUPS', files: ['zlens-zlens_app-20261108_220000.tar.gz'] });
+    const backups = new SnowflakeAppBackups({ service: 'ZLENS_APP.CORE.ZLENS', workspace: root, query: snowflake.query, run: fakeTar(true).run });
+    await expect(backups.restoreExport('zlens-zlens_app-20261108_220000.tar.gz')).rejects.toThrow('the project is unchanged');
+    expect(readFileSync(join(root, 'domains', 'sales.dql'), 'utf8')).toBe('mine');
+    expect(existsSync(join(root, 'dql.config.json'))).toBe(true);
+    expect(readdirSync(root).filter((name) => name.startsWith('.zlens-restore-'))).toEqual([]);
   });
 
   it('stays up when someone comes back while the backup before stopping runs', async () => {
