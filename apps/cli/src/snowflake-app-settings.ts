@@ -174,6 +174,7 @@ export class IdleSuspender {
   private inFlight = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private suspending = false;
+  private beforeSuspend: (() => Promise<void>) | undefined;
 
   constructor(
     private readonly idleMs: number,
@@ -201,10 +202,26 @@ export class IdleSuspender {
     return !this.suspending && this.inFlight === 0 && this.now() - this.lastActivity >= this.idleMs;
   }
 
+  /** Work to do just before stopping (the daily backup). Someone coming back meanwhile keeps ZLens running. */
+  onBeforeSuspend(work: () => Promise<void>): void {
+    this.beforeSuspend = work;
+  }
+
   async check(): Promise<boolean> {
     if (!this.due()) return false;
     this.suspending = true;
     try {
+      if (this.beforeSuspend) {
+        try {
+          await this.beforeSuspend();
+        } catch (error) {
+          console.warn(`[zlens] Before stopping: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        if (this.inFlight > 0 || this.now() - this.lastActivity < this.idleMs) {
+          this.suspending = false;
+          return false;
+        }
+      }
       await this.suspend();
       return true;
     } catch (error) {

@@ -66,6 +66,7 @@ import { resolveNpmInvocation } from './npm-runtime.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason } from './deployment-locks.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
 import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions } from './snowflake-app-settings.js';
+import { SnowflakeAppBackups } from './snowflake-app-backups.js';
 import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
 import {
   ensureDqlGitignore,
@@ -5493,6 +5494,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     })
     : undefined;
   idleSuspender?.start();
+  // Backups (approved design B1–B6): a daily snapshot of the volume and, when the admin named a stage, an export
+  // of the project to it, taken as ZLens stops for the day; after 30 hours of running, taken anyway.
+  let snowflakeBackupRunning = false;
+  const snowflakeBackups = idleSuspend
+    ? new SnowflakeAppBackups({ service: idleSuspend.service, workspace: projectRoot, query: snowflakeAppQuery })
+    : undefined;
+  if (snowflakeBackups && idleSuspender) {
+    const logDaily = (result: Awaited<ReturnType<SnowflakeAppBackups['daily']>>) => {
+      if (result.snapshot) console.log(`[zlens] Backed up this app's projects: ${result.snapshot.name}.`);
+      if (result.export) console.log(`[zlens] Copied the projects to the backup stage: ${result.export.file}.`);
+      if (result.error) console.warn(`[zlens] Backup failed: ${result.error}`);
+    };
+    idleSuspender.onBeforeSuspend(async () => { logDaily(await snowflakeBackups.daily(20)); });
+    const longRun = setInterval(() => { void snowflakeBackups.daily(30).then(logDaily); }, 60 * 60_000);
+    longRun.unref?.();
+  }
   const projectSnapshots = new ProjectSnapshotService<DQLManifest>();
   let meaningDraftJob: MeaningDraftJob | undefined;
   // Server-lifetime registry for exact compiler-owned SQL. The downstream DQL
@@ -15573,6 +15590,57 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       void runSnowflakeAppSetup(database, { again: true });
       res.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(serializeJSON({ managed: true, ...snowflakeAppSetup }));
+      return;
+    }
+
+    // Backups of the ZLens app for Snowflake: the list, Back up now, and restoring an export.
+    if (path === '/api/snowflake-app/backups' || path === '/api/snowflake-app/backups/restore-export') {
+      const send = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      if (!snowflakeBackups) { send(404, { managed: false, error: 'Backups are part of the ZLens app for Snowflake.' }); return; }
+      try {
+        if (req.method === 'GET' && path === '/api/snowflake-app/backups') {
+          send(200, { managed: true, running: snowflakeBackupRunning, projectIsEmpty: snowflakeBackups.projectIsEmpty(), ...(await snowflakeBackups.status()) });
+          return;
+        }
+        if (req.method === 'POST' && path === '/api/snowflake-app/backups') {
+          if (!snowflakeBackupRunning) {
+            snowflakeBackupRunning = true;
+            void (async () => {
+              try {
+                await snowflakeBackups.snapshotNow();
+                await snowflakeBackups.exportNow({ force: true });
+              } catch (error) {
+                console.warn(`[zlens] Backup failed: ${error instanceof Error ? error.message : String(error)}`);
+              } finally {
+                snowflakeBackupRunning = false;
+              }
+            })();
+          }
+          send(202, { managed: true, running: true });
+          return;
+        }
+        if (req.method === 'POST' && path === '/api/snowflake-app/backups/restore-export') {
+          const body = await readJSON(req).catch(() => ({})) as { file?: unknown; replace?: unknown };
+          const file = typeof body.file === 'string' ? body.file : '';
+          // Over a project with saved work only when the person confirmed it in Settings.
+          if (!snowflakeBackups.projectIsEmpty() && body.replace !== true) {
+            send(409, { error: 'This project has saved work. Confirm that the backup should replace it.' });
+            return;
+          }
+          await snowflakeBackups.restoreExport(file);
+          send(200, { restored: file, restarting: true });
+          // Everything in memory belongs to the project just replaced: Snowflake starts the container again.
+          console.log(`[zlens] Restored the projects from ${file}; restarting to load them.`);
+          setTimeout(() => process.exit(0), 500).unref?.();
+          return;
+        }
+        send(405, { error: 'Method not allowed' });
+      } catch (error) {
+        send(500, { error: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
 

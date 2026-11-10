@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type SnowflakeAppSetupStatus } from '../../api/client';
+import { api, type SnowflakeAppBackups, type SnowflakeAppSetupStatus } from '../../api/client';
 import { useDispatch } from '../../store/NotebookStore';
 
 const POLL_MS = 3000;
@@ -39,6 +39,19 @@ export function snowflakeAppSetupMessage(status: SnowflakeAppSetupStatus | null)
 }
 
 /**
+ * After a reinstall the project is empty, but the customer's stage may hold a copy of the old one (backup design
+ * B5): offer the newest. Nothing to offer once anything is saved, or with no copies. Exported for tests.
+ */
+export function snowflakeAppRestoreOffer(backups: SnowflakeAppBackups | null): { text: string; file: string } | null {
+  if (!backups?.managed || !backups.projectIsEmpty || !backups.stage) return null;
+  const newest = backups.exports[0];
+  if (!newest) return null;
+  const when = /(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})/.exec(newest.file);
+  const date = when ? `${when[1]}-${when[2]}-${when[3]}` : newest.lastModified;
+  return { text: `A copy of your ZLens projects from ${date} is in ${backups.stage}.`, file: newest.file };
+}
+
+/**
  * The ZLens app for Snowflake sets itself up: it reads the tables in the database it was granted and drafts
  * the models. This strip says so while it runs, then points to the drafts waiting for review.
  * Renders nothing outside the Snowflake app.
@@ -48,6 +61,9 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
   const [status, setStatus] = useState<SnowflakeAppSetupStatus | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(() => readDismissed());
 
+  const [backups, setBackups] = useState<SnowflakeAppBackups | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     try { setStatus(await api.getSnowflakeAppSetup()); } catch { /* a missing strip must not break the page */ }
   }, []);
@@ -55,6 +71,7 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     if (!enabled) return;
     void load();
+    void api.getSnowflakeAppBackups().then(setBackups);
   }, [enabled, load]);
 
   const settled = status?.state === 'done' || status?.state === 'failed' || status?.managed === false;
@@ -64,6 +81,34 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
     return () => window.clearInterval(timer);
   }, [enabled, settled, load]);
 
+  const offer = enabled ? snowflakeAppRestoreOffer(backups) : null;
+  if (offer && dismissed !== `restore:${offer.file}`) {
+    const link = { background: 'none', border: 'none', padding: 0, cursor: 'pointer', font: 'inherit', color: 'var(--accent)', fontWeight: 600, textDecoration: 'underline' } as const;
+    return (
+      <div role="status" data-testid="snowflake-app-restore-offer" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 14px', padding: '6px 16px', fontSize: 12.5, lineHeight: 1.4, background: 'var(--accent-dim)', color: 'var(--text-primary)', borderBottom: '1px solid var(--border-subtle)' }}>
+        <span style={{ fontWeight: 600 }}>{restoring ?? offer.text}</span>
+        {!restoring && (
+          <button
+            type="button"
+            style={link}
+            onClick={() => {
+              setRestoring('Restoring. ZLens restarts to load your projects: this page reloads in about a minute.');
+              void api.restoreSnowflakeAppExport(offer.file)
+                .then(() => { window.setTimeout(() => window.location.reload(), 60_000); })
+                .catch((cause) => setRestoring(`Could not restore: ${cause instanceof Error ? cause.message : String(cause)}`));
+            }}
+          >
+            Restore it
+          </button>
+        )}
+        {!restoring && (
+          <button type="button" aria-label="Hide" style={{ ...link, marginLeft: 'auto', textDecoration: 'none', color: 'var(--text-secondary)' }} onClick={() => { writeDismissed(`restore:${offer.file}`); setDismissed(`restore:${offer.file}`); }}>
+            ×
+          </button>
+        )}
+      </div>
+    );
+  }
   const message = enabled ? snowflakeAppSetupMessage(status) : null;
   if (!message || (message.key && message.key === dismissed)) return null;
   const caution = message.tone === 'caution';
