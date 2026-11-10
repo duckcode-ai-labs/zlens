@@ -238,7 +238,16 @@ export function describeResultColumns(intent: AnalyticalIntentV1, result: Pick<E
       // gives no type for the operands they both read as text, and matching
       // unknown against unknown once turned 3.26 rebounds a game into 326%.
       const perName = /(^|[_\s])per([_\s]|$)/i.test(name);
-      const fractionByName = !perName && /(pct|percent|percentage|share|margin)|(^|[_\s])rate([_\s]|$)/i.test(name);
+      // A margin is a fraction (a profit margin, 0.23) or a difference in its operands' own unit (a winning margin
+      // of 73 points, once shown as 7,300%: new-user test V9 retest). The values say which.
+      const sampled = result.rows.slice(0, 50).flatMap((row) => {
+        const key = Object.keys(row).find((column) => column.toLowerCase() === name.toLowerCase());
+        const value = key === undefined ? Number.NaN : Number(row[key]);
+        return Number.isFinite(value) ? [value] : [];
+      });
+      const fractionWord = /(pct|percent|percentage|share)|(^|[_\s])rate([_\s]|$)/i.test(name);
+      const fractionMargin = /margin/i.test(name) && sampled.length > 0 && sampled.every((value) => Math.abs(value) <= 1.5);
+      const fractionByName = !perName && (fractionWord || fractionMargin);
       const meta: Partial<ResultColumnMeta> = numerator.kind === 'currency' && (denominator.kind === 'count' || denominator.kind === 'number') ? { kind: 'currency', unit: 'USD' }
         : fractionByName || (numerator.kind === denominator.kind && numerator.kind === 'currency') ? { kind: 'percent', unit: 'fraction' }
         : { kind: 'number' };

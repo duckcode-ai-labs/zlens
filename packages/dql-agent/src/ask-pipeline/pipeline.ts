@@ -99,6 +99,12 @@ export interface RunAskPipelineInput {
    * it found, or nothing. Absent, nothing changes.
    */
   reviewResult?: (input: { question: string; sql: string; result: { columns?: Array<string | { name: string }>; rows: Array<Record<string, unknown>>; rowCount: number } }) => Promise<{ revise: string } | undefined>;
+  /**
+   * What a governed answer (a certified block, a metric) counts of the kinds a coded key tells apart, in words:
+   * "it counts only regular-season games (GAME_ID starting with 2)". The host reads it from the statement it ran;
+   * absent or undefined, nothing is said. An AI-drafted answer says it through its own caveats.
+   */
+  kindsNote?: (candidate: { sql: string; relations: string[] }) => string | undefined;
   deadlineMs?: number;
   /** Host cancellation for the entire request; no new phase starts after it fires. */
   signal?: AbortSignal;
@@ -792,12 +798,17 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     const reading: AnalyticalIntentV1 = hint && hint.kind === 'analytics'
       ? hint
       : { version: 1, kind: 'analytics', reading: input.question, measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' } as AnalyticalIntentV1;
+    const asRead = reading;
     let previous: { sql: string; error: string } | undefined;
     let lastFailure: Extract<Awaited<ReturnType<typeof executeCandidate>>, { ok: false }> | undefined;
     step('schema', 'Asking the AI to write SQL from the tables', 'done', { detail: why });
     type ExecutedOk = Extract<Awaited<ReturnType<typeof executeCandidate>>, { ok: true }>;
     const answerWith = (candidate: PreparedCandidate, executed: ExecutedOk, runMs: number | undefined): PipelineOutcome => {
       step('execute', `Ran the AI-drafted query: ${executed.result.rowCount} row${executed.result.rowCount === 1 ? '' : 's'}`, 'done', { ms: runMs });
+      // The host may correct a reading the statement proved wrong (it said a restriction could not be applied,
+      // and the statement applies it): the answer, the receipt and what is saved from them read the correction.
+      const corrected = candidate.proof.find((line) => line.startsWith('reading: '))?.slice('reading: '.length).trim();
+      const reading = corrected ? { ...asRead, reading: corrected } : asRead;
       receipt.intent = reading; receipt.reading = reading.reading;
       receipt.executed = { tier: candidate.tier, sqlFingerprint: fingerprintSql(candidate.sql), rowCount: executed.result.rowCount, ms: Math.round(executed.result.executionTimeMs), proofs: executed.proofs };
       timings.total = Math.round(now() - started);
@@ -1846,5 +1857,9 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     : { source: 'declared', authority: 'unknown' });
   receipt.context = { ...receipt.context!, used: { joins: usedJoins, relations: [...new Set([...(candidate.relations ?? []), ...(candidate.joins ?? []).map((step) => step.relation)])], tier: candidate.tier, ...(candidate.engine ? { engine: candidate.engine } : {}) } };
   if (candidate.trustCaveat) caveats.push(candidate.trustCaveat);
+  // Which kinds of row it counts (only the regular season, or every game type) is said for a certified answer
+  // too (new-user test V9 retest: a certified regular-season answer to a question that named no game type).
+  const kindsNote = input.kindsNote?.({ sql: candidate.sql, relations: [...new Set([...(candidate.relations ?? []), ...(candidate.joins ?? []).map((step) => step.relation)])] });
+  if (kindsNote) caveats.push(kindsNote);
   return { kind: 'answered', intent, candidate, result, text: composeAnsweredText(intent, result, input.vocabulary, candidate.trust, { notes: [...(receipt.grounding ?? []), ...textMatches], caveats, tier: candidate.tier }), receipt };
 }

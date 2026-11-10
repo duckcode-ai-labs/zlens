@@ -279,6 +279,11 @@ export interface CodeKinds {
   expressions: string[];
   /** When each kind's rows fall in one recent period, measured on the warehouse (`kindDatesSql`). */
   dates?: { period: string; value: string; ranges: Array<{ first: string; from: string; to: string }> };
+  /**
+   * What a business reader calls each kind's rows ("playoff games"), by first character: written in the rule
+   * ("4 (playoff games, 31,236 rows)"), or named once from the rules and the dates (`kindNamesFrom`).
+   */
+  names?: Record<string, string>;
 }
 
 /**
@@ -311,11 +316,13 @@ export function codeKindsFrom(rules: Record<string, { expression: string; status
     if (!match) continue;
     const code = match[1]!.replace(/"/g, '');
     if (found.some((item) => item.code.toLowerCase() === code.toLowerCase())) continue;
-    const values = [...match[3]!.matchAll(/([A-Za-z0-9]) \(([\d,]+) rows?\)/g)].map((value) => ({ first: value[1]!, rows: Number(value[2]!.replace(/,/g, '')) }));
+    const parsed = [...match[3]!.matchAll(/([A-Za-z0-9]) \((?:([A-Za-z][A-Za-z -]{1,40}), )?([\d,]+) rows?\)/g)];
+    const values = parsed.map((value) => ({ first: value[1]!, rows: Number(value[3]!.replace(/,/g, '')) }));
     if (values.length < 2) continue;
+    const named = Object.fromEntries(parsed.filter((value) => value[2]).map((value) => [value[1]!, value[2]!.trim()]));
     const mentions = new RegExp(`(^|[^A-Za-z0-9_$])${code.replace(/\$/g, '\\$')} starts with `, 'i');
     const more = live.filter((other) => other !== rule && mentions.test(other.expression)).map((other) => other.expression.trim());
-    found.push({ code, table: match[2]!.replace(/"/g, ''), values, expressions: [rule.expression.trim(), ...more] });
+    found.push({ code, table: match[2]!.replace(/"/g, ''), values, expressions: [rule.expression.trim(), ...more], ...(Object.keys(named).length ? { names: named } : {}) });
   }
   return found;
 }
@@ -328,7 +335,8 @@ export function kindFilterOf(sql: string, code: string): { filtered: boolean; ki
   const name = code.replace(/[^A-Za-z0-9_$]/g, '').replace(/\$/g, '\\$');
   const kinds = new Set<string>();
   let filtered = false;
-  for (const match of sql.matchAll(new RegExp(`(?<![A-Za-z0-9_$])"?${name}"?(?![A-Za-z0-9_$])`, 'gi'))) {
+  // A column named for the key with a prefix holds the same key (SRC_GAMES.GAMES_GAME_ID): new-user test V9 retest.
+  for (const match of sql.matchAll(new RegExp(`(?<![A-Za-z0-9_$])"?(?:[A-Za-z0-9$]+_)*${name}"?(?![A-Za-z0-9_$])`, 'gi'))) {
     const before = sql.slice(Math.max(0, match.index! - 40), match.index!);
     const after = sql.slice(match.index! + match[0].length, match.index! + match[0].length + 120);
     const like = /^\s*(?:AS\s+[A-Za-z]+(?:\s*\(\s*\d+\s*\))?\s*\)|::\s*[A-Za-z]+|\))?\s*(?:NOT\s+)?I?LIKE\s+'([A-Za-z0-9])%'/i.exec(after);
@@ -340,6 +348,13 @@ export function kindFilterOf(sql: string, code: string): { filtered: boolean; ki
     }
   }
   return { filtered, kinds: [...kinds] };
+}
+
+/** A column that holds the coded key: named for it, or for it with a prefix (GAMES_GAME_ID holds GAME_ID). */
+export function holdsCode(column: string, code: string): boolean {
+  const name = column.replace(/"/g, '').toLowerCase();
+  const key = code.replace(/"/g, '').toLowerCase();
+  return name === key || name.endsWith(`_${key}`);
 }
 
 /** "game" for GAME_ID: what one kind of row is called, from the coded key's own name. */
@@ -379,8 +394,107 @@ function kindFacts(kinds: CodeKinds[]): string[] {
   return kinds.map((item) => `the first character of ${item.code} codes kinds of ${kindNoun(item.code)}: ${item.values.map((value) => `${value.first} (${value.rows.toLocaleString('en-US')} rows)`).join(', ')}${kindDatesText(item)} (the model's rules: ${item.expressions.join(' ')})`);
 }
 
-/** When each kind's rows fall, by snapshot, connection and key: measured once (`kindDatesSql`); undefined when it could not be. */
-const KIND_DATES = new Map<string, CodeKinds['dates'] | undefined>();
+/**
+ * NAMES A BUSINESS READER USES. "GAME_ID starting with 4" is not a game type anyone says (new-user test V9 retest):
+ * the kinds are named once, from the model's rules and when each kind's rows fall, for the words of an answer.
+ * The names never reach the SQL; the code stays beside them in every line, so a reader can check them.
+ */
+export function kindNamesMessages(kinds: CodeKinds): AgentMessage[] {
+  const noun = kindNoun(kinds.code);
+  return [
+    { role: 'system', content: `You name the kinds of ${noun}s a coded key tells apart, in the words a business reader uses. Reply with one JSON object only.` },
+    { role: 'user', content: `KEY: the first character of ${kinds.code} says what kind of ${noun} a row is: ${kinds.values.map((value) => `${value.first} (${value.rows.toLocaleString('en-US')} rows)`).join(', ')}.\nRULES: ${kinds.expressions.join(' ')}\n${kinds.dates ? `WHEN EACH KIND FALLS: in ${kinds.dates.period} ${kinds.dates.value}, ${kinds.dates.ranges.map((range) => `${range.first} from ${range.from} to ${range.to}`).join(', ')}.\n` : ''}Name each kind's ${noun}s, plural, in at most four words (for example "returned orders"). Use null for a kind the rules and dates do not make clear. Reply as {${kinds.values.map((value) => `"${value.first}": "…"`).join(', ')}}.` },
+  ];
+}
+
+export function kindNamesFrom(reply: string, kinds: CodeKinds): Record<string, string> | undefined {
+  const json = /\{[\s\S]*\}/.exec(reply)?.[0];
+  if (!json) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(json); } catch { return undefined; }
+  if (!parsed || typeof parsed !== 'object') return undefined;
+  const names: Record<string, string> = {};
+  for (const value of kinds.values) {
+    const name = (parsed as Record<string, unknown>)[value.first];
+    if (typeof name !== 'string') continue;
+    const clean = name.trim().replace(/\s+/g, ' ').toLowerCase();
+    if (/^[a-z][a-z -]{1,40}$/.test(clean) && clean.split(' ').length <= 4) names[value.first] = clean;
+  }
+  // Two kinds called the same tell a reader nothing.
+  if (new Set(Object.values(names)).size !== Object.keys(names).length) return undefined;
+  return Object.keys(names).length ? names : undefined;
+}
+
+/** "regular-season and playoff games": names that end in the same word share it. */
+export function joinKindNames(names: string[]): string {
+  const words = names.map((name) => name.split(' '));
+  const last = words[0]?.[words[0].length - 1];
+  const shared = names.length > 1 && words.every((parts) => parts.length > 1 && parts[parts.length - 1] === last);
+  const heads = shared ? words.map((parts) => parts.slice(0, -1).join(' ')) : names;
+  const list = heads.length <= 1 ? heads.join('') : `${heads.slice(0, -1).join(', ')} and ${heads[heads.length - 1]}`;
+  return shared ? `${list} ${last}` : list;
+}
+
+/**
+ * The line that says which kinds an answer counts, in the names a reader uses when every kind it needs is named:
+ * "it counts only playoff games (GAME_ID starting with 4)". Without names, the code says it.
+ */
+export function kindsAnswerLine(kinds: Pick<CodeKinds, 'code' | 'values' | 'names'> | undefined, code: string, filter: { filtered: boolean; kinds: string[] }): string | undefined {
+  const noun = kindNoun(code);
+  const nameOf = (first: string) => kinds?.names?.[first];
+  if (filter.filtered) {
+    if (!filter.kinds.length) return undefined;
+    const firsts = [...filter.kinds].sort();
+    const named = firsts.every((first) => nameOf(first));
+    return named
+      ? `it counts only ${joinKindNames(firsts.map((first) => nameOf(first)!))} (${code} starting with ${orList(firsts)})`
+      : `it counts only ${noun}s whose ${code} starts with ${orList(firsts)}, one kind of ${noun}${firsts.length > 1 ? ' each' : ''}`;
+  }
+  const all = kinds?.values.map((value) => value.first) ?? [];
+  const every = all.length ? ` (${code} starting with ${orList(all)})` : '';
+  const named = all.length > 0 && all.every((first) => nameOf(first));
+  return named
+    ? `it counts every kind of ${noun} together: ${joinKindNames(all.map((first) => nameOf(first)!))}${every}; to count one kind, name it in the question`
+    : `it counts every kind of ${noun} together${every}; to count one kind, name it in the question`;
+}
+
+const KIND_CLAIM_NEGATION = /\b(?:no|not|cannot|can't|can ?not|without|neither|nor|isn't|aren't|doesn't|don't|lacks?|lacking|missing|unavailable|absent)\b/i;
+const KIND_CLAIM_ONLY = /\bonly\b[\s\S]*\b(?:project|vocabulary|model(?:ed|s)?|scope[sd]?|exposes?|computed|side|refs?|definitions?)\b|\b(?:project|vocabulary|model(?:ed|s)?|scope[sd]?|exposes?|computed|side|refs?|definitions?)\b[\s\S]*\bonly\b/i;
+const KIND_CLAIM_SCHEMA = /\b(?:project|vocabulary|columns?|fields?|dimensions?|flags?|relations?|tables?|metrics?|measures?|model(?:ed|s)?|distinction|distinguish\w*|refs?|blocks?|definitions?|expos\w*|exists?|present|available|computed|applied|built|scope\w*|identif\w*|track\w*|encod\w*|captured|stored|separat\w*|split)\b/i;
+
+/**
+ * A READING THAT CONTRADICTS ITS OWN ANSWER is corrected (new-user test V9 retest: 8 of 11 right game-type answers
+ * opened with "the project has no field distinguishing playoff games … so the playoff restriction cannot be
+ * applied"). The reading is written before the SQL; once the statement reads the coded key, a clause that says
+ * the project cannot tell those kinds apart is false, and it is left out. A clause is a claim of that kind when it
+ * names a kind (`terms`), says the project or its fields lack it, and negates it. Everything else stays as read.
+ */
+export function readingWithoutKindClaims(reading: string, terms: string[]): string | undefined {
+  const words = [...new Set(terms.map((term) => term.trim().toLowerCase()).filter((term) => term.length >= 3))];
+  if (!words.length) return undefined;
+  const termPattern = new RegExp(`(?<![a-z])(?:${words.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[- ]/g, '[- ]?')).join('|')})`, 'i');
+  const claim = (text: string) => termPattern.test(text) && KIND_CLAIM_SCHEMA.test(text) && (KIND_CLAIM_NEGATION.test(text) || KIND_CLAIM_ONLY.test(text));
+  let text = reading.replace(/\s*\(([^()]*)\)/g, (whole, inner: string) => claim(inner) ? '' : whole);
+  const parts = text.split(/(\.\s+|;\s*|\s+[—–]\s+|\s+-\s+|,\s+(?=(?:but|however|although|since|so|because|as|while|and no)\b)|\s+(?=because\b))/i);
+  const kept: string[] = [];
+  let dropped = text !== reading;
+  // What follows a dropped claim in the same sentence is its consequence ("…, so the record as asked cannot be
+  // built"): it goes with it when it is a negative too.
+  let following = false;
+  for (let index = 0; index < parts.length; index += 2) {
+    const clause = parts[index] ?? '';
+    if (index > 0 && /^(?:\.\s+|;\s*)$/.test(parts[index - 1] ?? '')) following = false;
+    if (claim(clause) || (following && (KIND_CLAIM_NEGATION.test(clause) || KIND_CLAIM_ONLY.test(clause)))) { dropped = true; following = true; continue; }
+    if (kept.length) kept.push(parts[index - 1] ?? ' ');
+    kept.push(clause);
+  }
+  if (!dropped) return undefined;
+  text = kept.join('').replace(/\s{2,}/g, ' ').replace(/^[\s,;:—–-]+|[\s,;:.—–-]+$/g, '').replace(/^(?:but|however|although|so|because|and)\b[\s,]*/i, '').trim();
+  return text;
+}
+
+/** When each kind's rows fall and what each is called, by snapshot, connection and key: worked out once; undefined parts could not be. */
+const KIND_DATES = new Map<string, { dates?: CodeKinds['dates']; names?: Record<string, string> }>();
 
 const QUESTION_STOP = new Set(['which', 'what', 'when', 'where', 'whom', 'whose', 'many', 'much', 'most', 'least', 'more', 'less', 'does', 'have', 'with', 'from', 'that', 'this', 'there', 'their', 'they', 'them', 'been', 'were', 'will', 'would', 'could', 'should', 'each', 'every', 'over', 'under', 'between', 'during', 'about', 'show', 'give', 'list', 'tell', 'find', 'highest', 'lowest', 'best', 'worst', 'total', 'number', 'count', 'average', 'than', 'then', 'also', 'only', 'just', 'into', 'ever', 'time', 'times', 'year', 'years', 'ours', 'your', 'some', 'same', 'other', 'like', 'make', 'made', 'together', 'overall', 'please', 'currently', 'lately', 'recent', 'recently', 'data', 'database', 'dataset', 'table', 'tables', 'rows', 'record', 'records']);
 const stemOf = (word: string) => {
@@ -2783,19 +2897,26 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // KINDS OF ROWS a coded key tells apart (a game type), for the tables in this draft: a kind the question
       // names is filtered on, and a question that names none counts every kind (new-user test V8 retest: playoff
       // and preseason questions lost their kind, and "the 2012 season" was read as the regular season only).
-      const readsKindsOf = (tables: string[], kinds: CodeKinds) => tables.some((relation) => knownColumns(relation).some((column) => column.replace(/"/g, '').toLowerCase() === kinds.code.toLowerCase()))
+      const readsKindsOf = (tables: string[], kinds: CodeKinds) => tables.some((relation) => knownColumns(relation).some((column) => holdsCode(column, kinds.code)))
         || summaryKindsRead(deps.getManifest().manifest?.modeling?.rules, tables).some((item) => item.code.toLowerCase() === kinds.code.toLowerCase());
-      // When each kind's rows fall, measured once per snapshot on a table with the key, a date and a period.
+      // When each kind's rows fall, measured once per snapshot on a table with the key, a date and a period; and
+      // what a reader calls each kind, named once from the rules and those dates.
       const withKindDates = async (kinds: CodeKinds): Promise<CodeKinds> => {
         if (!connection) return kinds;
         const cacheKey = `${deps.getManifest().snapshotId}|${connectionKey(connection)}|${kinds.code.toLowerCase()}`;
-        if (KIND_DATES.has(cacheKey)) { const dates = KIND_DATES.get(cacheKey); return dates ? { ...kinds, dates } : kinds; }
+        const known = (found: { dates?: CodeKinds['dates']; names?: Record<string, string> } | undefined): CodeKinds => ({
+          ...kinds,
+          ...(found?.dates ? { dates: found.dates } : {}),
+          // A name the rule writes is the project's own and wins.
+          ...(found?.names || kinds.names ? { names: { ...(found?.names ?? {}), ...(kinds.names ?? {}) } } : {}),
+        });
+        if (KIND_DATES.has(cacheKey)) return known(KIND_DATES.get(cacheKey));
         const ruleTable = current.entries.flatMap((entry) => entry.kind === 'relation' && entryPhysicalRelation(entry) && sameTable(entryPhysicalRelation(entry)!, kinds.table, 'tail') ? [entryPhysicalRelation(entry)!] : []);
         const candidates = [...relations, ...ruleTable].map((relation) => {
           const columns = knownColumns(relation);
           return {
             relation,
-            code: columns.find((column) => column.replace(/"/g, '').toLowerCase() === kinds.code.toLowerCase()),
+            code: columns.find((column) => holdsCode(column, kinds.code)),
             date: columns.find((column) => /(^|_)date$/i.test(column.replace(/"/g, ''))),
             period: columns.find((column) => /^(season|year|fiscal_year|season_year)$/i.test(column.replace(/"/g, ''))),
           };
@@ -2809,8 +2930,23 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             dates = kindDatesFrom(result.rows ?? [], table.period!.replace(/"/g, ''));
           } catch { dates = undefined; }
         }
-        KIND_DATES.set(cacheKey, dates);
-        return dates ? { ...kinds, dates } : kinds;
+        // Named only from evidence (the dates), once, when the rule does not name every kind itself.
+        let names: Record<string, string> | undefined;
+        const unnamed = kinds.values.some((value) => !kinds.names?.[value.first]);
+        if (dates && unnamed && !request.signal?.aborted && (!request.runBudget || request.runBudget.remainingMs() > 30_000)) {
+          const trace = deps.dispatchOptions?.('draft', request);
+          try {
+            const reply = await provider.generate(kindNamesMessages({ ...kinds, dates }), { temperature: 0, ...(trace?.options ?? {}), ...(request.signal ? { signal: request.signal } : {}) });
+            trace?.settle('ok');
+            names = kindNamesFrom(reply, kinds);
+          } catch (error) {
+            trace?.settle(request.signal?.aborted ? 'cancelled' : 'error', error);
+            names = undefined;
+          }
+        }
+        const found = { ...(dates ? { dates } : {}), ...(names ? { names } : {}) };
+        KIND_DATES.set(cacheKey, found);
+        return known(found);
       };
       const codeKinds: CodeKinds[] = [];
       for (const kinds of codeKindsFrom(deps.getManifest().manifest?.modeling?.rules)) codeKinds.push(readsKindsOf(relations, kinds) ? await withKindDates(kinds) : kinds);
@@ -3186,17 +3322,35 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         const applied = appliedConditions(chosen.sql);
         // WHICH KINDS IT COUNTS IS SAID, in words a reader can check: every kind together, or only some.
         const finalTotals = summaryKindsRead(modelRules, chosen.relations);
+        const kindsRead: Array<{ kinds: CodeKinds | undefined; code: string; filter: { filtered: boolean; kinds: string[] } }> = [];
         const kindCaveats = [...new Set([...codeKinds.map((item) => item.code), ...finalTotals.map((item) => item.code)].map((code) => code.toLowerCase()))].flatMap((lower) => {
           const kinds = codeKinds.find((item) => item.code.toLowerCase() === lower);
           const code = kinds?.code ?? finalTotals.find((item) => item.code.toLowerCase() === lower)!.code;
           const total = finalTotals.some((item) => item.code.toLowerCase() === lower);
           if (!total && !(kinds && readsKindsOf(chosen.relations, kinds))) return [];
-          const noun = kindNoun(code);
           const filter = total ? { filtered: false, kinds: [] as string[] } : kindFilterOf(chosen.sql, code);
-          if (filter.filtered) return filter.kinds.length ? [`caveat: it counts only ${noun}s whose ${code} starts with ${orList(filter.kinds.sort())}, one kind of ${noun}${filter.kinds.length > 1 ? ' each' : ''}`] : [];
-          const every = kinds ? ` (${code} starting with ${orList(kinds.values.map((value) => value.first))})` : '';
-          return [`caveat: it counts every kind of ${noun} together${every}; to count one kind, name it in the question`];
+          kindsRead.push({ kinds, code, filter });
+          const line = kindsAnswerLine(kinds, code, filter);
+          return line ? [`caveat: ${line}`] : [];
         });
+        // THE READING AGREES WITH THE ANSWER. A statement that reads the coded key can tell its kinds apart, so a
+        // reading that says the project cannot is corrected, and a kind the statement keeps is said in it.
+        let correctedReading: string | undefined;
+        if (intent?.reading?.trim() && kindsRead.length) {
+          const terms = kindsRead.flatMap(({ kinds, code }) => [
+            ...Object.values(kinds?.names ?? {}).flatMap((name) => [name, name.replace(new RegExp(`\\s+${kindNoun(code)}s?$`), '')]),
+            `${kindNoun(code)} type`, `${kindNoun(code)}-type`, 'type of game', 'kind of game',
+          ]);
+          const filteredNamed = kindsRead.find(({ kinds, filter }) => filter.filtered && filter.kinds.length && filter.kinds.every((first) => kinds?.names?.[first]));
+          const corrected = readingWithoutKindClaims(intent.reading, [...terms, ...droppedQuestionWords(question, intent.reading, known)]);
+          if (corrected !== undefined) {
+            const base = corrected.trim() || question.trim();
+            const keptNames = filteredNamed ? [...filteredNamed.filter.kinds].sort().map((first) => filteredNamed.kinds!.names![first]!) : [];
+            // "playoff games" is mentioned by "playoff", "regular-season games" by "regular".
+            const mentioned = keptNames.every((name) => base.toLowerCase().includes(name.split(/[\s-]+/)[0]!));
+            correctedReading = keptNames.length && !mentioned ? `${base.replace(/[.\s?]+$/, '')}, counting only ${joinKindNames(keptNames)}` : base;
+          }
+        }
         // AI-DRAFTED WORDS ARE SAID, every time they stand behind an answer.
         // They help find a table; they change no trust label.
         const draftedWords = draftedMeaningRelations(deps.getManifest().manifest, deps.projectRoot)
@@ -3215,6 +3369,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(required.length ? [`required filters present: ${required.map((item) => item.text).join(', ')}`] : []),
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
             ...kindCaveats,
+            ...(correctedReading !== undefined ? [`reading: ${correctedReading}`] : []),
             ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
             ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
@@ -3363,8 +3518,32 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     };
     // THE PIPELINE AS ASK RUNS IT. A caller running a settled reading (Research)
     // overrides only what differs: the reading, the lane and where steps go.
+    // WHICH KINDS A GOVERNED ANSWER COUNTS, said like an AI-drafted one's (new-user test V9 retest: a certified
+    // regular-season answer to "the 2009 season" did not say it left the playoffs out). The names are the ones
+    // already worked out for this snapshot, or the rule's own; without them the code says it.
+    const kindsNote = ({ sql, relations }: { sql: string; relations: string[] }): string | undefined => {
+      const rules = deps.getManifest().manifest?.modeling?.rules;
+      const vocabulary = currentVocabulary();
+      const lines = codeKindsFrom(rules).flatMap((kinds) => {
+        const filter = kindFilterOf(sql, kinds.code);
+        const reads = filter.filtered
+          || summaryKindsRead(rules, relations).some((item) => item.code.toLowerCase() === kinds.code.toLowerCase())
+          || relations.some((relation) => vocabulary.entries.some((entry) => entry.kind === 'column'
+            && entryPhysicalRelation(entry) !== undefined && sameTable(entryPhysicalRelation(entry)!, relation, 'tail')
+            && holdsCode(entry.physical?.column ?? entry.name.split('.').pop()!, kinds.code)));
+        if (!reads) return [];
+        // Names outlive a snapshot (certifying a block makes a new one): the latest named for this target and key.
+        const tail = connection ? `|${connectionKey(connection)}|${kinds.code.toLowerCase()}` : undefined;
+        const cached = tail ? [...KIND_DATES.entries()].reverse().find(([key, found]) => key.endsWith(tail) && found.names)?.[1] : undefined;
+        const names = cached?.names || kinds.names ? { ...(cached?.names ?? {}), ...(kinds.names ?? {}) } : undefined;
+        const line = kindsAnswerLine({ ...kinds, ...(names ? { names } : {}) }, kinds.code, filter);
+        return line ? [line] : [];
+      });
+      return lines.length ? lines.join('; ') : undefined;
+    };
     const runPipeline = (state: AskRunState, overrides: Partial<AskPipelineRunInput> = {}) => runAskPipeline({
       question: request.question,
+      kindsNote,
       vocabulary: currentVocabulary(),
       provider: ledgered,
       describeRelations,

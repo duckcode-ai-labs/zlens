@@ -118,6 +118,22 @@ describe('the pipeline answers a recorded question from its block before any mod
     expect(outcome.receipt.uncovered ?? []).toEqual([]);
   });
 
+  it('says which kinds the certified statement counts when the host reads them from it (new-user test V9 retest)', async () => {
+    const vocabulary = buildVocabularyIndex(harbor());
+    const seen: Array<{ sql: string; relations: string[] }> = [];
+    const outcome = await runAskPipeline({
+      question: QUESTION, vocabulary, provider: columnShaped(vocabulary), explorationAuto: true, clauseCoverage: false,
+      kindsNote: (candidate) => { seen.push(candidate); return /status = 'open'/.test(candidate.sql) ? 'it counts only open claims (STATUS open)' : undefined; },
+      prepareDeps: { compileSemantic: async () => { throw new Error('no semantic layer'); } },
+      executeDeps: { run: async () => ({ columns: ['adjuster_id', 'adjuster_name', 'open_claims'], rows: [{ adjuster_id: 'A1', adjuster_name: 'Ana', open_claims: 7 }], rowCount: 1, executionTimeMs: 1 }) },
+    });
+    expect(outcome.kind).toBe('answered');
+    if (outcome.kind !== 'answered') return;
+    expect(outcome.candidate.tier).toBe('certified');
+    expect(seen[0]?.sql).toContain("status = 'open'");
+    expect(outcome.text).toContain('it counts only open claims (STATUS open)');
+  });
+
   it('a question the block does not record still goes through the model (and its column-shaped reading is not the block)', async () => {
     const vocabulary = buildVocabularyIndex(harbor());
     const provider = columnShaped(vocabulary);
