@@ -10008,7 +10008,8 @@ function promptFieldPosition(prompt: string, field: string): number {
 }
 
 function displayFormatForColumn(column: string): 'currency' | 'percent' | 'number' {
-  if (/(?:^|_)(?:percent|percentage|pct|ratio|share|conversion|churn|retention|utilization)(?:_|$)|(?:^|_)margin(?:_|$)/i.test(column)) return 'percent';
+  // A profit margin is a percentage; a winning margin is points (new-user test V9 retest: 73 shown as 7,300%).
+  if (/(?:^|_)(?:percent|percentage|pct|ratio|share|conversion|churn|retention|utilization)(?:_|$)|(?:^|_)(?:gross|net|profit|operating|contribution|ebitda)_margin(?:_|$)/i.test(column)) return 'percent';
   if (/(?:^|_)(?:revenue|sales|spend|amount|price|cost|profit|income|expense|balance|budget|bookings|arr|mrr|gmv|fee|fees|charge|charges|tax|value)(?:_|$)/i.test(column)) return 'currency';
   return 'number';
 }
