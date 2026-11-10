@@ -96,6 +96,7 @@ import { currentHintDependencyFingerprints } from '../hints/dependencies.js';
 import type { QuestionScope } from '../hints/types.js';
 import { buildFtsMatch, sanitizeFtsQuery } from '../memory/fts-query.js';
 import {
+  embedSearchQuery,
   cosineSimilarity,
   embeddingProviderFromIndexedId,
   envEmbeddingProvider,
@@ -3908,8 +3909,9 @@ export class MetadataCatalog {
     });
     const encoded: Array<{ objectKey: string; dimensions: number; vector: Buffer; textHash: string }> = [];
     let dimensions = 0;
-    for (let offset = 0; offset < objects.length; offset += Math.max(1, batchSize)) {
-      const batch = objects.slice(offset, offset + Math.max(1, batchSize));
+    const step = Math.max(1, provider.preferredBatchSize ?? batchSize);
+    for (let offset = 0; offset < objects.length; offset += step) {
+      const batch = objects.slice(offset, offset + step);
       const texts = batch.map(metadataVectorText);
       const vectors = await provider.embed(texts);
       if (vectors.length !== batch.length) {
@@ -3985,7 +3987,7 @@ export class MetadataCatalog {
     }
     const [queryVector] = provider === DEFAULT_VECTOR_PROVIDER
       ? [DEFAULT_VECTOR_PROVIDER.embedOne(options.query)]
-      : await provider.embed([options.query]);
+      : [await embedSearchQuery(provider, options.query)];
     if (!queryVector || queryVector.length !== indexedDimensions) {
       return {
         providerId: indexedProviderId,

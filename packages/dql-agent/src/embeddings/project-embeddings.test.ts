@@ -96,6 +96,7 @@ describe('local embeddings only when the project chooses them', () => {
     vi.stubEnv('DQL_EMBEDDINGS_AUTODETECT', undefined as unknown as string);
     vi.stubEnv('ZLENS_OLLAMA_EMBED_URL', undefined as unknown as string);
     vi.stubEnv('ZLENS_OPENAI_API_KEY', undefined as unknown as string);
+    vi.stubEnv('ZLENS_EMBEDDINGS', undefined as unknown as string);
   };
 
   it('a new project stays word-based with Ollama running, and only offers the local model', async () => {
@@ -121,6 +122,14 @@ describe('local embeddings only when the project chooses them', () => {
     const root = project({ ai: { embeddings: { provider: 'ollama', endpoint: 'http://127.0.0.1:11434', model: 'nomic-embed-text' } } });
     expect(await autoUpgradeProjectEmbeddings(root, mocks)).toMatchObject({ providerId: 'ollama', upgraded: false, reason: 'configured' });
     expect(mocks.probeLocalOllamaEmbeddings).not.toHaveBeenCalled();
+    expect(mocks.upgradeVectorIndexForProject).not.toHaveBeenCalled();
+  });
+
+  it('the ZLens app for Snowflake keeps its Cortex search (ZLENS_EMBEDDINGS=cortex): never put back to word-based at start', async () => {
+    outsideTests();
+    vi.stubEnv('ZLENS_EMBEDDINGS', 'cortex');
+    const mocks = deps(null, 'cached:resilient:cortex:snowflake-arctic-embed-l-v2.0');
+    expect(await autoUpgradeProjectEmbeddings(project({ project: 'p' }), mocks)).toMatchObject({ upgraded: false, reason: 'configured' });
     expect(mocks.upgradeVectorIndexForProject).not.toHaveBeenCalled();
   });
 

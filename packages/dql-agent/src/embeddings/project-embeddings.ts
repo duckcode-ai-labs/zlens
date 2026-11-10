@@ -7,6 +7,7 @@ import {
   type EmbeddingResolveOptions,
 } from './provider.js';
 import { readEnv } from '@zlens/core';
+import { CORTEX_DEFAULT_EMBEDDING_MODEL, isCortexEmbeddingModel } from './cortex.js';
 
 /**
  * Embedding settings a project declares in `dql.config.json`.
@@ -18,8 +19,11 @@ import { readEnv } from '@zlens/core';
  * can actually find and change.
  */
 export interface ProjectEmbeddingSettings {
-  /** `hashed` is the offline default; the others need an endpoint or key. */
-  provider?: 'hashed' | 'ollama' | 'openai';
+  /**
+   * `hashed` is the offline default; `ollama` and `openai` need an endpoint or key; `cortex` embeds
+   * through Snowflake Cortex on the project's Snowflake connection (inside the ZLens server).
+   */
+  provider?: 'hashed' | 'ollama' | 'openai' | 'cortex';
   /** Ollama base URL, e.g. http://127.0.0.1:11434 */
   endpoint?: string;
   /** Embedding model, e.g. nomic-embed-text (Ollama) or text-embedding-3-small. */
@@ -44,7 +48,7 @@ export function readProjectEmbeddingSettings(projectRoot: string): ProjectEmbedd
       typeof value === 'string' && value.trim() ? value.trim() : undefined;
     const provider = str(embeddings.provider);
     return {
-      ...(provider === 'hashed' || provider === 'ollama' || provider === 'openai' ? { provider } : {}),
+      ...(provider === 'hashed' || provider === 'ollama' || provider === 'openai' || provider === 'cortex' ? { provider } : {}),
       ...(str(embeddings.endpoint) ? { endpoint: str(embeddings.endpoint) } : {}),
       ...(str(embeddings.model) ? { model: str(embeddings.model) } : {}),
       ...(str(embeddings.apiKey) ? { apiKey: str(embeddings.apiKey) } : {}),
@@ -57,6 +61,9 @@ export function readProjectEmbeddingSettings(projectRoot: string): ProjectEmbedd
 }
 
 export function embeddingOptionsFromSettings(settings: ProjectEmbeddingSettings): EmbeddingResolveOptions {
+  if (settings.provider === 'cortex') {
+    return { cortexModel: settings.model && isCortexEmbeddingModel(settings.model) ? settings.model : CORTEX_DEFAULT_EMBEDDING_MODEL };
+  }
   if (settings.provider === 'ollama' && settings.endpoint) {
     return {
       ollamaEndpoint: settings.endpoint,
@@ -91,6 +98,7 @@ export function projectEmbeddingProvider(
   const fromSettings = embeddingOptionsFromSettings(settings);
   const options = Object.keys(fromSettings).length > 0 ? fromSettings : embeddingOptionsFromEnv(env);
   const key = JSON.stringify({
+    c: options.cortexModel ?? '',
     e: options.ollamaEndpoint ?? '',
     om: options.ollamaModel ?? '',
     // Never cache-key on the raw secret.
@@ -100,7 +108,9 @@ export function projectEmbeddingProvider(
   });
   const hit = cache.get(projectRoot);
   if (hit?.key === key) return hit.provider;
-  const provider = resolveEmbeddingProvider(options);
+  const provider = resolveEmbeddingProvider(options.cortexModel
+    ? { ...options, cortexCachePath: join(projectRoot, '.dql', 'cache', 'cortex-embeddings.sqlite') }
+    : options);
   cache.set(projectRoot, { key, provider });
   return provider;
 }
@@ -196,6 +206,7 @@ export async function autoUpgradeProjectEmbeddings(
     // An explicit project setting or environment override is the user's
     // decision and is never second-guessed.
     if (configured.provider
+      || readEnv('ZLENS_EMBEDDINGS')
       || readEnv('ZLENS_OLLAMA_EMBED_URL')
       || readEnv('ZLENS_OPENAI_API_KEY')) {
       return { providerId: configured.provider ?? 'configured', upgraded: false, reason: 'configured' };

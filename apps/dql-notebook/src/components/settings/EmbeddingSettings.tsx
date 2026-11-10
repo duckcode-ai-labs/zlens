@@ -2,9 +2,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Check, Download, Loader2, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 import { api, type EmbeddingSettingsResponse } from '../../api/client';
 import type { Theme } from '../../themes/notebook-theme';
-import { embeddingReindexOutcome, LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDINGS_OPTION, localEmbeddingsHint, searchModeLabel } from './embedding-reindex-model';
+import { CORTEX_EMBEDDING_MODEL, CORTEX_EMBEDDINGS_OPTION, cortexEmbeddingsHint, embeddingReindexOutcome, LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDINGS_OPTION, localEmbeddingsHint, searchModeLabel } from './embedding-reindex-model';
 
-type ProviderId = 'hashed' | 'ollama' | 'openai';
+type ProviderId = 'hashed' | 'ollama' | 'openai' | 'cortex';
 interface ModelOption {
   model: string; label: string; dimensions: number; size: string; recommended: boolean; description: string;
 }
@@ -40,7 +40,8 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [apiKeySet, setApiKeySet] = useState(false);
-  const [catalog, setCatalog] = useState<{ ollama: ModelOption[]; openai: ModelOption[] }>({ ollama: [], openai: [] });
+  const [catalog, setCatalog] = useState<{ ollama: ModelOption[]; openai: ModelOption[]; cortex?: ModelOption[] }>({ ollama: [], openai: [], cortex: [] });
+  const [cortex, setCortex] = useState<{ available: boolean; reason?: string; installDefault?: boolean }>({ available: false });
   const [installed, setInstalled] = useState<string[]>([]);
   const [ollamaReachable, setOllamaReachable] = useState(false);
   const [active, setActive] = useState<{ id: string; semantic: boolean; reindexRequired: boolean }>({ id: '', semantic: false, reindexRequired: false });
@@ -54,6 +55,7 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
     setModel(current.settings.model);
     setApiKeySet(current.settings.apiKeySet);
     setActive({ id: current.activeProviderId, semantic: current.semantic, reindexRequired: current.reindexRequired });
+    setCortex(current.cortex ?? { available: false });
   }, []);
 
   const refreshModels = useCallback(async (url: string) => {
@@ -129,7 +131,21 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
   });
   const localOn = provider === 'ollama' && model === LOCAL_EMBEDDING_MODEL && active.semantic;
 
-  const options = provider === 'openai' ? catalog.openai : catalog.ollama;
+  /** One switch: meaning search through Snowflake Cortex on (save, re-embed) or off (word-based, re-embed). */
+  const setCortexEmbeddings = (on: boolean) => run('cortex', async () => {
+    await api.saveEmbeddingSettings(on ? { provider: 'cortex', model: CORTEX_EMBEDDING_MODEL } : { provider: 'hashed' });
+    const result = await api.reindexEmbeddings();
+    const current = await api.getEmbeddingSettings();
+    applyCurrentSettings(current);
+    const outcome = embeddingReindexOutcome(result, current);
+    setOperationStatus(outcome.ok
+      ? { ok: true, message: on ? 'Search is meaning-based, through Snowflake Cortex in your account.' : 'Search is word-based.' }
+      : outcome);
+    onStatus?.(on ? 'Snowflake Cortex search on.' : 'Snowflake Cortex search off: search is word-based.');
+  });
+  const cortexOn = provider === 'cortex' && active.semantic;
+
+  const options = provider === 'openai' ? catalog.openai : provider === 'cortex' ? (catalog.cortex ?? []) : catalog.ollama;
   const card: React.CSSProperties = {
     border: `1px solid ${t.headerBorder}`, borderRadius: 10, padding: 14, background: t.cellBg, marginTop: 14,
   };
@@ -151,7 +167,9 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
           <div style={{ fontSize: 13.5, fontWeight: 700, color: t.textPrimary }}>Search</div>
           <div style={{ fontSize: 12, color: t.textSecondary, marginTop: 4, lineHeight: 1.5, maxWidth: 620 }}>
             Word-based search matches the words in a question. Meaning-based search also connects "drinks" to a
-            <code> beverage_revenue</code> metric. ZLens never switches by itself.
+            <code> beverage_revenue</code> metric. {cortex.installDefault
+              ? 'The ZLens app for Snowflake starts with meaning-based search through Snowflake Cortex; turn it off here.'
+              : 'ZLens never switches by itself.'}
           </div>
         </div>
         <span style={{
@@ -165,6 +183,24 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
           {searchModeLabel({ provider, model }, active.semantic)}
         </span>
       </div>
+
+      {may('cortex') && (cortex.available || cortexOn) && <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, cursor: busy ? 'wait' : 'pointer' }}>
+        <input
+          type="checkbox"
+          role="switch"
+          aria-checked={cortexOn}
+          checked={cortexOn}
+          disabled={busy !== null}
+          onChange={(event) => void setCortexEmbeddings(event.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span>
+          <span style={{ fontSize: 12.5, fontWeight: 650, color: t.textPrimary }}>{CORTEX_EMBEDDINGS_OPTION}</span>
+          <span style={{ display: 'block', fontSize: 11.5, color: t.textMuted, marginTop: 2, lineHeight: 1.45 }}>
+            {busy === 'cortex' ? <><Loader2 size={11} className="dql-spin" /> Re-embedding the catalog…</> : cortexEmbeddingsHint(cortex)}
+          </span>
+        </span>
+      </label>}
 
       {may('ollama') && <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, cursor: busy ? 'wait' : 'pointer' }}>
         <input
@@ -188,14 +224,14 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
         <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 650, color: t.textSecondary }}>Technical details</summary>
 
       <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
-        {(['hashed', 'ollama', 'openai'] as ProviderId[]).filter(may).map((id) => (
+        {(['hashed', 'ollama', 'openai', 'cortex'] as ProviderId[]).filter(may).filter((id) => id !== 'cortex' || cortex.available || provider === 'cortex').map((id) => (
           <button
             key={id}
             type="button"
             onClick={() => { setProvider(id); if (id === 'hashed') void save('hashed', ''); }}
             style={{ ...button(provider === id), textTransform: 'capitalize' }}
           >
-            {id === 'hashed' ? 'Word-based (default)' : id === 'ollama' ? 'Ollama (local)' : 'OpenAI'}
+            {id === 'hashed' ? 'Word-based (default)' : id === 'ollama' ? 'Ollama (local)' : id === 'cortex' ? 'Snowflake Cortex' : 'OpenAI'}
           </button>
         ))}
       </div>
@@ -233,7 +269,7 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
           <div style={label}>Model</div>
           <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
             {options.map((option) => {
-              const isInstalled = provider === 'openai' || installed.includes(option.model);
+              const isInstalled = provider === 'openai' || provider === 'cortex' || installed.includes(option.model);
               const selected = model === option.model;
               return (
                 <div

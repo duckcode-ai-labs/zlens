@@ -12,6 +12,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { CORTEX_DEFAULT_EMBEDDING_MODEL, CortexEmbeddingProvider, isCortexEmbeddingModel } from './cortex.js';
 import { readEnv } from '@zlens/core';
 
 export interface EmbeddingProvider {
@@ -21,6 +22,20 @@ export interface EmbeddingProvider {
   readonly dimensions: number;
   /** Embed a batch of texts. Must be deterministic for the default provider. */
   embed(texts: string[]): Promise<number[][]>;
+  /**
+   * Embed a search question. Models trained with an instruction in front of questions (Snowflake Cortex's
+   * arctic models) add it here; without this method a question is embedded like any text.
+   */
+  embedQuery?(text: string): Promise<number[]>;
+  /** Texts per `embed` call that suit this provider when a whole index is rebuilt (default 96). */
+  readonly preferredBatchSize?: number;
+}
+
+/** A search question's vector: the provider's question form when it has one. */
+export async function embedSearchQuery(provider: EmbeddingProvider, text: string): Promise<number[]> {
+  if (provider.embedQuery) return provider.embedQuery(text);
+  const [vector] = await provider.embed([text]);
+  return vector ?? [];
 }
 
 /** Cosine similarity in [-1, 1]; 0 for degenerate vectors. */
@@ -200,6 +215,7 @@ export class OllamaEmbeddingProvider implements EmbeddingProvider {
 export class CachingEmbeddingProvider implements EmbeddingProvider {
   readonly id: string;
   readonly dimensions: number;
+  readonly preferredBatchSize?: number;
   private readonly inner: EmbeddingProvider;
   private readonly cache = new Map<string, number[]>();
   private readonly maxEntries: number;
@@ -208,6 +224,17 @@ export class CachingEmbeddingProvider implements EmbeddingProvider {
     this.inner = inner;
     this.id = `cached:${inner.id}`;
     this.dimensions = inner.dimensions;
+    this.preferredBatchSize = inner.preferredBatchSize;
+    if (inner.embedQuery) {
+      this.embedQuery = async (text: string): Promise<number[]> => {
+        const key = `query:${createHash('sha1').update(text).digest('hex')}`;
+        const hit = this.cache.get(key);
+        if (hit) return hit;
+        const vector = await embedSearchQuery(this.inner, text);
+        this.put(key, vector);
+        return vector;
+      };
+    }
     this.maxEntries = maxEntries;
   }
 
@@ -234,6 +261,9 @@ export class CachingEmbeddingProvider implements EmbeddingProvider {
     return keys.map((key) => this.cache.get(key) ?? resolvedThisBatch.get(key) ?? []);
   }
 
+  /** Present only when the wrapped provider has a question form, so other providers embed exactly as before. */
+  readonly embedQuery?: (text: string) => Promise<number[]>;
+
   private put(key: string, vector: number[]): void {
     this.cache.set(key, vector);
     if (this.cache.size > this.maxEntries) {
@@ -251,6 +281,7 @@ export class CachingEmbeddingProvider implements EmbeddingProvider {
 export class ResilientEmbeddingProvider implements EmbeddingProvider {
   readonly id: string;
   readonly dimensions: number;
+  readonly preferredBatchSize?: number;
   private readonly inner: EmbeddingProvider;
   private readonly fallback: EmbeddingProvider;
   private warned = false;
@@ -260,6 +291,20 @@ export class ResilientEmbeddingProvider implements EmbeddingProvider {
     this.fallback = fallback;
     this.id = `resilient:${inner.id}`;
     this.dimensions = inner.dimensions;
+    this.preferredBatchSize = inner.preferredBatchSize;
+    if (inner.embedQuery) {
+      this.embedQuery = async (text: string): Promise<number[]> => {
+        try {
+          return await embedSearchQuery(this.inner, text);
+        } catch (err) {
+          if (!this.warned) {
+            this.warned = true;
+            console.warn(`Embedding provider ${this.inner.id} failed; falling back to hashed embeddings. ${(err as Error).message}`);
+          }
+          return embedSearchQuery(this.fallback, text);
+        }
+      };
+    }
   }
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -273,9 +318,16 @@ export class ResilientEmbeddingProvider implements EmbeddingProvider {
       return this.fallback.embed(texts);
     }
   }
+
+  /** Present only when the wrapped provider has a question form. */
+  readonly embedQuery?: (text: string) => Promise<number[]>;
 }
 
 export interface EmbeddingResolveOptions {
+  /** A Snowflake Cortex embedding model (`snowflake-arctic-embed-m-v1.5`): meaning search inside Snowflake. */
+  cortexModel?: string;
+  /** Where Cortex vectors already paid for are kept (the project's `.dql/cache`). */
+  cortexCachePath?: string;
   /** Local Ollama endpoint (preferred for local-first OSS), e.g. http://127.0.0.1:11434. */
   ollamaEndpoint?: string;
   ollamaModel?: string;
@@ -345,6 +397,12 @@ export async function probeLocalOllamaEmbeddings(
 }
 
 export function resolveEmbeddingProvider(options: EmbeddingResolveOptions = {}): EmbeddingProvider {
+  if (options.cortexModel) {
+    return new CachingEmbeddingProvider(new ResilientEmbeddingProvider(new CortexEmbeddingProvider({
+      model: options.cortexModel,
+      ...(options.cortexCachePath ? { cachePath: options.cortexCachePath } : {}),
+    })));
+  }
   if (options.ollamaEndpoint) {
     return new CachingEmbeddingProvider(new ResilientEmbeddingProvider(new OllamaEmbeddingProvider({
       endpoint: options.ollamaEndpoint,
@@ -373,6 +431,11 @@ export function resolveEmbeddingProvider(options: EmbeddingResolveOptions = {}):
  */
 export function embeddingOptionsFromEnv(env: Record<string, string | undefined> = process.env): EmbeddingResolveOptions {
   const options: EmbeddingResolveOptions = {};
+  // The ZLens app for Snowflake sets this: meaning search through Cortex, inside the customer's account.
+  if (readEnv('ZLENS_EMBEDDINGS', env)?.trim().toLowerCase() === 'cortex') {
+    options.cortexModel = readEnv('ZLENS_CORTEX_EMBED_MODEL', env)?.trim() || CORTEX_DEFAULT_EMBEDDING_MODEL;
+    return options;
+  }
   const ollamaEndpoint = readEnv('ZLENS_OLLAMA_EMBED_URL', env);
   const openaiApiKey = readEnv('ZLENS_OPENAI_API_KEY', env);
   if (ollamaEndpoint) {
@@ -492,7 +555,9 @@ export async function hybridRank<T>(
       .sort((a, b) => b.score - a.score);
   }
   const provider = options.provider ?? defaultEmbeddingProvider();
-  const [queryVec, ...itemVecs] = await provider.embed([query, ...items.map((entry) => entry.text)]);
+  const [queryVec, ...itemVecs] = provider.embedQuery
+    ? [await provider.embedQuery(query), ...await provider.embed(items.map((entry) => entry.text))]
+    : await provider.embed([query, ...items.map((entry) => entry.text)]);
   return items
     .map((entry, index) => {
       const cosine = cosineSimilarity(queryVec, itemVecs[index] ?? []);
@@ -527,6 +592,11 @@ export function embeddingProviderFromIndexedId(
   indexedProviderId: string,
   options: { ollamaEndpoint?: string } = {},
 ): EmbeddingProvider | undefined {
+  const cortex = /(?:^|:)cortex:(.+)$/.exec(indexedProviderId);
+  if (cortex) {
+    const model = cortex[1]!.trim();
+    return isCortexEmbeddingModel(model) ? resolveEmbeddingProvider({ cortexModel: model }) : undefined;
+  }
   const ollama = /(?:^|:)ollama:(.+)$/.exec(indexedProviderId);
   if (ollama) {
     const model = ollama[1]!.trim();

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { themes } from '../../themes/notebook-theme';
 import { EmbeddingSettings } from './EmbeddingSettings';
-import { LOCAL_EMBEDDINGS_OPTION, localEmbeddingsHint, searchModeLabel } from './embedding-reindex-model';
+import { CORTEX_EMBEDDINGS_OPTION, cortexEmbeddingsHint, LOCAL_EMBEDDINGS_OPTION, localEmbeddingsHint, searchModeLabel } from './embedding-reindex-model';
 
 vi.mock('../../api/client', () => ({ api: {} }));
 
@@ -35,5 +35,14 @@ describe('Search settings: word-based unless you turn on local embeddings', () =
     expect(html.indexOf('Embedder in use')).toBeGreaterThan(details);
     expect(html).not.toContain('active: ');
     expect(html).not.toMatch(/Lexical only|hashed embedder/);
+  });
+
+  it('offers Snowflake Cortex search only where the project connection is Snowflake, and says what it costs', () => {
+    expect(searchModeLabel({ provider: 'cortex', model: 'snowflake-arctic-embed-m-v1.5' }, true)).toBe('Search: meaning-based · Snowflake Cortex (snowflake-arctic-embed-m-v1.5)');
+    expect(cortexEmbeddingsHint({ available: true })).toMatch(/AI_EMBED on your Snowflake connection.*about a cent/);
+    expect(cortexEmbeddingsHint({ available: false, reason: 'Snowflake Cortex search needs the project connection to be Snowflake.' })).toBe('Snowflake Cortex search needs the project connection to be Snowflake.');
+    // Before the settings load (and on a project that is not on Snowflake) the switch is not there.
+    const html = renderToStaticMarkup(<EmbeddingSettings t={themes.paper} />);
+    expect(html).not.toContain(CORTEX_EMBEDDINGS_OPTION);
   });
 });

@@ -143,3 +143,49 @@ describe('the provider test route for Snowflake Cortex', () => {
     expect((await call('POST', '/api/settings/providers', { id: 'anthropic', apiKey: 'sk-ant-xyz-1234567' })).status).toBe(403);
   });
 });
+
+describe('meaning search through Snowflake Cortex (Settings » AI » Search)', () => {
+  async function startWith(projectRoot: string, executor: unknown) {
+    vi.stubEnv('ZLENS_NO_EGRESS', '1');
+    const port = await startLocalServer({
+      rootDir: projectRoot, projectRoot, executor: executor as QueryExecutor, preferredPort: 0,
+      captureServer: (created) => { servers.push(created); },
+    });
+    return async (method: string, path: string, body?: unknown) => {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method,
+        headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return { status: response.status, json: await response.json().catch(() => ({})) as Record<string, any> };
+    };
+  }
+
+  it('is offered only on a Snowflake connection, and embeds through the server\'s query path there', async () => {
+    const elsewhere = await startWith(project({ driver: 'duckdb', filepath: ':memory:' }), {});
+    expect((await elsewhere('GET', '/api/settings/embeddings')).json.cortex).toEqual({ available: false, reason: 'Snowflake Cortex search needs the project connection to be Snowflake.' });
+    expect((await elsewhere('PUT', '/api/settings/embeddings', { provider: 'cortex' })).status).toBe(400);
+
+    // Any Snowflake sign-in works: AI_EMBED is SQL, not the REST API.
+    const statements: Array<{ sql: string; driver?: string }> = [];
+    const executor = {
+      executePositional: async (sql: string, binds: unknown[], connection: { driver?: string }) => {
+        statements.push({ sql, driver: connection.driver });
+        const texts = JSON.parse(String(binds[0])) as string[];
+        return { rows: texts.map((_, index) => ({ I: index, V: JSON.stringify(Array.from({ length: 768 }, () => 0.01)) })) };
+      },
+    };
+    const call = await startWith(project({ driver: 'snowflake', account: 'acct', username: 'u', password: 'p' }), executor);
+    expect((await call('GET', '/api/settings/embeddings')).json.cortex).toEqual({ available: true });
+    expect((await call('GET', '/api/settings/embeddings/models')).json.catalog.cortex.map((option: { model: string }) => option.model))
+      .toEqual(['snowflake-arctic-embed-l-v2.0', 'snowflake-arctic-embed-m-v1.5']);
+    expect((await call('PUT', '/api/settings/embeddings', { provider: 'cortex', model: 'text-embedding-3-small' })).status).toBe(400);
+    const saved = await call('PUT', '/api/settings/embeddings', { provider: 'cortex', model: 'snowflake-arctic-embed-m-v1.5' });
+    expect(saved.json).toMatchObject({ ok: true, activeProviderId: 'cached:resilient:cortex:snowflake-arctic-embed-m-v1.5', semantic: true });
+    const tested = await call('POST', '/api/settings/embeddings/test');
+    expect(tested.json).toMatchObject({ ok: true, dimensions: 768, semantic: true });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatchObject({ driver: 'snowflake' });
+    expect(statements[0]!.sql).toContain("AI_EMBED('snowflake-arctic-embed-m-v1.5'");
+  });
+});
