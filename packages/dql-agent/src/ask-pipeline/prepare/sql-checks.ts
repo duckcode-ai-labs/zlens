@@ -1,6 +1,6 @@
 import type { AnalyticalIntentV1 } from '../intent.js';
 import { withoutBlockNames } from '../named-blocks.js';
-import { tableName } from '@zlens/core';
+import { sqlReturnsOneRow, tableName } from '@zlens/core';
 
 /**
  * THE CHECKS AN AI-DRAFTED STATEMENT PASSES BEFORE IT RUNS.
@@ -460,9 +460,15 @@ export function withoutDrafterCap(sql: string, maxRows: number, asked: string): 
   return sql.trim().replace(/;\s*$/, '').replace(new RegExp(`\\s+limit\\s+${maxRows}\\s*$`, 'i'), '');
 }
 
-/** A statement with a top-level row limit: the one it has, or one added. */
+/**
+ * A statement with a top-level row limit: the one it has, or one added. A
+ * statement that returns one row by construction (`SELECT COUNT(*) …` with no
+ * GROUP BY) gets none: there is nothing to guard, and a saved query that
+ * kept the guard read as a "Top 501" to every App tile built on it.
+ */
 export function withRowGuard(sql: string, maxRows: number): string {
   const trimmed = sql.trim().replace(/;\s*$/, '');
   if (/\blimit\s+\d+(\s+offset\s+\d+)?\s*$/i.test(trimmed) || /\bfetch\s+(first|next)\s+\d+\s+rows?\s+only\s*$/i.test(trimmed)) return trimmed;
+  if (sqlReturnsOneRow(trimmed)) return trimmed;
   return `${trimmed}\nLIMIT ${maxRows}`;
 }

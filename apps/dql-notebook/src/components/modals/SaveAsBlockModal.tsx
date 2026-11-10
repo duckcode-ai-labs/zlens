@@ -17,6 +17,8 @@ interface SaveAsBlockModalProps {
   initialTags?: string[];
   initialDomain?: string;
   initialOwner?: string;
+  /** The question Ask answered when AI wrote this content: kept on the saved query, so Certify asks for a review. */
+  aiQuestion?: string;
 }
 
 function RequiredMark() {
@@ -43,6 +45,7 @@ export function SaveAsBlockModal({
   initialTags,
   initialDomain,
   initialOwner,
+  aiQuestion,
 }: SaveAsBlockModalProps) {
   const { state, dispatch } = useNotebook();
   const t = themes[state.themeMode];
@@ -129,6 +132,7 @@ export function SaveAsBlockModal({
         reviewRequired: Boolean(cell.datasetRefs?.length),
         datasetRefs: cell.datasetRefs,
         lineage: cell.dqlArtifact?.lineage,
+        ...(aiQuestion?.trim() ? { sourceQuestion: aiQuestion.trim() } : {}),
       });
       const file = {
         name: result.path.split('/').pop() ?? result.path,

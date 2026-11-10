@@ -3,6 +3,7 @@ import type { DatasetDescriptor } from '../datasets/descriptor.js';
 import { discoverDatasetJoins, withDatasetJoins, type RelatedRelationshipEdge } from '../datasets/related-fields.js';
 import { appTileTrustFor, appTrustAnswer, appsPublishSettings, appsPublishSettingsProblems, isTrustReminderTaskId, notCertifiedTiles, publishReadyLine, publishedTileTrustText, readersWillSeeText, requireCertifiedToPublishMessage, type AppTrustPageLike, type AppTrustSourceLike } from './app-trust.js';
 import { certifiedByLabel, certifierDisplayName, readerTileTrust } from './reader-trust.js';
+import { savedQueryKeepsFirstRows, savedQueryResultDescriptor } from '../datasets/result-fields.js';
 
 const base: DatasetDescriptor = {
   version: 1,
@@ -190,5 +191,56 @@ describe('a join that changed since it was certified (T4)', () => {
     const changedSource: AppTrustSourceLike = { id: 'beverage', kind: 'block', lifecycle: 'review', trustState: 'review_required', reviewStatus: 'required', certification: { by: 'maria@example.test', at: '2026-10-22T09:00:00.000Z' } };
     const answer = appTrustAnswer({ pages: [salesPage([])], sourceFor: sources({ beverage: changedSource }) });
     expect(appTileTrustFor(answer, 'overview', 'bev')?.trust).toMatchObject({ state: 'review', detail: expect.stringMatching(/^Changed since it was certified on 22 Oct/) });
+  });
+});
+
+describe('a tile over a saved query result: the editor says what the page says (V8 B5)', () => {
+  const resultSource = (sql: string, groupBy: string[], columns: Array<{ name: string; type: string }>): AppTrustSourceLike => ({
+    id: 'saved',
+    kind: 'block',
+    lifecycle: 'certified',
+    trustState: 'certified',
+    reviewStatus: 'not_required',
+    certification: { by: 'maria@example.test', at: '2026-11-10T09:00:00.000Z' },
+    capabilities: {
+      dataset: savedQueryResultDescriptor({
+        sourceId: 'saved',
+        sourceRevision: 'sha256:saved',
+        savedQuery: 'saved_query',
+        qualifiedId: 'nba::block::saved_query',
+        domain: 'nba',
+        certified: true,
+        lifecycle: 'certified',
+        columns,
+        groupBy,
+        typesFrom: 'contract',
+        keepsFirstRows: savedQueryKeepsFirstRows(sql),
+      })!,
+    },
+  });
+  const page = (query: Record<string, unknown>): AppTrustPageLike => ({
+    id: 'overview',
+    metadata: { title: 'Overview' },
+    datasets: [{ id: 'saved_ds', sourceId: 'saved', sourceRevision: 'sha256:saved' }],
+    filters: [],
+    layout: { items: [{ i: 'tile', title: 'Tile', sourceId: 'saved', sourceRevision: 'sha256:saved', query }] },
+  });
+  const answerFor = (source: AppTrustSourceLike, query: Record<string, unknown>) => appTrustAnswer({ pages: [page(query)], sourceFor: (id) => (id === 'saved' ? source : undefined) });
+
+  it('a KPI over an Ask-born COUNT(*) that kept the row guard is certified everywhere', () => {
+    const wins = resultSource("SELECT COUNT(*) AS wins FROM nba.team_games WHERE team = 'GSW'\nLIMIT 501", [], [{ name: 'wins', type: 'BIGINT' }]);
+    const answer = answerFor(wins, { dimensions: [], measures: [{ measure: 'wins' }] });
+    expect(answer.label).toBe('All tiles certified');
+    expect(publishReadyLine(answer)).toEqual({ detail: 'Every check passed.', allPassed: true });
+  });
+
+  it('an intended Top 3 shown as its rows is certified; a total of it is not, before publishing too', () => {
+    const top3 = resultSource('SELECT player_name, SUM(reb) AS rebounds FROM t GROUP BY 1 ORDER BY 2 DESC LIMIT 3', ['player_name'], [{ name: 'player_name', type: 'VARCHAR' }, { name: 'rebounds', type: 'BIGINT' }]);
+    expect(answerFor(top3, { dimensions: [{ field: 'player_name' }], measures: [{ measure: 'rebounds' }] }).label).toBe('All tiles certified');
+    const total = answerFor(top3, { dimensions: [], measures: [{ measure: 'rebounds' }] });
+    // The publish dialog used to say "All tiles certified" here while the published page said "0 of 1".
+    expect(total.label).toBe('0 of 1 tile certified');
+    expect(total.tiles[0]?.trust.detail).toBe('Totals only the 3 rows saved_query keeps (it is a Top 3), not all of the data, so it is not a certified total.');
+    expect(readersWillSeeText(total.notCertified)).toBe('Readers will see ‘Not certified yet’ on 1 tile.');
   });
 });

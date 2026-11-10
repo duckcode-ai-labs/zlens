@@ -33,6 +33,7 @@ import {
   type ReaderTrustItem,
   type ReaderTrustTile,
 } from './reader-trust.js';
+import { normalizeTileQuery, validateTileQuery } from './tile-query.js';
 
 /** The parts of an App data source trust depends on (a Studio draft source card). */
 export interface AppTrustSourceLike {
@@ -104,6 +105,21 @@ function datasetOf(source: AppTrustSourceLike | undefined): DatasetDescriptor | 
 }
 
 /**
+ * The tile-query check a run applies, or undefined when it cannot be worked
+ * out here (a query or a descriptor this cannot read): the page's run then
+ * stays the only evidence, never a guess.
+ */
+function tileQueryCheck(descriptor: DatasetDescriptor, rawQuery: unknown): ReturnType<typeof validateTileQuery> | undefined {
+  const query = normalizeTileQuery(rawQuery);
+  if (!query || !descriptor.grain) return undefined;
+  try {
+    return validateTileQuery(descriptor, query);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The evidence a run of this tile would carry, worked out from the page
  * itself: the reader's rule then labels it.
  */
@@ -123,10 +139,20 @@ function staticRunTile(page: AppTrustPageLike, tile: AppTrustTileLike, input: Ap
         ...(trust !== 'certified' && join.changedSinceCertified ? { changedSinceCertified: join.changedSinceCertified } : {}),
       };
     });
+    // The same check the page's run applies to the tile's query (a total over
+    // a Top N saved query, a query beyond what the data certifies): without
+    // it the editor and the publish dialog said "All tiles certified" for a
+    // tile the published page showed as "Not certified yet" (V8 B5).
+    const validation = tileQueryCheck(descriptor, tile.query);
     return {
       status: 'ok',
       tileType: 'dataset',
-      dataset: { trust: certified ? 'certified' : 'review_required', checked: source.checked ?? null, joins },
+      dataset: {
+        trust: certified ? 'certified' : 'review_required',
+        checked: source.checked ?? null,
+        joins,
+        ...(validation ? { validation: { outcome: validation.outcome, adaptations: validation.adaptations } } : {}),
+      },
       ...(source.certification ? { certification: source.certification } : {}),
     };
   }

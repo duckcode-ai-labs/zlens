@@ -1089,7 +1089,7 @@ export interface BlockStudioDiagnostic {
   /** Raw parser/compiler text, rendered only in a collapsed technical-details control. */
   technicalDetails?: string;
   /** Stable UI intent; the browser still decides how to perform the action. */
-  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description' | 'fill_certification_fields';
+  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description' | 'fill_certification_fields' | 'confirm_ai_review';
   /** For `fix_description`: the description the one-click fix writes before certifying. */
   suggestedDescription?: string;
   location?: { line?: number; column?: number };

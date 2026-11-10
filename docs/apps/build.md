@@ -234,7 +234,14 @@ result:
   refuses to sum it and offers **Min** and **Max** of it instead.
 
 A certified saved query's tiles are **Certified**; a saved query nobody
-certified keeps its tiles **Not certified yet**. A saved query that asks for values
+certified keeps its tiles **Not certified yet**. One exception: a saved query
+that keeps only its first rows (an outer `LIMIT 3`, a Top 3) is certified as
+those rows. A tile that shows them is **Certified**; a total of them reads
+**Not certified yet**: *Totals only the 3 rows … keeps (it is a Top 3), not all
+of the data*. A `LIMIT` on a saved query that returns one row anyway (a
+`COUNT(*)` with no `GROUP BY`) keeps every row, so it is no Top N. App Studio,
+the publish dialog, the published page and the Apps card all say the same.
+A saved query that asks for values
 (parameters) has no fields: under **Add as it is**, click **Table**, **Chart**
 or **KPI** to show its result.
 

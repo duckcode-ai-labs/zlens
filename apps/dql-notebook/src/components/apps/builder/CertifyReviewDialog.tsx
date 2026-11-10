@@ -132,6 +132,7 @@ export function CertifyReviewDialog({
             {changedOn ? <p className="certify-review-who">Changed since it was certified on {changedOn}.</p> : null}
             {review.check ? <p className="certify-review-who">{checkedByLabel(review.check)}</p> : null}
             {savedQuery ? <>
+              {savedQuery.aiWritten ? <p className="certify-review-who">{savedQuery.aiWritten}</p> : null}
               <section className="certify-review-part" aria-label="It runs">
                 <h3><Play size={13} aria-hidden="true" /> It runs</h3>
                 {savedQuery.runs.ok
