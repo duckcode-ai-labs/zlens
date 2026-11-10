@@ -150,8 +150,17 @@ export interface TileQueryDiagnostic {
 export interface TileQueryAdaptation {
   kind: 'aggregate_time_rollup' | 'aggregate_entity_rollup' | 'saved_query_rollup';
   message: string;
-  /** A roll-up over a Top N saved query's N rows: it runs, but it is not a certified total. */
+  /**
+   * A roll-up over a Top N saved query's N rows. A certified Top N certifies
+   * those N rows, so the tile is certified for them; the receipt says the
+   * tile covers only them.
+   */
   topRowsOnly?: number;
+}
+
+/** The receipt line for a tile over a Top N saved query's rows: what it covers, said plainly. */
+export function topRowsTileMessage(savedQuery: string, rows: number): string {
+  return `Covers only the ${rows} rows ${savedQuery} keeps (it is a Top ${rows}), not all of the data.`;
 }
 
 export interface TileQueryValidation {
@@ -471,7 +480,14 @@ export function validateTileQuery(descriptor: DatasetDescriptor, query: TileQuer
         : `Rolled up across the Dataset's ${descriptor.grain.timeGrain} periods.`,
     });
   }
-  if (savedQueryRollup.adaptation) adaptations.push(savedQueryRollup.adaptation);
+  if (savedQueryRollup.adaptation) {
+    // A Top N's rows are what its certification covers: the receipt says the
+    // tile covers only them, not that they are uncertified (V9).
+    const { topRowsOnly } = savedQueryRollup.adaptation;
+    adaptations.push(topRowsOnly && descriptor.result
+      ? { ...savedQueryRollup.adaptation, message: topRowsTileMessage(descriptor.result.savedQuery, topRowsOnly) }
+      : savedQueryRollup.adaptation);
+  }
   if (descriptor.grain.aggregate && aggregateSafety.entityRollup) {
     adaptations.push({
       kind: 'aggregate_entity_rollup',

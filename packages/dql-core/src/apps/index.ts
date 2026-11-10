@@ -84,6 +84,7 @@ export {
   tileQueryHash,
   tileQueryMeasure,
   tileQueryMeasureScope,
+  topRowsTileMessage,
   validateTileQuery,
 } from './tile-query.js';
 export { isPartialPeriod, readKpiStyle, summarizeKpi } from './kpi.js';

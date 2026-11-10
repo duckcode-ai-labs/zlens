@@ -3,6 +3,7 @@ import type { DatasetDescriptor } from '../datasets/descriptor.js';
 import { discoverDatasetJoins, withDatasetJoins, type RelatedRelationshipEdge } from '../datasets/related-fields.js';
 import { appTileTrustFor, appTrustAnswer, appsPublishSettings, appsPublishSettingsProblems, isTrustReminderTaskId, notCertifiedTiles, publishReadyLine, publishedTileTrustText, readersWillSeeText, requireCertifiedToPublishMessage, type AppTrustPageLike, type AppTrustSourceLike } from './app-trust.js';
 import { certifiedByLabel, certifierDisplayName, readerTileTrust } from './reader-trust.js';
+import { validateTileQuery } from './tile-query.js';
 import { savedQueryKeepsFirstRows, savedQueryResultDescriptor } from '../datasets/result-fields.js';
 
 const base: DatasetDescriptor = {
@@ -234,13 +235,34 @@ describe('a tile over a saved query result: the editor says what the page says (
     expect(publishReadyLine(answer)).toEqual({ detail: 'Every check passed.', allPassed: true });
   });
 
-  it('an intended Top 3 shown as its rows is certified; a total of it is not, before publishing too', () => {
-    const top3 = resultSource('SELECT player_name, SUM(reb) AS rebounds FROM t GROUP BY 1 ORDER BY 2 DESC LIMIT 3', ['player_name'], [{ name: 'player_name', type: 'VARCHAR' }, { name: 'rebounds', type: 'BIGINT' }]);
-    expect(answerFor(top3, { dimensions: [{ field: 'player_name' }], measures: [{ measure: 'rebounds' }] }).label).toBe('All tiles certified');
-    const total = answerFor(top3, { dimensions: [], measures: [{ measure: 'rebounds' }] });
-    // The publish dialog used to say "All tiles certified" here while the published page said "0 of 1".
-    expect(total.label).toBe('0 of 1 tile certified');
-    expect(total.tiles[0]?.trust.detail).toBe('Totals only the 3 rows saved_query keeps (it is a Top 3), not all of the data, so it is not a certified total.');
-    expect(readersWillSeeText(total.notCertified)).toBe('Readers will see ‘Not certified yet’ on 1 tile.');
+  it('a certified Top 3 (LIMIT 3) is certified as its rows, shown or totalled, before publishing too (V9)', () => {
+    // The tester's Lakers App: "top 3 rebounders", grouped by player id and
+    // name; its bar groups by name alone. LIMIT 501 passed because that
+    // statement returns one row, so it is no Top N. This one keeps 3 of many
+    // rows, and a bar by one of its two grouping columns rolls them up: the
+    // check read it as a total over a Top 3, which it never counted as
+    // certified, and the page said "0 of 1 tile certified".
+    const lakersSql = 'SELECT player_id, player_name, SUM(reb) AS total_rebounds FROM t GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 3';
+    expect(savedQueryKeepsFirstRows(lakersSql)).toBe(3);
+    const top3 = resultSource(lakersSql, ['player_id', 'player_name'], [{ name: 'player_id', type: 'BIGINT' }, { name: 'player_name', type: 'VARCHAR' }, { name: 'total_rebounds', type: 'BIGINT' }]);
+    const byName = { dimensions: [{ field: 'player_name' }], measures: [{ measure: 'total_rebounds' }] };
+    expect(validateTileQuery(top3.capabilities!.dataset as DatasetDescriptor, byName).adaptations).toEqual([{
+      kind: 'saved_query_rollup',
+      message: 'Covers only the 3 rows saved_query keeps (it is a Top 3), not all of the data.',
+      topRowsOnly: 3,
+    }]);
+    const bar = answerFor(top3, byName);
+    expect(bar.label).toBe('All tiles certified');
+    expect(bar.tiles[0]?.trust.detail).toBe('Certified data. Covers only the 3 rows saved_query keeps (it is a Top 3), not all of the data.');
+    expect(answerFor(top3, { dimensions: [{ field: 'player_id' }, { field: 'player_name' }], measures: [{ measure: 'total_rebounds' }] }).label).toBe('All tiles certified');
+    const total = answerFor(top3, { dimensions: [], measures: [{ measure: 'total_rebounds' }] });
+    expect(total.label).toBe('All tiles certified');
+    expect(publishReadyLine(total)).toEqual({ detail: 'Every check passed.', allPassed: true });
+    // A Top 3 nobody certified is not certified, here as on the page.
+    const dataset = top3.capabilities!.dataset as DatasetDescriptor;
+    const draft: AppTrustSourceLike = { ...top3, lifecycle: 'review', trustState: 'review_required', capabilities: { dataset: { ...dataset, trust: 'review_required' } } };
+    const notCertified = answerFor(draft, byName);
+    expect(notCertified.label).toBe('0 of 1 tile certified');
+    expect(readersWillSeeText(notCertified.notCertified)).toBe('Readers will see \u2018Not certified yet\u2019 on 1 tile.');
   });
 });
