@@ -30,6 +30,7 @@ export function searchModeLabel(settings: { provider: string; model?: string } |
   if (!semantic || !settings || settings.provider === 'hashed') return 'Search: word-based';
   if (settings.provider === 'ollama') return `Search: meaning-based · local Ollama${settings.model ? ` (${settings.model})` : ''}`;
   if (settings.provider === 'openai') return `Search: meaning-based · OpenAI${settings.model ? ` (${settings.model})` : ''}`;
+  if (settings.provider === 'cortex') return `Search: meaning-based · Snowflake Cortex${settings.model ? ` (${settings.model})` : ''}`;
   return 'Search: meaning-based';
 }
 
@@ -38,4 +39,16 @@ export function localEmbeddingsHint(input: { reachable: boolean; installed: stri
   if (!input.reachable) return 'Ollama is not running on this computer. Start it, then turn this on.';
   if (!input.installed.includes(LOCAL_EMBEDDING_MODEL)) return `Ollama is running. Turning this on downloads ${LOCAL_EMBEDDING_MODEL} (about 270 MB) into Ollama first.`;
   return `Ollama is running with ${LOCAL_EMBEDDING_MODEL}. ZLens uses it only when this is on.`;
+}
+
+/** The Cortex model Settings offers in one switch. */
+export const CORTEX_EMBEDDING_MODEL = 'snowflake-arctic-embed-l-v2.0';
+
+/** The Cortex switch's words: where it runs and what it costs. */
+export const CORTEX_EMBEDDINGS_OPTION = 'Use Snowflake Cortex for meaning-based search — runs in your Snowflake account';
+
+/** The line under the Cortex switch. */
+export function cortexEmbeddingsHint(input: { available: boolean; reason?: string }): string {
+  if (!input.available) return input.reason ?? 'Snowflake Cortex search is not available for this project.';
+  return 'Descriptions of your tables, columns and metrics are embedded with AI_EMBED on your Snowflake connection. Re-indexing a catalog costs about a cent of Snowflake credits.';
 }

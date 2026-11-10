@@ -120,7 +120,7 @@ export function ConnectionRuntimeSettings({
   // Providers this install lets a person choose (ZLENS_MODEL_PROVIDERS); none at all means AI is off here.
   const mayChoose = (id: ProviderSettingsId) => providerAllowed(providers, id);
   const aiOff = aiTurnedOff(providers);
-  const embeddingProviders = (['ollama', 'openai'] as const).filter((id) => mayChoose(id));
+  const embeddingProviders = (['ollama', 'openai', 'cortex'] as const).filter((id) => mayChoose(id));
   const aiOffNotice = (
     <div role="note" style={{ marginTop: 14, border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '10px 12px', fontSize: 12.5, color: t.textSecondary, background: t.cellBg, lineHeight: 1.5 }}>
       AI is turned off for this install. Certified answers, metrics and your own SQL work as usual; questions that need an AI model are not available.

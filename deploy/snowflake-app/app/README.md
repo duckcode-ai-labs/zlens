@@ -39,6 +39,11 @@ grants, say): **Settings » Database » Apply and synchronize**.
 **Ask with Claude** uses Snowflake Cortex. Where Snowflake refuses the Cortex REST API for the account,
 ZLens asks Cortex through SQL (`AI_COMPLETE`) instead; **Settings » AI » Test** says which one answers.
 
+**Search by meaning.** ZLens finds the tables, columns and metrics a question means, not only the ones that
+share its words, with Cortex embeddings (`AI_EMBED`, model `snowflake-arctic-embed-l-v2.0`), inside your
+account. Indexing costs about a cent of Snowflake credits for a small project (about $0.35 for one with
+hundreds of tables, the first time; after that only new text is embedded). Turn it off in **Settings » AI » Search**.
+
 Until steps 1 and 2 are done, whoever opens ZLens sees which of them is still missing. ZLens picks up
 changes within a minute, without a restart. Anyone but the named user is told the app is set up for
 one person.

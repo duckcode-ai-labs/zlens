@@ -406,6 +406,10 @@ import {
   OpenAIProvider,
   CORTEX_DEFAULT_MODEL,
   isCortexClaudeProvider,
+  isCortexEmbeddingModel,
+  CORTEX_DEFAULT_EMBEDDING_MODEL,
+  CORTEX_EMBEDDING_MODELS,
+  useCortexEmbeddingSql,
   buildBlockBusinessFingerprint,
   buildBlockSqlFingerprints,
   buildAnalysisQuestionPlan,
@@ -1968,6 +1972,13 @@ export const EMBEDDING_MODEL_CATALOG = {
       description: 'Cheapest hosted option and strong for catalog text.' },
     { model: 'text-embedding-3-large', label: 'text-embedding-3-large', dimensions: 3072, size: 'hosted', recommended: false,
       description: 'Highest quality hosted embedding; higher cost per index.' },
+  ],
+  // Inside the customer's Snowflake account, on the project's Snowflake connection (AI_EMBED).
+  cortex: [
+    { model: 'snowflake-arctic-embed-l-v2.0', label: 'Snowflake Arctic Embed L', dimensions: 1024, size: 'in Snowflake', recommended: true,
+      description: 'Best match quality, including tables with no descriptions; many languages. Re-indexing a catalog costs about a cent.' },
+    { model: 'snowflake-arctic-embed-m-v1.5', label: 'Snowflake Arctic Embed M', dimensions: 768, size: 'in Snowflake', recommended: false,
+      description: 'English only and a little cheaper; finds fewer tables when they have no descriptions.' },
   ],
 } as const;
 
@@ -5313,6 +5324,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const executor = withHostQueryHooks(rawExecutor, { rowPolicy: hostHooks?.rowPolicy, credentials: hostHooks?.credentials, statements: hostHooks?.statements, hosted: Boolean(hostHooks), engine: Boolean(hostHooks) });
   // Cortex through SQL, when Snowflake refuses its REST API, goes the same one way.
   useCortexSqlExecutor(executor);
+  /** Why Snowflake Cortex search cannot be chosen here, or undefined when it can. */
+  const cortexSearchUnavailable = (): string | undefined => connection?.driver === 'snowflake'
+    ? undefined
+    : 'Snowflake Cortex search needs the project connection to be Snowflake.';
+  // So does meaning search through Cortex (AI_EMBED), on the project's Snowflake connection as it is now.
+  useCortexEmbeddingSql(async (statement, binds) => {
+    const current = connection;
+    if (!current || current.driver !== 'snowflake') throw new Error('Snowflake Cortex search needs the project connection to be Snowflake.');
+    return (await executor.executePositional(statement, binds, current)).rows as Array<Record<string, unknown>>;
+  });
   // Validate before creating listeners, project state, or a connection.  A
   // malformed embedding/CLI option must fail safely rather than silently
   // starting an ambiguous rollout mode.
@@ -15179,7 +15200,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // database granted to it, it reads every schema in it the app can see (the sync Settings » Database
   // runs) and drafts the models from them (Modeling » Draft from warehouse). The drafts wait for review
   // as always. Once per database: a marker in .dql/local remembers it across restarts.
-  type SnowflakeAppSetup = { state: 'idle' | 'running' | 'done' | 'failed'; database?: string; schemas?: string[]; relations?: number; drafted?: number; proposalId?: string; error?: string; at?: string };
+  type SnowflakeAppSetup = { state: 'idle' | 'running' | 'done' | 'failed'; database?: string; schemas?: string[]; relations?: number; drafted?: number; proposalId?: string; search?: 'meaning' | 'words'; searchNote?: string; error?: string; at?: string };
   let snowflakeAppSetup: SnowflakeAppSetup = { state: 'idle' };
   const snowflakeAppSetupMarker = join(projectRoot, '.dql', 'local', 'snowflake-app-setup.json');
   // In the ZLens app for Snowflake, the schema list offers only the databases granted to the app (approved
@@ -15235,6 +15256,21 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       if (warehouseCatalog?.error) throw new Error(warehouseCatalog.error);
       if (warehouseCatalog?.skipped) throw new Error(warehouseCatalog.skipped);
       const { report, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot());
+      // Meaning search through Cortex (approved design S3): a refresh gives the embedder only a few seconds,
+      // so the first index is built here, whole. Later refreshes re-embed only new text (the vector cache).
+      const embedder = projectEmbeddingProvider(projectRoot);
+      let search: { search: 'meaning' | 'words'; searchNote?: string } = { search: 'words' };
+      if (!isHashedEmbeddingProvider(embedder)) {
+        try {
+          await ensureMetadataCatalogFresh(projectRoot);
+          const indexed = await upgradeVectorIndexForProject(projectRoot, embedder);
+          search = indexed.upgraded || indexed.reason === 'index already embedded with this provider'
+            ? { search: 'meaning' }
+            : { search: 'words', ...(indexed.reason ? { searchNote: indexed.reason } : {}) };
+        } catch (error) {
+          search = { search: 'words', searchNote: error instanceof Error ? error.message : String(error) };
+        }
+      }
       snowflakeAppSetup = {
         state: 'done',
         database,
@@ -15242,6 +15278,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         relations: typeof warehouseCatalog?.relations === 'number' ? warehouseCatalog.relations : undefined,
         drafted: proposal ? report.entities.length : 0,
         ...(proposal ? { proposalId: proposal.id } : {}),
+        ...search,
         at: new Date().toISOString(),
       };
       mkdirSync(dirname(snowflakeAppSetupMarker), { recursive: true });
@@ -20491,12 +20528,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const catalog = openMetadataCatalog(projectRoot);
         let indexedProvider: string | undefined;
         try { indexedProvider = catalog.state('vector_provider') ?? undefined; } finally { catalog.close(); }
+        const cortexByInstall = typeof settings.provider !== 'string' && readEnv('ZLENS_EMBEDDINGS')?.trim().toLowerCase() === 'cortex';
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({
           settings: {
-            provider: typeof settings.provider === 'string' ? settings.provider : 'hashed',
+            // With no project setting, what the install chose (the ZLens app for Snowflake: Cortex), not "hashed".
+            provider: typeof settings.provider === 'string' ? settings.provider : cortexByInstall ? 'cortex' : 'hashed',
             endpoint: typeof settings.endpoint === 'string' ? settings.endpoint : '',
-            model: typeof settings.model === 'string' ? settings.model : '',
+            model: typeof settings.model === 'string' ? settings.model : cortexByInstall ? (readEnv('ZLENS_CORTEX_EMBED_MODEL')?.trim() || CORTEX_DEFAULT_EMBEDDING_MODEL) : '',
             // Never return the key itself.
             apiKeySet: typeof settings.apiKey === 'string' && settings.apiKey.trim().length > 0,
           },
@@ -20506,6 +20545,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           // A mismatch means the catalog still holds vectors from the previous
           // embedder; the next compile/refresh re-embeds it.
           reindexRequired: Boolean(indexedProvider) && indexedProvider !== provider.id,
+          // Meaning search through Snowflake Cortex: offered when the project connection is Snowflake.
+          cortex: {
+            available: !cortexSearchUnavailable() && modelProviderAllowed('cortex'),
+            ...(cortexSearchUnavailable() ? { reason: cortexSearchUnavailable() } : {}),
+            // The ZLens app for Snowflake starts with it on (ZLENS_EMBEDDINGS=cortex); Settings can turn it off.
+            ...(readEnv('ZLENS_EMBEDDINGS')?.trim().toLowerCase() === 'cortex' ? { installDefault: true } : {}),
+          },
         }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -20518,10 +20564,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       try {
         const body = (await readJSON(req).catch(() => ({}))) as Record<string, unknown>;
         const provider = typeof body.provider === 'string' ? body.provider.trim() : 'hashed';
-        if (provider !== 'hashed' && provider !== 'ollama' && provider !== 'openai') {
+        if (provider !== 'hashed' && provider !== 'ollama' && provider !== 'openai' && provider !== 'cortex') {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Embedding provider must be hashed, ollama, or openai.' }));
+          res.end(serializeJSON({ error: 'Embedding provider must be hashed, ollama, openai, or cortex.' }));
           return;
+        }
+        if (provider === 'cortex') {
+          const refusal = cortexSearchUnavailable();
+          const model = typeof body.model === 'string' ? body.model.trim() : '';
+          if (refusal || (model && !isCortexEmbeddingModel(model))) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(serializeJSON({ error: refusal ?? `Choose ${Object.keys(CORTEX_EMBEDDING_MODELS).join(' or ')}.` }));
+            return;
+          }
         }
         // Embeddings reach the same service as that model provider: the same install rule applies (hashed is offline).
         if (provider !== 'hashed' && !modelProviderAllowed(provider)) {

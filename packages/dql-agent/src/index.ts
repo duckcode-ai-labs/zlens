@@ -1501,7 +1501,16 @@ export {
   hybridRank,
   probeLocalOllamaEmbeddings,
   embeddingProviderFromIndexedId,
+  embedSearchQuery,
 } from "./embeddings/provider.js";
+export {
+  CORTEX_DEFAULT_EMBEDDING_MODEL,
+  CORTEX_EMBEDDING_MODELS,
+  CortexEmbeddingProvider,
+  isCortexEmbeddingModel,
+  useCortexEmbeddingSql,
+} from "./embeddings/cortex.js";
+export type { CortexEmbeddingModel, CortexEmbeddingSql } from "./embeddings/cortex.js";
 export type {
   EmbeddingProvider,
   HybridRankItem,

@@ -73,7 +73,8 @@ const REQUIRED_TEST_FILES = [
 // 191 with a certified block answering its own question before any model reads it (certified-question.test.ts, +1 file, +14 tests).
 // 193 with one answer to "is this the same table?" (physical-binding.test.ts, +1 file, +6 tests; simplification plan Z1).
 // 194 with Claude through Snowflake Cortex (claude-cortex.test.ts, +1 file, +10 tests).
-const EXPECTED_TEST_FILES = 194;
+// 195 with meaning search through Snowflake Cortex (embeddings/cortex.test.ts, +1 file, +8 tests).
+const EXPECTED_TEST_FILES = 195;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -183,10 +184,12 @@ const EXPECTED_TEST_FILES = 194;
 // (claude-cortex.test.ts, +10; Snowflake Native App plan step 1d).
 // 2836 with Cortex through SQL when Snowflake refuses the REST API, and Cortex failures in plain words
 // (claude-cortex.test.ts, +6; Snowflake app end-to-end fixes D3, D5).
-const EXPECTED_TESTS = 2836;
+// 2845 with meaning search through Snowflake Cortex (cortex.test.ts +8; project-embeddings.test.ts +1:
+// the app's ZLENS_EMBEDDINGS=cortex is never put back to word-based; search design S1-S5).
+const EXPECTED_TESTS = 2845;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2755.
+// The ordinary lane's share is the difference: 2764.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

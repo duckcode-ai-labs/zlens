@@ -45,7 +45,9 @@ BEGIN
     'ZLENS_SNOWFLAKE_APP_NAME', :app,
     'ZLENS_SNOWFLAKE_SERVICE', :app || '.CORE.ZLENS',
     'ZLENS_SNOWFLAKE_IDLE_SUSPEND_MINUTES', '30',
-    'ZLENS_MODEL_PROVIDERS', 'cortex')), '''', '');
+    'ZLENS_MODEL_PROVIDERS', 'cortex',
+    -- Meaning-based search through Cortex (AI_EMBED), unless the person turns it off in Settings.
+    'ZLENS_EMBEDDINGS', 'cortex')), '''', '');
   CREATE COMPUTE POOL IF NOT EXISTS IDENTIFIER(:pool)
     MIN_NODES = 1 MAX_NODES = 1 INSTANCE_FAMILY = CPU_X64_XS
     AUTO_RESUME = TRUE AUTO_SUSPEND_SECS = 600;

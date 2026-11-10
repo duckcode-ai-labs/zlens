@@ -335,11 +335,13 @@ export interface MetricFlowInstallerStatus {
 }
 
 export interface EmbeddingSettingsResponse {
-  settings: { provider: 'hashed' | 'ollama' | 'openai'; endpoint: string; model: string; apiKeySet: boolean };
+  settings: { provider: 'hashed' | 'ollama' | 'openai' | 'cortex'; endpoint: string; model: string; apiKeySet: boolean };
   activeProviderId: string;
   semantic: boolean;
   indexedProviderId?: string;
   reindexRequired: boolean;
+  /** Meaning search through Snowflake Cortex: offered when the project connection is Snowflake. */
+  cortex?: { available: boolean; reason?: string; installDefault?: boolean };
 }
 
 export interface EmbeddingReindexResult {
@@ -9447,7 +9449,7 @@ export const api = {
   },
 
   async saveEmbeddingSettings(input: {
-    provider: 'hashed' | 'ollama' | 'openai';
+    provider: 'hashed' | 'ollama' | 'openai' | 'cortex';
     endpoint?: string;
     model?: string;
     apiKey?: string;
@@ -9459,6 +9461,7 @@ export const api = {
     catalog: {
       ollama: Array<{ model: string; label: string; dimensions: number; size: string; recommended: boolean; description: string }>;
       openai: Array<{ model: string; label: string; dimensions: number; size: string; recommended: boolean; description: string }>;
+      cortex?: Array<{ model: string; label: string; dimensions: number; size: string; recommended: boolean; description: string }>;
     };
     ollamaReachable: boolean;
     installed: string[];
