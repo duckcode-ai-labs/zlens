@@ -20,6 +20,16 @@ ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_user
   APPLICATION_ROLES = (app_admin)
   SENSITIVE = FALSE;
 
+-- Optional: a stage the customer owns where ZLens puts a daily copy of its projects, which outlives
+-- an uninstall. The admin creates it, grants it to the app (GRANT READ, WRITE ON STAGE ... TO
+-- APPLICATION ...), and names it here.
+ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_backup_stage
+  TYPE = STRING
+  LABEL = 'Stage for ZLens backups (optional)'
+  DESCRIPTION = 'A stage you own and granted to this app (GRANT READ, WRITE ON STAGE MY_DB.MY_SCHEMA.ZLENS_BACKUPS TO APPLICATION <this app>), as DATABASE.SCHEMA.STAGE. ZLens copies its projects there once a day; the copies stay if the app is uninstalled.'
+  APPLICATION_ROLES = (app_admin)
+  SENSITIVE = FALSE;
+
 -- ZLens's own warehouse, compute pool and service: created at install, moved to the new version at
 -- an upgrade (a stopped service stays stopped), and started when resume is TRUE.
 CREATE OR REPLACE PROCEDURE core.ensure_zlens(resume BOOLEAN)
@@ -122,3 +132,56 @@ BEGIN
 END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.app_url() TO APPLICATION ROLE app_user;
+
+-- Backups: ZLens snapshots its volume once a day (keeping 7) as it stops for the day. These list
+-- them, take one now, and put one back.
+CREATE OR REPLACE PROCEDURE app_public.backups()
+RETURNS TABLE (name VARCHAR, state VARCHAR, created_on VARCHAR)
+LANGUAGE SQL
+AS
+$$
+DECLARE
+  snapshots RESULTSET;
+BEGIN
+  snapshots := (EXECUTE IMMEDIATE 'SHOW SNAPSHOTS IN SCHEMA core ->> SELECT "name"::VARCHAR AS name, "state"::VARCHAR AS state, TO_VARCHAR("created_on", ''YYYY-MM-DD HH24:MI TZH:TZM'') AS created_on FROM $1 WHERE STARTSWITH("name", ''ZLENS_BACKUP_'') OR STARTSWITH("name", ''SYS_BACKUP'') ORDER BY "created_on" DESC');
+  RETURN TABLE(snapshots);
+END;
+$$;
+GRANT USAGE ON PROCEDURE app_public.backups() TO APPLICATION ROLE app_admin;
+
+CREATE OR REPLACE PROCEDURE app_public.back_up_now()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+  snapshot VARCHAR;
+BEGIN
+  snapshot := 'ZLENS_BACKUP_' || TO_CHAR(SYSDATE(), 'YYYYMMDD_HH24MISS');
+  EXECUTE IMMEDIATE 'CREATE SNAPSHOT core.' || :snapshot || ' FROM SERVICE core.zlens VOLUME "workspace" INSTANCE 0 COMMENT = ''ZLens backup''';
+  RETURN 'Backup ' || :snapshot || ' started; it is ready in about a minute (CALL app_public.backups()).';
+END;
+$$;
+GRANT USAGE ON PROCEDURE app_public.back_up_now() TO APPLICATION ROLE app_admin;
+
+-- Puts the projects back as they were in a backup: ZLens stops, its volume is restored, and it
+-- starts again in about three minutes. Snowflake keeps the replaced volume for 7 days
+-- (SYS_BACKUP_ON_DELETE...), so this can be undone the same way.
+CREATE OR REPLACE PROCEDURE app_public.restore_backup(backup VARCHAR)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+  name VARCHAR;
+BEGIN
+  name := UPPER(TRIM(:backup));
+  IF (NOT REGEXP_LIKE(:name, '(ZLENS_BACKUP_[0-9]{8}_[0-9]{6})|(SYS_BACKUP_ON_DELETE[A-Z0-9_]+)')) THEN
+    RETURN 'Not a ZLens backup: ' || :backup || '. CALL app_public.backups() lists them.';
+  END IF;
+  ALTER SERVICE core.zlens SUSPEND;
+  EXECUTE IMMEDIATE 'ALTER SERVICE core.zlens RESTORE VOLUME "workspace" INSTANCES 0 FROM SNAPSHOT core.' || :name;
+  RETURN 'Restoring ' || :name || ': ZLens starts again in about three minutes.';
+END;
+$$;
+GRANT USAGE ON PROCEDURE app_public.restore_backup(VARCHAR) TO APPLICATION ROLE app_admin;

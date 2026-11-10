@@ -48,6 +48,24 @@ Until steps 1 and 2 are done, whoever opens ZLens sees which of them is still mi
 changes within a minute, without a restart. Anyone but the named user is told the app is set up for
 one person.
 
+**Backups.** ZLens backs up its projects once a day, as it stops for the day, and keeps the last 7
+(**Settings » Backups**, or `CALL ZLENS_APP.app_public.backups();`). To put one back:
+`CALL ZLENS_APP.app_public.restore_backup('<name>');` (ZLens stops and starts again in about three
+minutes; Snowflake keeps the replaced volume for 7 days, so this can be undone the same way). These
+backups are inside the app: **uninstalling it removes them**. To keep a copy that outlives the app,
+give ZLens a stage of your own and name it on the **Configurations** tab ("Stage for ZLens backups"):
+
+```sql
+CREATE STAGE MY_DB.MY_SCHEMA.ZLENS_BACKUPS;
+GRANT USAGE ON DATABASE MY_DB TO APPLICATION ZLENS_APP;
+GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;
+GRANT READ, WRITE ON STAGE MY_DB.MY_SCHEMA.ZLENS_BACKUPS TO APPLICATION ZLENS_APP;
+```
+
+ZLens then copies its projects there once a day when something changed (`zlens-<app>-<date>.tar.gz`,
+the last 14 kept). A copy is a plain ZLens project: it opens in ZLens on a laptop, and a new install
+whose project is empty offers to restore the newest one.
+
 **It stops by itself.** After 30 minutes with no one using it, ZLens stops (its projects are kept), and
 opening it again starts it, in a minute or two. To stop it now: `CALL ZLENS_APP.app_public.stop_app();`
 To start it without opening it: `CALL ZLENS_APP.app_public.start_app();`

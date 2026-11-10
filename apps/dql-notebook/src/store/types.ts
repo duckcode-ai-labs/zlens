@@ -1561,7 +1561,7 @@ export interface BlockStudioOpenPayload {
   };
 }
 
-export type SettingsTab = 'overview' | 'project' | 'database' | 'ai' | 'memory' | 'advanced';
+export type SettingsTab = 'overview' | 'project' | 'database' | 'ai' | 'memory' | 'backups' | 'advanced';
 
 export interface NotebookState {
   mainView: MainView;

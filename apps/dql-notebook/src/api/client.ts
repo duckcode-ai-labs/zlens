@@ -724,6 +724,20 @@ export type OnboardingCapabilities = {
   ai?: OnboardingCapability | boolean;
 };
 
+/** Backups of the ZLens app for Snowflake: daily snapshots inside the app, copies in the customer's stage. */
+export interface SnowflakeAppBackups {
+  managed: boolean;
+  app: string;
+  running: boolean;
+  projectIsEmpty: boolean;
+  snapshots: Array<{ name: string; state: string; createdOn: string; size?: number }>;
+  stage: string | null;
+  exports: Array<{ file: string; size: number; lastModified: string }>;
+  stageError?: string;
+  lastSnapshotAt?: string;
+  lastExportAt?: string;
+}
+
 export interface SetupLaunchResponse {
   requestId: string;
   version: string;
@@ -7394,6 +7408,24 @@ export const api = {
 
   async getSemanticObject(id: string): Promise<SemanticObjectDetail> {
     return request<SemanticObjectDetail>(`/api/semantic-layer/object/${encodeURIComponent(id)}`);
+  },
+
+  /** Backups of the ZLens app for Snowflake; `managed: false` (a 404) everywhere else. */
+  async getSnowflakeAppBackups(): Promise<SnowflakeAppBackups> {
+    try {
+      return await request<SnowflakeAppBackups>('/api/snowflake-app/backups');
+    } catch {
+      return { managed: false, app: '', snapshots: [], stage: null, exports: [], running: false, projectIsEmpty: false };
+    }
+  },
+
+  async backUpSnowflakeAppNow(): Promise<{ running: boolean }> {
+    return request('/api/snowflake-app/backups', { method: 'POST', body: '{}' });
+  },
+
+  /** Replace the project with a copy from the backup stage; ZLens restarts to load it. */
+  async restoreSnowflakeAppExport(file: string, replace = false): Promise<{ restored: string; restarting: boolean }> {
+    return request('/api/snowflake-app/backups/restore-export', { method: 'POST', body: JSON.stringify({ file, replace }) });
   },
 
   async getSetupLaunch(): Promise<SetupLaunchResponse> {

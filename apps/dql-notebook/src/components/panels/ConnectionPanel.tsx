@@ -10,6 +10,7 @@ import {
   type DbtOnboardingJob,
   type DbtProfileConnectionCandidate,
   type ProviderSettings,
+  type SnowflakeAppBackups,
   type WarehouseCatalogSummary,
   type WarehouseMetadataDiscovery,
   type WarehouseMetadataStatus,
@@ -34,6 +35,7 @@ import {
 } from './connection-forms';
 import { ConnectionRuntimeSettings } from '../settings/SettingsPage';
 import { DbtProjectEditor } from '../settings/DbtProjectEditor';
+import { SnowflakeAppBackupsPanel } from '../settings/SnowflakeAppBackupsPanel';
 import {
   additionalDiscoveredSchemaCount,
   formatMetadataScopeEditor,
@@ -209,6 +211,13 @@ export function ConnectionPanel({
   const [info, setInfo] = useState<ConnectionInfo | null>(initialInfo ?? null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string; dataFolder?: DataFolderStatusView } | null>(null);
+  // The ZLens app for Snowflake has a Backups tab; elsewhere this stays unmanaged and the tab is not shown.
+  const [snowflakeBackups, setSnowflakeBackups] = useState<SnowflakeAppBackups | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void api.getSnowflakeAppBackups().then((status) => { if (alive) setSnowflakeBackups(status); });
+    return () => { alive = false; };
+  }, []);
   const [editing, setEditing] = useState<string | null>(null); // connection key being edited
   const [addingNew, setAddingNew] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1511,6 +1520,7 @@ export function ConnectionPanel({
             {navItem(activeTab === 'ai', 'AI provider', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'ai' }),
               <span style={{ width: 7, height: 7, borderRadius: 999, background: aiConfigured ? 'var(--status-success)' : 'var(--status-warning)' }} title={aiConfigured ? 'Configured' : 'Optional · missing'} />)}
             {navItem(activeTab === 'memory', 'Agent memory', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'memory' }))}
+            {snowflakeBackups?.managed && navItem(activeTab === 'backups', 'Backups', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'backups' }))}
             <div style={{ height: 1, background: t.cellBorder, margin: '10px 10px 10px 0' }} />
             {navItem(activeTab === 'advanced', 'Advanced', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'advanced' }),
               <span style={{ fontSize: 10, color: t.textMuted }}>Advanced</span>)}
@@ -1531,6 +1541,8 @@ export function ConnectionPanel({
                 setDbtConfigured(true);
                 void api.getOnboardingStatus().then((onboarding) => setDbtPreparation(onboarding.preparation ?? null)).catch(() => undefined);
               }} />
+            ) : activeTab === 'backups' && snowflakeBackups?.managed ? (
+              <SnowflakeAppBackupsPanel t={t} initial={snowflakeBackups} />
             ) : activeTab === 'advanced' ? (
               <ConnectionRuntimeSettings embedded section="advanced" />
             ) : activeTab === 'database' ? (
