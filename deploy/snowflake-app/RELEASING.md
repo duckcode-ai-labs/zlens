@@ -49,7 +49,9 @@ repository (`/<db>/<schema>/<repo>`).
    ZLENS_IMAGE=<repo>/zlens:<v> snow app run
    ```
 
-5. **Create the version** in the customer package. Snowflake starts its automated security scan:
+5. **Create the version** in the customer package. A package holds at most two versions that are in no
+   release channel: remove old ones first with `ALTER APPLICATION PACKAGE ZLENS DEREGISTER VERSION <old>;`
+   (with release channels on, `DROP VERSION` is refused). Snowflake starts its automated security scan:
    `SHOW VERSIONS IN APPLICATION PACKAGE ZLENS` shows `review_status` going from `NOT_REVIEWED` to
    `APPROVED` (or `REJECTED`; Snowflake sends no notice, so check).
 
