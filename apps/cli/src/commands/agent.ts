@@ -91,7 +91,7 @@ import {
   type ProviderToolLoopOptions,
 } from '@zlens/agent';
 import { createHash, randomUUID } from 'node:crypto';
-import { buildManifest, resolveDbtManifestPath } from '@zlens/core';
+import { buildManifest, readBlockSource, resolveDbtManifestPath } from '@zlens/core';
 import type { CLIFlags } from '../args.js';
 import { findProjectRoot } from '../local-runtime.js';
 import { buildAnswerLoopTools, createGroundingContextExpander } from '../llm/answer-loop-tools.js';
@@ -2080,7 +2080,7 @@ function createCertifiedBlockExecutor(
   return async (node: { name: string; nodeId: string }): Promise<AgentResultPayload> => {
     const block = manifest.blocks[node.name] ?? manifest.blocks[node.nodeId.replace(/^block:/, '')];
     if (!block) throw new Error(`Matched block ${node.name} is not present in the manifest.`);
-    const source = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+    const source = readBlockSource(projectRoot, block.filePath);
     const payload = await executeRuntimeCell(runtimeBase, {
       id: `agent-eval-${node.name}`,
       type: 'dql',

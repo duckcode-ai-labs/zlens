@@ -13,7 +13,7 @@ import {
   submitSavedQueryFields,
   type SavedQueryFieldsApi,
 } from './SavedQueryFieldsDialog';
-import { initialNumberChoices } from './TableDatasetDialog';
+import { DatasetNumbersCheck, TABLE_NO_ROW_KEY_WORDS, initialNumberChoices } from './TableDatasetDialog';
 
 const proposal: TableDatasetProposal = {
   name: 'Top customers',
@@ -146,5 +146,37 @@ describe('A saved query has fields; Make row-level is under ⋯ (design D1)', ()
     expect(savedQueryFieldsOutcome({ ok: false, code: 'SAVED_QUERY_HAS_PARAMETERS', error: 'Top customers asks for values before it runs.' }, 'Top Customers'))
       .toEqual({ kind: 'error', message: 'Top customers asks for values before it runs.' });
     expect(savedQueryFieldsOutcome({ ok: true, status: 'draft' }, 'Draft revenue').kind).toBe('review');
+  });
+});
+
+describe('a table keyed by two columns (new-user test V8, item 5)', () => {
+  const proposal: TableDatasetProposal = {
+    name: 'Local team game facts',
+    relation: 'NBA.LOCAL_TEAM_GAME_FACTS',
+    keyCandidates: ['GAME_ID', 'TEAM_ID'],
+    fields: [
+      { name: 'GAME_ID', label: 'Game id', role: 'key', type: 'number' },
+      { name: 'TEAM_ID', label: 'Team id', role: 'key', type: 'number' },
+      { name: 'SEASON', label: 'Season', role: 'dimension', type: 'number' },
+      { name: 'PTS', label: 'Pts', role: 'attribute', type: 'number' },
+    ],
+    measures: [
+      { name: 'team_game_count', label: 'Team game count', aggregation: 'count', from: 'GAME_ID', format: 'number', include: true, reason: 'Counts team game rows: GAME_ID and TEAM_ID together are different on every row.' },
+      { name: 'pts', label: 'Pts', aggregation: 'sum', from: 'PTS', format: 'number', include: true, reason: 'Adds up pts across rows.' },
+    ],
+    key: { column: 'GAME_ID', columns: ['GAME_ID', 'TEAM_ID'], entity: 'team_game' },
+  };
+
+  it('says the two columns together are the row key, and offers a team and a game to group by', () => {
+    const markup = renderToStaticMarkup(<DatasetNumbersCheck proposal={proposal} rows={800} choices={initialNumberChoices(proposal)} onChoice={vi.fn()} noKeyMessage={TABLE_NO_ROW_KEY_WORDS} />);
+    expect(markup).toContain('Each row is one <strong>team game</strong>: <span><code>GAME_ID</code></span><span> and <code>TEAM_ID</code></span> together are filled and different on all 800 rows');
+    expect(markup).not.toContain('Season</strong>: adds up');
+  });
+
+  it('says what to do when a table has no row key, instead of asking for another table', () => {
+    const { key: _key, ...noKey } = proposal;
+    const markup = renderToStaticMarkup(<DatasetNumbersCheck proposal={noKey} rows={800} choices={initialNumberChoices(noKey)} onChoice={vi.fn()} noKeyMessage={TABLE_NO_ROW_KEY_WORDS} />);
+    expect(markup).toContain('Set its row key in Modeling (one column, or several that are different together');
+    expect(markup).not.toContain('Choose a table with an id column');
   });
 });

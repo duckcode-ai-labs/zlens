@@ -367,7 +367,7 @@ export function AddDataBrowser({
           <div className="add-data-summary static">
             <span className="add-data-mark"><Table2 size={14} /></span>
             <div><strong>{table.name}</strong><small title={state.detail}>{['Table', state.label, table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : '', table.joins?.length ? `joins: ${table.joins.join(', ')}` : ''].filter(Boolean).join(' · ')}</small>
-              {state.kind === 'new' && table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key ? ` (${table.modeled.key})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
+              {state.kind === 'new' && table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key || table.modeled.keys?.length ? ` (${table.modeled.key ?? table.modeled.keys!.join(', ')})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
               {state.kind !== 'new' ? <p>{state.kind === 'added' ? 'In this App' : 'Already checked'} as <strong>{humanize(state.dataset.name)}</strong>.</p> : null}
             </div>
           </div>

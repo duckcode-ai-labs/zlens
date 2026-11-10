@@ -124,7 +124,7 @@ import {
   type SemanticDatasetFieldProjection,
   type SemanticDatasetMeasureProjection,
 } from '../datasets/index.js';
-import { dbtPhysicalRelation, isDbtExternalRelationName, readEnv, tableName } from '@zlens/core';
+import { dbtPhysicalRelation, isDbtExternalRelationName, readBlockSource, readEnv, tableName } from '@zlens/core';
 
 export { applyContextPackCompatibility, toAgentRetrievalEvidence } from './meaning-evidence.js';
 
@@ -6332,9 +6332,9 @@ function normalizeBlockSourceLifecycle(status: string | undefined): string {
 }
 
 function manifestBlockSourceRevision(projectRoot: string, block: ManifestBlock): string {
-  const path = join(projectRoot, block.filePath);
   try {
-    if (existsSync(path)) return `sha256:${sha256(readFileSync(path, 'utf8'))}`;
+    // A notebook block (`x.dqlnb#cell`) hashes its cell, as the runtime does.
+    return `sha256:${sha256(readBlockSource(projectRoot, block.filePath))}`;
   } catch {
     // The manifest object remains enough for a deterministic snapshot identity.
   }

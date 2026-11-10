@@ -51,6 +51,9 @@ export function sourceSwitchWords(title: string, after: 'certified' | 'refresh')
     : `This App couldn’t switch to the current version of ${title}. Choose it again from Add data, or keep the App on its current data.`;
 }
 
+/** What App Studio says when Describe with AI could not plan an App (new-user test V8, item 4). */
+export const AI_PLAN_FAILED_WORDS = 'AI couldn’t plan this App this time. Pick the data yourself, or try AI again.';
+
 export interface StudioErrorWords {
   /** One plain sentence a person can act on. */
   message: string;
@@ -72,6 +75,9 @@ const STUDIO_ERROR_WORDS: Array<[RegExp, Omit<StudioErrorWords, 'technical'>]> =
   [/APP_BUILD_(?:SOURCE|PAGE)_LIMIT/, { message: 'This App has reached the most it can hold at once. Remove something first.' }],
   [/APP_BUILD_PROPOSAL_NOT_FOUND/, { message: 'That AI suggestion is no longer available. Ask for a new one.' }],
   [/APP_BUILD_(?:SOURCE|TILE)_NOT_IN_PROPOSAL/, { message: 'That AI suggestion changed. Review it again before adding it.' }],
+  // Describe with AI (new-user test V8, item 4): never an error code on screen.
+  [/APP_BUILD_PLANNER_OUTPUT_INVALID/, { message: AI_PLAN_FAILED_WORDS }],
+  [/APP_BUILD_PLANNER_PROVIDER_FAILED/, { message: 'The AI provider didn’t answer, so AI couldn’t plan this App. Pick the data yourself, or try AI again.' }],
 ];
 
 /**

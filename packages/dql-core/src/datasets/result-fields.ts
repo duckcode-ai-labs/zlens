@@ -33,7 +33,7 @@ import type {
   DatasetPhysicalField,
   DatasetResultOrigin,
 } from './descriptor.js';
-import { minorUnitOf, nativeTimeGrain, tableColumnKind, wordsFor, type TableColumnKind } from './table-draft.js';
+import { isLabelNumberColumnName, minorUnitOf, nativeTimeGrain, tableColumnKind, wordsFor, type TableColumnKind } from './table-draft.js';
 import { sha256Hex } from '../apps/sha256-sync.js';
 
 export interface SavedQueryResultColumn {
@@ -150,7 +150,8 @@ export function savedQueryResultFields(input: {
       primaryTime = false;
       continue;
     }
-    if (column.kind !== 'number' || groupKeys.has(column.name.toLowerCase()) || NOT_A_MEASURE.test(column.name)) {
+    // A year, a season or an id is a label to group by, never summed.
+    if (column.kind !== 'number' || groupKeys.has(column.name.toLowerCase()) || NOT_A_MEASURE.test(column.name) || isLabelNumberColumnName(column.name)) {
       physical.push({
         kind: 'physical',
         name: column.name,

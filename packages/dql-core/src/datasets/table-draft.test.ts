@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Parser } from '../parser/parser.js';
-import { applyTableDuplicateChoices, applyTableProfile, duplicateColumnWords, duplicateColumnsQuestion, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration, withDuplicateUnitRelations } from './table-draft.js';
+import { applyCompositeTableKey, applyTableDuplicateChoices, applyTableProfile, duplicateColumnWords, isLabelNumberColumnName, duplicateColumnsQuestion, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration, withDuplicateUnitRelations } from './table-draft.js';
 
 const columns = [
   { name: 'order_line_id', type: 'VARCHAR' },
@@ -28,7 +28,7 @@ describe('start from a table', () => {
     expect(proposal.keyCandidates).toEqual(['order_line_id', 'customer_id']);
     expect(proposal.measures.map((measure) => [measure.name, measure.aggregation, measure.format, measure.include])).toEqual([
       ['net_amount', 'sum', 'currency', true],
-      ['discount_rate', 'sum', 'number', false],
+      // A rate is never offered as a sum (new-user test V8, item 5); it stays a number on each row.
       ['quantity', 'sum', 'number', true],
       // The table's own id becomes the row count once the profile shows it is unique.
       ['customer_count', 'count_distinct', 'number', true],
@@ -63,6 +63,57 @@ describe('start from a table', () => {
     expect(block.datasetMeasures?.every((measure) => measure.status === 'approved')).toBe(true);
     const declaration = tableDatasetDeclaration(proposal, 'Order lines');
     expect([...declaration.fields, ...declaration.measures].every((entry) => entry.status === 'approved')).toBe(true);
+  });
+});
+
+describe('NBA team-game facts (new-user test V8, item 5)', () => {
+  const teamGame = [
+    { name: 'GAME_ID', type: 'NUMBER(38,0)' },
+    { name: 'TEAM_ID', type: 'NUMBER(38,0)' },
+    { name: 'SEASON', type: 'NUMBER(38,0)' },
+    { name: 'WL', type: 'VARCHAR' },
+    { name: 'PTS', type: 'NUMBER(38,0)' },
+    { name: 'FG_PCT', type: 'FLOAT' },
+    { name: 'SEASON_WINS', type: 'NUMBER(38,0)' },
+    { name: 'opponentTeamId', type: 'NUMBER(38,0)' },
+    { name: 'GAME_DATE', type: 'DATE' },
+  ];
+
+  it('never proposes adding up a season, a year, an id or a percentage', () => {
+    const proposal = proposeTableDataset({ table: 'LOCAL_TEAM_GAME_FACTS', relation: 'NBA.LOCAL_TEAM_GAME_FACTS', columns: teamGame });
+    const sums = proposal.measures.filter((measure) => measure.aggregation === 'sum').map((measure) => measure.from);
+    expect(sums).toEqual(['PTS', 'SEASON_WINS']);
+    expect(proposal.measures.filter((measure) => ['SEASON', 'FG_PCT', 'GAME_ID', 'TEAM_ID', 'opponentTeamId'].includes(measure.from) && measure.aggregation === 'sum')).toEqual([]);
+    // Season is a grouping, the percentage a number on each row.
+    expect(proposal.fields.find((field) => field.name === 'SEASON')?.role).toBe('dimension');
+    expect(proposal.fields.find((field) => field.name === 'opponentTeamId')?.role).toBe('dimension');
+    expect(proposal.fields.find((field) => field.name === 'FG_PCT')?.role).toBe('attribute');
+    expect(['SEASON', 'season', 'FISCAL_YEAR', 'fy', 'TEAM_ID_HOME', 'playerId', 'PlayerID', 'order_uuid'].every(isLabelNumberColumnName)).toBe(true);
+    expect(['SEASON_WINS', 'PTS', 'amount_paid', 'PAID', 'valid_count'].some(isLabelNumberColumnName)).toBe(false);
+  });
+
+  it('takes the row key Modeling saved, GAME_ID and TEAM_ID together, when the check shows it holds', () => {
+    const proposal = proposeTableDataset({ table: 'LOCAL_TEAM_GAME_FACTS', relation: 'NBA.LOCAL_TEAM_GAME_FACTS', columns: teamGame });
+    const keyed = applyCompositeTableKey(proposal, ['game_id', 'team_id'], { rows: 800, distinct: 800, filled: 800 }, 'LOCAL_TEAM_GAME_FACTS', 'Team game');
+    expect(keyed.key).toEqual({ column: 'GAME_ID', columns: ['GAME_ID', 'TEAM_ID'], entity: 'team_game' });
+    expect(keyed.fields.filter((field) => field.role === 'key').map((field) => field.name)).toEqual(['GAME_ID', 'TEAM_ID']);
+    expect(keyed.measures[0]).toMatchObject({ name: 'team_game_count', label: 'Team game count', aggregation: 'count', from: 'GAME_ID', include: true });
+    expect(keyed.measures[0]!.reason).toBe('Counts team game rows: GAME_ID and TEAM_ID together are different on every row.');
+    // The Dataset declares both columns as its grain, and the block parses.
+    expect(tableDatasetDeclaration(keyed, 'Team games').grain).toMatchObject({ entities: ['team_game'], keys: ['GAME_ID', 'TEAM_ID'] });
+    const source = renderTableDatasetBlock({ proposal: keyed, blockName: 'Team games', domain: 'nba', owner: 'nba@example.test', columnSql: (name) => `"${name}"` });
+    const block = new Parser(source, 'team-games.dql').parse().statements[0] as { datasetGrain?: { keys: string[] }; datasetMeasures?: Array<{ name: string; aggregation: string; additive?: string }> };
+    expect(block.datasetGrain?.keys).toEqual(['GAME_ID', 'TEAM_ID']);
+    expect(block.datasetMeasures?.[0]).toMatchObject({ name: 'team_game_count', aggregation: 'count' });
+    expect(tableDatasetCheckSentences(keyed, 800)[0]).toBe('Row key: each row is one team game (GAME_ID and TEAM_ID together are filled and different on all 800 rows)');
+  });
+
+  it('takes no composite key the check does not prove, or one that names a column the table does not have', () => {
+    const proposal = proposeTableDataset({ table: 'LOCAL_TEAM_GAME_FACTS', relation: 'NBA.LOCAL_TEAM_GAME_FACTS', columns: teamGame });
+    expect(applyCompositeTableKey(proposal, ['GAME_ID', 'TEAM_ID'], { rows: 800, distinct: 799, filled: 800 }, 'LOCAL_TEAM_GAME_FACTS').key).toBeUndefined();
+    expect(applyCompositeTableKey(proposal, ['GAME_ID', 'TEAM_ID'], { rows: 800, distinct: 800, filled: 798 }, 'LOCAL_TEAM_GAME_FACTS').key).toBeUndefined();
+    expect(applyCompositeTableKey(proposal, ['GAME_ID', 'PLAYER_ID'], { rows: 800, distinct: 800, filled: 800 }, 'LOCAL_TEAM_GAME_FACTS').key).toBeUndefined();
+    expect(applyCompositeTableKey(proposal, ['GAME_ID', 'TEAM_ID'], { rows: 0, distinct: 0, filled: 0 }, 'LOCAL_TEAM_GAME_FACTS').key).toBeUndefined();
   });
 });
 

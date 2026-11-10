@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { DataStep, type DataStepAiProps } from './DataStep';
+import { DataStep, PICK_DATA_MYSELF, type DataStepAiProps } from './DataStep';
+import { AI_PLAN_FAILED_WORDS } from '../app-studio-words';
 import { DataPanel } from './DataPanel';
 import { AddDataBrowser, RemoveDataButton } from './AddDataBrowser';
 import { appDataItems, appDataSourceFromCandidate } from './app-data';
@@ -38,6 +39,26 @@ describe('Data step (design D3)', () => {
     expect(markup).toContain('Saved query · Certified · Commerce');
     expect(markup).toContain('aria-label="Remove Order Lines from this App"');
     expect(markup).toContain('1 source');
+  });
+});
+
+describe('Describe with AI could not plan the App (new-user test V8, item 4)', () => {
+  it('opens the manual picker with a plain message, Try AI again, and Add to App on', () => {
+    const onRetry = vi.fn();
+    const props = {
+      draft: draftWith(), known: [], onBack: vi.fn(), onOpenCanvas: vi.fn(), onSkip: vi.fn(), browser,
+      aiFallback: { error: 'APP_BUILD_PLANNER_OUTPUT_INVALID: the configured App Builder provider did not return valid JSON for the build brief.', onRetry, onDismiss: vi.fn() },
+    };
+    const markup = renderToStaticMarkup(<DataStep {...props} />);
+    const tree = flatten(<DataStep {...props} />);
+    expect(markup).toContain('Data for this App');
+    expect(markup).toContain(AI_PLAN_FAILED_WORDS);
+    // The code is only under Technical details.
+    expect(markup.split('<details')[0]).not.toContain('APP_BUILD_PLANNER_OUTPUT_INVALID');
+    (button(tree, 'Try AI again').props.onClick as () => void)();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    const addData = tree.find((element) => element.type === AddDataBrowser)!;
+    expect(addData.props.disabled).toBeFalsy();
   });
 });
 
@@ -169,7 +190,9 @@ describe('AI Data step (design D3, AI path)', () => {
     expect(markup).toContain('Why: Margin metrics answer profitability.');
     expect(markup).toContain('Creates 1 tile');
     expect(markup).toContain('Build pages with 2 sources');
-    expect(markup).toContain('>Discard</button>');
+    // The way to the manual picker says what it does (new-user test V8, item 4).
+    expect(markup).toContain('>Pick data myself</button>');
+    expect(markup).not.toContain('>Discard</button>');
     // The Add data browser is on the right; picked data shows as Added.
     expect(markup).toContain('aria-label="Kind of data"');
   });
@@ -249,6 +272,31 @@ describe('AI Data step (design D3, AI path)', () => {
     expect(button(tree, /Build pages with/).props.disabled).toBe(true);
     (button(tree, /Last month/).props.onClick as () => void)();
     expect(onAnswer).toHaveBeenCalledWith('period', 'month');
+  });
+
+  it('never shows the planner error code, only plain words with the code under Technical details (new-user test V8, item 4)', () => {
+    const error = 'APP_BUILD_PLANNER_OUTPUT_INVALID: the configured App Builder provider did not return valid JSON for the build brief.';
+    const { markup, tree } = renderAi(aiProps({ status: 'error', activityError: error }));
+    const alert = tree.find((element) => element.props.role === 'alert')!;
+    const visible = tree.filter((element) => element.type === 'small').map((element) => textOf(element.props.children));
+    expect(visible).toContain(AI_PLAN_FAILED_WORDS);
+    expect(visible.join(' ')).not.toContain('APP_BUILD_PLANNER_OUTPUT_INVALID');
+    expect(textOf(alert.props.children)).toContain(AI_PLAN_FAILED_WORDS);
+    expect(markup).toContain('<summary>Technical details</summary>');
+  });
+
+  it('keeps Pick data myself available while AI plans and after it failed, with Add to App and Build pages never disabled by a failure (new-user test V8, item 4)', () => {
+    const onDiscard = vi.fn();
+    const running = renderAi(aiProps({ status: 'running', model: undefined, pickedSources: [], onDiscard }));
+    expect(button(running.tree, PICK_DATA_MYSELF).props.disabled).toBeFalsy();
+    (button(running.tree, PICK_DATA_MYSELF).props.onClick as () => void)();
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+    // A failed re-plan keeps the picks usable: Add to App and Build pages stay on.
+    const failed = renderAi(aiProps({ status: 'error', activityError: 'APP_BUILD_PLANNER_PROVIDER_FAILED: the configured App Builder provider did not return a build brief. timeout' }));
+    expect(button(failed.tree, PICK_DATA_MYSELF).props.disabled).toBeFalsy();
+    expect(button(failed.tree, /Build pages with 2 sources/).props.disabled).toBe(false);
+    const addData = failed.tree.find((element) => element.type === AddDataBrowser)!;
+    expect(addData.props.disabled).toBeFalsy();
   });
 
   it('Build pages applies the kept sources through the one compose call, with skipped tiles', () => {

@@ -1,5 +1,6 @@
 import { tableKey } from '@zlens/agent';
 import {
+  applyCompositeTableKey,
   applyTableDuplicateChoices,
   applyTableProfile,
   getDialect,
@@ -9,6 +10,7 @@ import {
   withDuplicateUnitRelations,
   wordsFor,
   type DuplicateUnitRelation,
+  type TableCompositeKeyProfile,
   type TableDatasetProposal,
   type TableProfile,
 } from '@zlens/core';
@@ -108,6 +110,13 @@ export async function draftTableDataset(input: {
   run: RunSql;
   /** The row key setup or Modeling already checked for this table (design D7): checked alone first. */
   modeledKey?: string;
+  /**
+   * The row key Modeling saved when it is several columns together (GAME_ID
+   * and TEAM_ID for one team in one game): checked as one key, first.
+   */
+  modeledKeys?: string[];
+  /** What one row is, in Modeling's words ("Team game"), for a row key Modeling saved. */
+  modeledEntity?: string;
 }): Promise<{ proposal: TableDatasetProposal; rows: number }> {
   const primaryKey = input.table.primaryKey ?? (input.modeledKey ? [input.modeledKey] : undefined);
   // ZLens writes this Dataset's SQL, so cents columns are read as dollars.
@@ -120,6 +129,17 @@ export async function draftTableDataset(input: {
   const proposal = proposed.duplicates?.length
     ? withDuplicateUnitRelations(proposed, await checkDuplicateUnits({ relation: input.table.relation, pairs: proposed.duplicates, driver: input.driver, run: input.run }))
     : proposed;
+  // A row key of several columns (Modeling's, else the table's declared
+  // primary key) is checked as one: no single column of a team-game table is
+  // different on every row, but GAME_ID and TEAM_ID together are.
+  const columnNamed = (name: string) => input.table.columns.find((column) => column.name.toLowerCase() === name.trim().toLowerCase())?.name;
+  for (const keys of [input.modeledKeys, input.table.primaryKey]) {
+    const columns = (keys ?? []).map(columnNamed);
+    if (columns.length < 2 || columns.some((column) => !column)) continue;
+    const check = await profileCompositeKey({ relation: input.table.relation, columns: columns as string[], driver: input.driver, run: input.run });
+    const settled = applyCompositeTableKey(proposal, columns as string[], check, input.table.name, keys === input.modeledKeys ? input.modeledEntity : undefined);
+    if (settled.key) return { proposal: settled, rows: check.rows };
+  }
   // A key the model already checked is counted on its own (one distinct count,
   // not up to eight); only when it no longer holds are the other candidates tried.
   if (input.modeledKey && proposal.keyCandidates.includes(input.modeledKey)) {
@@ -182,6 +202,8 @@ export interface TableModelState {
   domain: string;
   /** The checked row key, when it is one column. */
   key?: string;
+  /** The checked row key, when it is several columns together (GAME_ID, TEAM_ID). */
+  keys?: string[];
   /** The drafted proposal Modeling opens for review. */
   proposalId?: string;
 }
@@ -205,10 +227,12 @@ interface ProposalLike {
 }
 
 
-function singleKey(grain: string | undefined, keys: string[] | undefined): string | undefined {
+/** The row key a model saved: its grain's columns, else its keys. One column, or several together. */
+function rowKey(grain: string | undefined, keys: string[] | undefined): { key?: string; keys?: string[] } {
   const fromGrain = grain?.split(',').map((part) => part.trim()).filter(Boolean) ?? [];
-  if (fromGrain.length === 1) return fromGrain[0];
-  return !fromGrain.length && keys?.length === 1 ? keys[0] : undefined;
+  const columns = fromGrain.length ? fromGrain : (keys ?? []).map((key) => key.trim()).filter(Boolean);
+  if (columns.length === 1) return { key: columns[0] };
+  return columns.length > 1 ? { keys: columns } : {};
 }
 
 export function tableModelStates(input: {
@@ -225,8 +249,7 @@ export function tableModelStates(input: {
   for (const entity of input.entities) {
     const table = tableFor(entity.dbtUniqueId, entity.relation);
     if (!table || states.has(table)) continue;
-    const key = singleKey(entity.grain, entity.keys);
-    states.set(table, { state: 'modeled', entity: entity.businessName || entity.localId || entity.id || table, domain: entity.domain, ...(key ? { key } : {}) });
+    states.set(table, { state: 'modeled', entity: entity.businessName || entity.localId || entity.id || table, domain: entity.domain, ...rowKey(entity.grain, entity.keys) });
   }
   for (const proposal of input.proposals) {
     if (proposal.status !== 'proposed' || proposal.origin !== 'warehouse_discovery') continue;
@@ -236,13 +259,12 @@ export function tableModelStates(input: {
       if (!value) continue;
       const table = tableFor(value.dbtModel, value.relation);
       if (!table || states.has(table)) continue;
-      const key = singleKey(typeof value.grain === 'string' ? value.grain : undefined, Array.isArray(value.keys) ? value.keys.filter((item): item is string => typeof item === 'string') : undefined);
       states.set(table, {
         state: 'drafted',
         entity: String(value.businessName ?? value.id ?? table),
         domain: String(value.domain ?? ''),
         proposalId: proposal.id,
-        ...(key ? { key } : {}),
+        ...rowKey(typeof value.grain === 'string' ? value.grain : undefined, Array.isArray(value.keys) ? value.keys.filter((item): item is string => typeof item === 'string') : undefined),
       });
     }
   }
@@ -301,6 +323,25 @@ export function savedQueryRelation(sql: string, driver: string): string {
   // A newline before the closing parenthesis: SQL that ends in a line comment
   // (`GROUP BY region -- by region`) would otherwise comment it out.
   return `(${body}\n) AS ${getDialect(driver).quoteIdentifier('dql_saved_query')}`;
+}
+
+/**
+ * Checks several columns as one row key, in one statement: the rows, the
+ * different combinations of the columns, and the rows with all of them
+ * filled. The key holds when all three are equal.
+ */
+export async function profileCompositeKey(input: { relation: string; columns: string[]; driver: string; run: RunSql }): Promise<TableCompositeKeyProfile> {
+  const quote = (name: string) => getDialect(input.driver).quoteIdentifier(name);
+  const list = input.columns.map(quote).join(', ');
+  const filled = input.columns.map((column) => `${quote(column)} IS NOT NULL`).join(' AND ');
+  const [row] = await input.run([
+    'SELECT',
+    `  (SELECT COUNT(*) FROM ${input.relation}) AS ${quote('dql_rows')},`,
+    `  (SELECT COUNT(*) FROM (SELECT ${list} FROM ${input.relation} GROUP BY ${list}) ${quote('dql_keys')}) AS ${quote('dql_distinct')},`,
+    `  (SELECT COUNT(*) FROM ${input.relation} WHERE ${filled}) AS ${quote('dql_filled')}`,
+  ].join('\n'));
+  const read = (key: string) => Number(row?.[key] ?? row?.[key.toUpperCase()] ?? 0);
+  return { rows: read('dql_rows'), distinct: read('dql_distinct'), filled: read('dql_filled') };
 }
 
 /** Counts rows, and distinct and non-empty values of the key candidates, in one scan. */

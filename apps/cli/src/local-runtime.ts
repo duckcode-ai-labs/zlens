@@ -248,6 +248,7 @@ import {
   writeTermDeclaration,
   deleteTermDeclaration,
   renderTermDeclaration,
+  readBlockSource,
   readTermCertificationReceipts,
   removeTermCertificationReceipt,
   termCertificationFingerprint,
@@ -10915,7 +10916,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (requireCertified && block.status !== 'certified') {
       throw new Error(`Block "${block.name}" is not certified and cannot be rerun as a certified answer.`);
     }
-    const source = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+    const source = readBlockSource(projectRoot, block.filePath);
     const result = await executeDqlArtifactSourceForAgent(source, {
       name: block.name,
       path: block.filePath,
@@ -13953,8 +13954,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
     const block = resolveDatasetSourceManifestBlock(runSnapshot.manifest, source.executionRef);
     if (!block) throw new Error(`DATASET_SOURCE_DRIFT: ${source.qualifiedIdentity} no longer resolves to its saved block path.`);
-    const blockPath = join(projectRoot, block.filePath);
-    const blockSource = readFileSync(blockPath, 'utf8');
+    const blockSource = readBlockSource(projectRoot, block.filePath);
     const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
     if (requestedRevision && requestedRevision !== sourceRevision) {
       throw new Error('DATASET_SOURCE_DRIFT: this Dataset changed after it was selected. Refresh the source before validating its grain.');
@@ -14081,7 +14081,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const pending = savedQueryFieldReads.get(key);
     if (pending) return pending;
     const reading = (async (): Promise<SavedQueryFieldsOutcome> => {
-      const blockSource = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+      const blockSource = readBlockSource(projectRoot, block.filePath);
       const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
       if (sourceRevision !== source.sourceRevision) {
         return { ok: false, status: 409, code: 'SOURCE_CHANGED', error: `${source.title} changed while ZLens was reading it. Try again.` };
@@ -19006,7 +19006,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // HH-13: a saved query compared by name is its Dataset, as when it is run by name.
             const refusal = await restrictedBlockRefusal({ name: block.name, filePath: block.filePath, ...(block.domain ? { domain: block.domain } : {}) });
             if (refusal) throw new ComparisonStopped(refusal.error);
-            const preview = await runBlockStudioPreviewSource(readFileSync(join(projectRoot, block.filePath), 'utf-8'), active, parameters);
+            const preview = await runBlockStudioPreviewSource(readBlockSource(projectRoot, block.filePath), active, parameters);
             return { name: block.name, sql: preview.sql, ...(preview.sqlParams ? { sqlParams: preview.sqlParams } : {}), variables: preview.variables };
           },
         });
@@ -22077,7 +22077,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               return tableDatasetLinks({
                 tables: listing.tables,
                 sources,
-                readSource: (sourcePath) => { try { return readFileSync(join(projectRoot, sourcePath), 'utf-8'); } catch { return undefined; } },
+                readSource: (sourcePath) => { try { return readBlockSource(projectRoot, sourcePath); } catch { return undefined; } },
               });
             } catch {
               return new Map<string, TableDatasetLink[]>();
@@ -22106,8 +22106,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           reply(404, { ok: false, error: 'That table is not in this database any more. Refresh the list.' });
           return;
         }
-        const modeledKey = modelStates.get(table.id)?.key;
-        const drafted = await draftTableDataset({ table, driver: active.driver, run, ...(modeledKey ? { modeledKey } : {}) });
+        // The row key setup or Modeling saved (design D7): one column, or several together.
+        const modeled = modelStates.get(table.id);
+        const drafted = await draftTableDataset({
+          table,
+          driver: active.driver,
+          run,
+          ...(modeled?.key ? { modeledKey: modeled.key } : {}),
+          ...(modeled?.keys ? { modeledKeys: modeled.keys, modeledEntity: modeled.entity } : {}),
+        });
         if (path === '/api/app-datasets/tables/draft') {
           reply(200, { ok: true, table: { id: table.id, name: table.name, relation: table.relation }, rows: drafted.rows, proposal: drafted.proposal });
           return;
@@ -22115,7 +22122,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // The duplicate-column answers first (design Q1.4), then the number choices.
         const proposal = applyTableDatasetChoices(drafted.proposal, body.measures, body.duplicates);
         if (!proposal.key) {
-          reply(422, { ok: false, code: 'TABLE_DATASET_KEY_REQUIRED', error: `No column in ${table.name} is filled and different on every row, so ZLens cannot count its rows safely. Choose a table with an id column.` });
+          reply(422, { ok: false, code: 'TABLE_DATASET_KEY_REQUIRED', error: `No column in ${table.name} is filled and different on every row, so ZLens cannot count its rows safely. Set its row key in Modeling (one column, or several that are different together), then check it again.` });
           return;
         }
         const blockName = (typeof body.name === 'string' ? body.name : '').replace(/["\\\n\r]/g, '').trim().slice(0, 80) || proposal.name;
@@ -23713,7 +23720,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   domain: block.domain ?? loaded.dashboard.metadata.domain ?? loaded.app.domain,
                   level: 'read',
                 });
-                const blockSource = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+                const blockSource = readBlockSource(projectRoot, block.filePath);
                 const currentSourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
                 if (currentSourceRevision !== source.sourceRevision || currentSourceRevision !== item.sourceRevision) {
                   throw new Error('This saved query changed after the tile was made. Refresh it in the Data pane and pick its fields again.');
@@ -23919,8 +23926,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   // investigations and notebooks still need `execute`.
                   level: 'read',
                 });
-                const blockPath = join(projectRoot, block.filePath);
-                const blockSource = readFileSync(blockPath, 'utf-8');
+                const blockSource = readBlockSource(projectRoot, block.filePath);
                 const currentSourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
                 if (currentSourceRevision !== source.sourceRevision || currentSourceRevision !== item.sourceRevision) {
                   throw new Error('This Dataset block changed after it was selected. Refresh the Dataset binding before running it.');
@@ -25067,8 +25073,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               // investigations and notebooks still need `execute`.
               level: 'read',
             });
-            const absBlockPath = join(projectRoot, block.filePath);
-            blockSource = readFileSync(absBlockPath, 'utf-8');
+            blockSource = readBlockSource(projectRoot, block.filePath);
             const currentSourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
             if (item.sourceRevision && item.sourceRevision !== currentSourceRevision) {
               tiles.push({
@@ -26173,7 +26178,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             const content = await selected.provider.generate([
               { role: 'system', content: system },
               { role: 'user', content: user },
-            ], { maxTokens: 2_400, temperature: 0.1 });
+            // A brief with a field query per tile runs past 2,400 tokens; cut
+            // off there it was not valid JSON (new-user test V8, item 4).
+            ], { maxTokens: 6_000, temperature: 0.1 });
             // This is a direct App Builder planner receipt, not a universal
             // AgentRun ledger entry. It is only returned after generate()
             // resolves, and never includes prompt text, rows, or credentials.
@@ -33027,7 +33034,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (requestedBlockName) {
           const block = buildManifest({ projectRoot }).blocks[requestedBlockName];
           if (!block) throw new Error(`Block "${requestedBlockName}" was not found.`);
-          source = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+          source = readBlockSource(projectRoot, block.filePath);
           sourcePath = block.filePath;
           blockName = block.name;
           domain = block.domain;
@@ -42766,8 +42773,10 @@ function resolveNotebookBlockReferenceCell(
     throw new Error(`Block reference "${ref}" could not be resolved.`);
   }
 
-  const blockPath = join(projectRoot, block.filePath);
-  if (!existsSync(blockPath)) {
+  let source: string;
+  try {
+    source = readBlockSource(projectRoot, block.filePath);
+  } catch {
     throw new Error(`Block "${block.name}" file is missing: ${block.filePath}`);
   }
 
@@ -42775,7 +42784,7 @@ function resolveNotebookBlockReferenceCell(
     cell: {
       ...cell,
       title: cell.title ?? block.name,
-      source: readFileSync(blockPath, 'utf-8'),
+      source,
     },
     blockName: block.name,
     blockPath: block.filePath,

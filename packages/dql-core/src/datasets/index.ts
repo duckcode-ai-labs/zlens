@@ -82,16 +82,20 @@ export type {
   DatasetAggregateComponentRequirements,
 } from './component-proof.js';
 export {
+  applyCompositeTableKey,
   applyTableDuplicateChoices,
   applyTableProfile,
   defaultDuplicateUse,
   duplicateColumnWords,
   duplicateColumnsQuestion,
+  isLabelNumberColumnName,
   proposeTableDataset,
   renderTableDatasetBlock,
   tableColumnKind,
   tableDatasetCheckSentences,
   tableDatasetDeclaration,
+  tableKeyColumns,
+  tableKeyColumnsWords,
   tableProfileColumns,
   singularWords,
   withDuplicateUnitRelations,
@@ -116,7 +120,7 @@ export {
   withoutDatasetJoins,
 } from './related-fields.js';
 export type { DatasetNameIdentity, DiscoveredDatasetJoins, RelatedRelationshipEdge } from './related-fields.js';
-export type { DuplicateColumnsQuestion, DuplicateColumnWords, DuplicateUnitRelation, TableColumnInput, TableColumnKind, TableDatasetDuplicate, TableDatasetField, TableDatasetHiddenColumn, TableDatasetMeasure, TableDatasetProposal, TableDuplicateChoice, TableProfile } from './table-draft.js';
+export type { DuplicateColumnsQuestion, DuplicateColumnWords, DuplicateUnitRelation, TableColumnInput, TableColumnKind, TableDatasetDuplicate, TableDatasetField, TableDatasetHiddenColumn, TableDatasetMeasure, TableDatasetProposal, TableCompositeKeyProfile, TableDuplicateChoice, TableProfile } from './table-draft.js';
 export {
   NON_ADDITIVE_REASON,
   SAVED_QUERY_ROW_COUNT,
