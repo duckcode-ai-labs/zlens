@@ -41,6 +41,7 @@ import {
 import {
   api,
   DqlApiError,
+  isAgentRunStreamDropped,
   mintAgentRunSubmissionId,
   normalizeQueryResultPayload,
   type AgentConversationTurn,
@@ -652,15 +653,17 @@ export function UnifiedAgentRunPanel({
     if (ready) onArtifactReadyRef.current?.(ready, repairedRun);
   }, []);
 
-  const recoverPendingRun = useCallback((pending: PendingAgentRun) => {
+  const recoverPendingRun = useCallback((pending: PendingAgentRun, sentInput?: CreateAgentRunInput) => {
     if (recoveryTimerRef.current !== null) window.clearTimeout(recoveryTimerRef.current);
     if (isProvisionalAgentRunId(pending.id)) {
       // The server never told this tab which run it started (a reload landed
-      // between submit and `accepted`). Re-send the identical request under
-      // the same Idempotency-Key: the runtime attaches to the run that claim
-      // started, or starts it now if the first attempt never arrived. Without
-      // the stored request there is nothing safe to resend.
-      const input = pending.submissionId ? readSubmissionInput(pending.submissionId) : undefined;
+      // between submit and `accepted`, or the connection dropped before it).
+      // Re-send the identical request under the same Idempotency-Key: the
+      // runtime attaches to the run that claim started, or starts it now if
+      // the first attempt never arrived. Without the request (`sentInput` from
+      // this tab's own submit, else the stored copy) there is nothing safe to
+      // resend.
+      const input = sentInput ?? (pending.submissionId ? readSubmissionInput(pending.submissionId) : undefined);
       if (!input) {
         clearActiveAgentRun(pending.id);
         clearSubmissionInput(pending.submissionId);
@@ -862,6 +865,7 @@ export function UnifiedAgentRunPanel({
     let receivedStreamMessage = false;
     let acceptedServerRun = false;
     let recovering = false;
+    let sentInput: CreateAgentRunInput | undefined;
     try {
       // Thread-scoped persistence: make sure a server thread exists so this run is
       // recorded as a turn. Best-effort — never block the question on it; without
@@ -952,6 +956,7 @@ export function UnifiedAgentRunPanel({
         }
       };
       let run: AgentRun;
+      sentInput = runInput;
       try {
         run = await api.createAgentRunStream(runInput, onStreamMessage, controller.signal);
       } catch (error) {
@@ -978,6 +983,7 @@ export function UnifiedAgentRunPanel({
         saveActiveAgentRun(pending);
         const retryInput = { ...runInput, requestId: submissionId };
         storeSubmissionInput(submissionId, retryInput);
+        sentInput = retryInput;
         run = await api.createAgentRunStream(retryInput, onStreamMessage, controller.signal);
       }
       // A compliant runtime emits `accepted` first.  Keep the completion path
@@ -994,14 +1000,18 @@ export function UnifiedAgentRunPanel({
       appendFinishedRun(run, pending);
     } catch (err) {
       if (!controller.signal.aborted) {
-        const unknownOutcomeRunId = err instanceof DqlApiError && err.code === 'REQUEST_OUTCOME_UNKNOWN' ? err.runId : undefined;
-        setError(`${err instanceof Error ? err.message : String(err)}${unknownOutcomeRunId ? ` Run ${unknownOutcomeRunId}.` : ''}`);
-        setInput(text);
-        // If streaming disconnected after the server began reporting progress,
-        // let the persisted run finish and quietly reconnect to its final answer.
-        if (receivedStreamMessage && acceptedServerRun) {
+        const action = askStreamFailureAction(err, receivedStreamMessage && acceptedServerRun);
+        if (action.showError) {
+          const unknownOutcomeRunId = err instanceof DqlApiError && err.code === 'REQUEST_OUTCOME_UNKNOWN' ? err.runId : undefined;
+          setError(`${err instanceof Error ? err.message : String(err)}${unknownOutcomeRunId ? ` Run ${unknownOutcomeRunId}.` : ''}`);
+        }
+        // Never over what the person has started typing since.
+        if (action.restoreQuestion) setInput((current) => (current.trim() ? current : text));
+        // The stream ended under a run the server owns: let it finish and
+        // quietly reconnect to its final answer by id.
+        if (action.reconnect) {
           recovering = true;
-          recoverPendingRun(pending);
+          recoverPendingRun(pending, sentInput);
         } else {
           clearActiveAgentRun(pending.id);
           clearSubmissionInput(pending.submissionId);
@@ -1715,6 +1725,34 @@ export function adoptablePendingRun(runs: PendingAgentRun[], threadId: string | 
 
 function findActiveAgentRun(threadId?: string): PendingAgentRun | undefined {
   return adoptablePendingRun(readActiveAgentRuns(), threadId, tabOwnsSubmission);
+}
+
+/**
+ * What the composer does when a submitted question's stream fails.
+ *
+ * Outside test V7/V8: behind the Snowflake ingress (documented timeout 90 s)
+ * a 96 s run lost its stream. The page showed a red "network error" and put
+ * the question back in the box, where the next question got typed into it,
+ * although the run went on and finished.
+ *
+ * - The connection dropped: the run is the server's. Follow it by id (or, if
+ *   the server never said which run, re-send the same submission under the
+ *   same Idempotency-Key, which attaches to it). No error, nothing in the box.
+ * - The server reported a failure after accepting the run: say so, and still
+ *   read the run by id for what it stored.
+ * - The server refused the request before any run started: say so, and offer
+ *   the question again, but only into an empty box.
+ * - Anything else before a run started (the server could not be reached):
+ *   say so; the question stays in the conversation, not in the box.
+ */
+export function askStreamFailureAction(
+  error: unknown,
+  accepted: boolean,
+): { reconnect: boolean; showError: boolean; restoreQuestion: boolean } {
+  if (isAgentRunStreamDropped(error)) return { reconnect: true, showError: false, restoreQuestion: false };
+  if (accepted) return { reconnect: true, showError: true, restoreQuestion: false };
+  if (error instanceof DqlApiError) return { reconnect: false, showError: true, restoreQuestion: true };
+  return { reconnect: false, showError: true, restoreQuestion: false };
 }
 
 const THINKING_MODE_STORAGE_KEY = 'dql.agent.thinkingMode';
