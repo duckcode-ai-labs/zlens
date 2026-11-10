@@ -15184,7 +15184,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const snowflakeAppSetupMarker = join(projectRoot, '.dql', 'local', 'snowflake-app-setup.json');
   // In the ZLens app for Snowflake, the schema list offers only the databases granted to the app (approved
   // design D4): not Snowflake's own SNOWFLAKE database, the app's own schemas or INFORMATION_SCHEMA.
-  const onlyGrantedScopes = async <T extends { scopes: Array<{ catalogOrDatabase: string; schemas: Array<{ name: string }> }> }>(discovery: T): Promise<T> => {
+  const onlyGrantedScopes = async <T extends { scopes: Array<{ catalogOrDatabase: string; schemas: Array<{ name: string }> }>; dbtScopes?: unknown[]; supported?: boolean; message?: string }>(discovery: T): Promise<T> => {
     let granted: string[] = [];
     try {
       granted = (await snowflakeApp!.current()).databases;
@@ -15196,7 +15196,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const scopes = discovery.scopes
       .filter((scope) => wanted.has(scope.catalogOrDatabase.toUpperCase()))
       .map((scope) => ({ ...scope, schemas: scope.schemas.filter((schema) => schema.name.toUpperCase() !== 'INFORMATION_SCHEMA') }));
-    return { ...discovery, scopes };
+    const count = scopes.reduce((total, scope) => total + scope.schemas.length, 0);
+    // The count the list shows, not the one before the filter.
+    const message = discovery.supported && !discovery.dbtScopes?.length
+      ? `Found ${count} schema${count === 1 ? '' : 's'} in the database granted to this app. Choose the ones ZLens should read, then Apply and synchronize.`
+      : discovery.message;
+    return { ...discovery, scopes, ...(message ? { message } : {}) };
   };
   const SNOWFLAKE_APP_SETUP_RETRY_MS = 10 * 60_000;
   const runSnowflakeAppSetup = async (database: string, options: { again?: boolean } = {}): Promise<void> => {
@@ -52830,7 +52835,7 @@ async function testCortexProviderConfig(
     if (isCortexClaudeProvider(provider) && provider.route() === 'sql') {
       return {
         ok: true,
-        message: `${label} responded through Cortex SQL${details}: ${response.trim().slice(0, 80) || 'OK'}. Snowflake refuses the Cortex REST API for this account, so ZLens asks Cortex through SQL (AI_COMPLETE): Ask works, with no prompt caching.`,
+        message: `${label} answered through Cortex SQL${details}. Snowflake refuses the Cortex REST API for this account, so ZLens asks Cortex through SQL (AI_COMPLETE): Ask works, with no prompt caching.`,
       };
     }
     return {
