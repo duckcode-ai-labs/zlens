@@ -253,17 +253,23 @@ function probePredicate(relation: ProbeIdentifier): string {
 export function summaryKindsRead(
   rules: Record<string, { localId?: string; id?: string; expression: string; status?: string }> | undefined,
   relations: string[],
-): Array<{ summary: string; detail: string; code: string; rule: string }> {
-  const found: Array<{ summary: string; detail: string; code: string; rule: string }> = [];
+): Array<{ summary: string; detail: string; code: string; rule: string; expression: string }> {
+  const found: Array<{ summary: string; detail: string; code: string; rule: string; expression: string }> = [];
   for (const rule of Object.values(rules ?? {})) {
     if (rule.status === 'deprecated') continue;
     const match = /^([A-Za-z0-9_$."]+) adds up every row of ([A-Za-z0-9_$."]+), every first character of ([A-Za-z0-9_$"]+) included/.exec(rule.expression.trim());
     if (!match) continue;
     const summary = match[1]!.replace(/"/g, '');
     if (!relations.some((relation) => sameTable(relation, summary, 'tail'))) continue;
-    found.push({ summary, detail: match[2]!.replace(/"/g, ''), code: match[3]!.replace(/"/g, ''), rule: rule.localId ?? rule.id ?? 'unnamed' });
+    found.push({ summary, detail: match[2]!.replace(/"/g, ''), code: match[3]!.replace(/"/g, ''), rule: rule.localId ?? rule.id ?? 'unnamed', expression: rule.expression.trim() });
   }
   return found;
+}
+
+/** The drafter's second look when its statement read a total of every kind of a code. */
+export function secondLookNote(totals: Array<{ summary: string; detail: string; code: string; expression: string }>): string {
+  const lines = totals.map((item) => `${item.summary} adds up all of ${item.detail}, every kind of ${item.code} together (the model's rule: ${item.expression})`);
+  return `The statement reads ${lines.join('; ')}. Read the question again. If it asks about one kind (one category that ${totals.map((item) => item.code).join(' or ')} codes, such as one part of a season or one type), answer from ${totals.map((item) => item.detail).join(' or ')}, filtered on that kind as the rule shows. If it asks about every kind together, return the same statement unchanged.`;
 }
 
 export function relationColumnsProbeSql(relations: string[], maxRelations = 8, offset = 0, driver = 'snowflake', location?: string): string | undefined {
@@ -2636,8 +2642,10 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // chosen table come first.
       const chosenDomains = new Set(relations.map((relation) => relationEntryOf(relation)?.domain).filter((domain): domain is string => Boolean(domain)));
       const chosenNames = relations.map((relation) => ((tableName(relation) || relation)).replace(/["`\[\]]/g, '').toLowerCase());
+      // A rule that names a chosen table is the drafter's to read whatever domain it was filed under: tables read
+      // straight from a warehouse may carry no domain, which left every rule out (new-user test B1, V7 retest).
       const modelRuleLines = Object.values(deps.getManifest().manifest?.modeling?.rules ?? {})
-        .filter((rule) => chosenDomains.has(rule.domain) && rule.expression.trim() && rule.status !== 'deprecated')
+        .filter((rule) => (chosenDomains.has(rule.domain) || chosenNames.some((name) => rule.expression.toLowerCase().includes(name))) && rule.expression.trim() && rule.status !== 'deprecated')
         .map((rule) => ({ rule, named: chosenNames.some((name) => rule.expression.toLowerCase().includes(name)) }))
         .sort((a, b) => Number(b.named) - Number(a.named) || a.rule.localId.localeCompare(b.rule.localId))
         .slice(0, MODEL_RULES_IN_DRAFT)
@@ -2972,12 +2980,38 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           failures = [];
           unnamed = unnamedKeysOf(chosen.sql);
         }
+        // ONE KIND FROM A TOTAL OF EVERY KIND (new-user test B1; still wrong in the V7 retest, 2026-11-10). A table
+        // the model's rule says adds up every row of another, every kind of a code included, cannot answer for one
+        // kind: asked for the most "regular season" wins in 2015, the drafter read the season totals every time (91,
+        // not 73), in a fresh chat too. One focused second look puts the table it totals in front of the drafter
+        // with the rule, and asks again: a question about one kind is answered from that table, filtered; a
+        // question about every kind together comes back unchanged.
+        const modelRules = deps.getManifest().manifest?.modeling?.rules;
+        const totalsRead = summaryKindsRead(modelRules, chosen.relations);
+        if (totalsRead.length > 0) {
+          const details = totalsRead.flatMap((item) => {
+            const entry = current.entries.find((candidate) => candidate.kind === 'relation' && entryPhysicalRelation(candidate) !== undefined && sameTable(entryPhysicalRelation(candidate)!, item.detail, 'tail'));
+            return entry ? [entryPhysicalRelation(entry)!] : [];
+          });
+          if (details.length > 0) {
+            await includeRelations(details);
+            hostStep({ phase: 'schema', title: `The SQL reads ${totalsRead.map((item) => item.summary).join(', ')}, a total of every kind of ${totalsRead[0]!.code}: asking the AI whether the question means one kind`, state: 'done', detail: totalsRead.map((item) => item.expression).join(' ') });
+            const second = await attemptDraft(secondLookNote(totalsRead));
+            if (second && 'sql' in second && second.sql.trim() !== chosen.sql.trim()) {
+              const secondFailures = await failedChecks(second.sql);
+              if (secondFailures.length === 0) {
+                chosen = second;
+                unnamed = unnamedKeysOf(chosen.sql);
+              } else {
+                // The first statement stands; its own checks are the ones recorded last.
+                await failedChecks(chosen.sql);
+              }
+            }
+          }
+        }
         const applied = appliedConditions(chosen.sql);
-        // A SUMMARY THAT MIXES EVERY KIND IS SAID (new-user test B1, 2026-11-10). A table the model's rule says
-        // adds up every row of another, every kind of a code included, answers for all kinds together: "won the
-        // most regular season games" read from it counted preseason and playoffs too (91, not 73) under "checks
-        // passed". When the statement still reads one, the answer says so.
-        const mixedKinds = summaryKindsRead(deps.getManifest().manifest?.modeling?.rules, chosen.relations);
+        // A TOTAL OF EVERY KIND IS SAID: when the statement still reads one, the answer counts every kind together.
+        const mixedKinds = summaryKindsRead(modelRules, chosen.relations);
         // AI-DRAFTED WORDS ARE SAID, every time they stand behind an answer.
         // They help find a table; they change no trust label.
         const draftedWords = draftedMeaningRelations(deps.getManifest().manifest, deps.projectRoot)
@@ -2995,7 +3029,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(stated.length ? [`stated values applied: ${stated.map((item) => item.value).join(', ')}`] : []),
             ...(required.length ? [`required filters present: ${required.map((item) => item.text).join(', ')}`] : []),
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
-            ...mixedKinds.map((item) => `caveat: ${item.summary} adds up every row of ${item.detail}, every kind of ${item.code} included (model rule ${item.rule}), so this answer counts all of them; for one kind, ask for it by name`),
+            ...mixedKinds.map((item) => `caveat: it comes from ${item.summary}, which adds up all of ${item.detail}, every kind of ${item.code} together, so it counts every kind`),
             ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
             ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),

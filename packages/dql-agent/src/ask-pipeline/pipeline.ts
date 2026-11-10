@@ -884,7 +884,9 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
         receipt.intent = reading; receipt.reading = reading.reading;
         // "Name the field" helps only when a stated value was left out; a join
         // the check refused is fixed by rephrasing, not by naming a field.
-        const advice = /from the question$|required filter/.test(message) ? ' Name the field that holds it, and Ask will use it.' : ' Rephrase the question, or name the tables it should use.';
+        // Plain advice a business user can act on (new-user test, V7 retest: "name the field that holds it" asked
+        // them to know the schema).
+        const advice = /from the question$|required filter/.test(message) ? ' Try the value the way your data writes it (a shorter name or a code), or rephrase the question.' : ' Rephrase the question, or name the tables it should use.';
         return { kind: 'gap', gap: 'not_modeled', message, nearest: [], text: `No query was run because the AI-drafted SQL failed a check: ${message}.${advice}`, receipt, intent: reading, offerExploration: false };
       }
       const declined = drafted.refusals.find((refusal) => refusal.code === 'exploration_declined');

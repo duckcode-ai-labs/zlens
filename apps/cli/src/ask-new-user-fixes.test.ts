@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { summaryKindsRead } from './ask-pipeline-host/host.js';
+import { secondLookNote, summaryKindsRead } from './ask-pipeline-host/host.js';
 import { activeProviderForDeadline, askTraceReason, deadlineScaleForProvider } from './local-runtime.js';
 
 /**
@@ -52,8 +52,17 @@ describe('a summary table that adds up every kind of game is said in the answer 
 
   it('names the summary, the table it adds up and the code, when the statement reads the summary', () => {
     expect(summaryKindsRead(rules, ['NBA.TRANSFORMED.LOCAL_TEAM_SEASON_FACTS', 'NBA.TRANSFORMED.DIM_TEAMS_CLEANSED'])).toEqual([
-      { summary: 'LOCAL_TEAM_SEASON_FACTS', detail: 'LOCAL_TEAM_GAME_FACTS', code: 'GAME_ID', rule: 'team_season_sums_every_game_id' },
+      { summary: 'LOCAL_TEAM_SEASON_FACTS', detail: 'LOCAL_TEAM_GAME_FACTS', code: 'GAME_ID', rule: 'team_season_sums_every_game_id', expression: rules['nba.team_season_sums_every_game_id'].expression },
     ]);
+  });
+
+  it('asks the drafter once more, with the table it totals and the rule: one kind from that table, every kind unchanged', () => {
+    const note = secondLookNote(summaryKindsRead(rules, ['NBA.TRANSFORMED.LOCAL_TEAM_SEASON_FACTS']));
+    expect(note).toContain('LOCAL_TEAM_SEASON_FACTS adds up all of LOCAL_TEAM_GAME_FACTS, every kind of GAME_ID together');
+    expect(note).toContain("CAST(GAME_ID AS VARCHAR) LIKE '2%'");
+    expect(note).toContain('If it asks about one kind');
+    expect(note).toContain('answer from LOCAL_TEAM_GAME_FACTS, filtered on that kind as the rule shows');
+    expect(note).toContain('If it asks about every kind together, return the same statement unchanged.');
   });
 
   it('says nothing when the statement reads the detail table, or the rule is retired', () => {
