@@ -15,6 +15,7 @@ import {
   validateTileQuery,
 } from '@zlens/core';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
+import { readPlannerJson } from './app-builder-planner-json.js';
 import { readDashboardVizStyle, type DashboardVizStyle } from '@zlens/core';
 
 export type AppBuilderComponentRole = AppBuildRequirement['role'];
@@ -147,8 +148,9 @@ export interface PlanAppBuildBriefInput {
 /**
  * App-specific orchestration boundary. It shares a host provider adapter but
  * owns a structured, stateful build brief rather than invoking Ask AI's answer
- * state machine. At most one provider call is made and it can reference only
- * the supplied candidate IDs.
+ * state machine. One provider call is made, and one more only when the first
+ * reply can't be read as a grounded brief (new-user test V8, item 4); it can
+ * reference only the supplied candidate IDs.
  *
  * Acceptance: PRD-007, AGT-026.
  */
@@ -178,15 +180,18 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     );
   }
 
-  let completion: string | AppBuilderPlannerCompletionResult | undefined;
-  try {
-    completion = await input.complete({
-      system: appBuilderSystemPrompt(),
-      user: appBuilderUserPrompt(input, candidates),
-    });
-  } catch (error) {
-    throw new Error(`APP_BUILD_PLANNER_PROVIDER_FAILED: the configured App Builder provider did not return a build brief. ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const userPrompt = appBuilderUserPrompt(input, candidates);
+  const ask = async (retry: boolean): Promise<string | AppBuilderPlannerCompletionResult | undefined> => {
+    try {
+      return await input.complete!({
+        system: appBuilderSystemPrompt(),
+        user: retry ? `${userPrompt}\n\n${APP_BUILDER_RETRY_NOTE}` : userPrompt,
+      });
+    } catch (error) {
+      throw new Error(`APP_BUILD_PLANNER_PROVIDER_FAILED: the configured App Builder provider did not return a build brief. ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  let completion = await ask(false);
   // A host hook that finds no configured provider declines with undefined.
   // That is "no planner configured", not a malformed answer: plan offline.
   if (completion === undefined) {
@@ -195,16 +200,27 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
       candidates,
     );
   }
-  const raw = typeof completion === 'string' ? completion : completion?.content;
-  const providerId = typeof completion === 'string'
-    ? undefined
-    : appBuilderPlannerProviderId(completion?.providerId);
-  const parsed = parsePlannerJson(raw);
+  let reply = readPlannerReply(completion);
+  // A reply that can't be read as a grounded brief gets one more try, asking
+  // for one compact JSON object (a long brief can be cut off at the token limit).
+  if (!reply.parsed || reply.requirements.length === 0) {
+    const second = await ask(true);
+    if (second !== undefined) {
+      completion = second;
+      reply = readPlannerReply(second);
+    }
+  }
+  const { parsed, requirements, truncated } = reply;
   if (!parsed) {
     throw new Error('APP_BUILD_PLANNER_OUTPUT_INVALID: the configured App Builder provider did not return valid JSON for the build brief.');
   }
+  if (requirements.length === 0) {
+    throw new Error('APP_BUILD_PLANNER_OUTPUT_INVALID: the configured App Builder provider did not return grounded requirements.');
+  }
+  const providerId = typeof completion === 'string'
+    ? undefined
+    : appBuilderPlannerProviderId(completion?.providerId);
   const allowedIds = new Set(candidates.map((candidate) => candidate.sourceId));
-  const requirements = normalizeRequirements(parsed.requirements);
   const requirementIds = new Set(requirements.map((requirement) => requirement.id));
   const components = normalizeComponents(
     parsed.components,
@@ -212,9 +228,6 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     requirementIds,
     new Map(requirements.map((requirement) => [requirement.id, requirement])),
   );
-  if (requirements.length === 0) {
-    throw new Error('APP_BUILD_PLANNER_OUTPUT_INVALID: the configured App Builder provider did not return grounded requirements.');
-  }
   const frame = normalizeFrame(parsed.frame, prompt, input.audience);
   return ensureAppBuildStructure(ensureRequiredSources({
     version: 1,
@@ -235,7 +248,7 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     detailDrills: [],
     selectedSourceIds: Array.from(new Set(components.map((component) => component.sourceId))),
     candidateSourceIds: candidates.map((candidate) => candidate.sourceId),
-    warnings: [],
+    warnings: truncated ? [APP_BUILDER_TRUNCATED_NOTE] : [],
   }, candidates, requiredSourceIds), candidates, parsed);
 }
 
@@ -974,19 +987,22 @@ function appBuilderUserPrompt(input: PlanAppBuildBriefInput, candidates: AppSour
   });
 }
 
-function parsePlannerJson(raw: string | undefined): Record<string, unknown> | undefined {
-  if (!raw?.trim()) return undefined;
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start < 0 || end <= start) return undefined;
-  try {
-    const parsed = JSON.parse(raw.slice(start, end + 1));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : undefined;
-  } catch {
-    return undefined;
-  }
+/** Asked of the provider the second time, when its first reply could not be read as a grounded brief. */
+export const APP_BUILDER_RETRY_NOTE = 'Your previous reply could not be read as the build brief. Reply again with exactly one JSON object and nothing else: no prose, no code fence. Keep it compact: at most 6 components, one short sentence per rationale, and include requirements.';
+
+/** Said on the plan when the reply was cut off and closed after its last complete part. */
+export const APP_BUILDER_TRUNCATED_NOTE = 'The AI plan was cut short, so it may cover less than you asked. Add more data or tiles yourself.';
+
+/** A planner reply read as a brief (see `readPlannerJson`), with its grounded requirements. */
+function readPlannerReply(completion: string | AppBuilderPlannerCompletionResult): {
+  parsed?: Record<string, unknown>;
+  requirements: AppBuildRequirement[];
+  truncated: boolean;
+} {
+  const raw = typeof completion === 'string' ? completion : completion?.content;
+  const read = readPlannerJson(raw);
+  if (!read) return { requirements: [], truncated: false };
+  return { parsed: read.value, requirements: normalizeRequirements(read.value.requirements), truncated: read.truncated };
 }
 
 /** Provider identifiers originate in the local runtime's selected settings,

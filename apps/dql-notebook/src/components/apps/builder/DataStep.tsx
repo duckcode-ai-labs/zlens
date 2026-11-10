@@ -3,6 +3,7 @@ import { certifiedByLabel } from '../reader-trust';
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../../api/client';
 import { AddDataBrowser, RemoveDataButton, type AddDataBrowserProps } from './AddDataBrowser';
 import { StudioErrorBanner, humanize } from './studio-ui';
+import { studioErrorWords } from '../app-studio-words';
 import { appDataItems, openCanvasLabel, sourceOriginLabel, tilesUsingSource, trustLabel } from './app-data';
 import {
   appStudioBuildPagesLabel,
@@ -50,7 +51,23 @@ export interface DataStepAiProps {
   /** Close a failed re-plan and keep the picks already shown. */
   onDismissActivityError?: () => void;
   onBuildPages: () => void;
+  /** Leave AI's plan and pick the data by hand ("Pick data myself"). Never disabled. */
   onDiscard: () => void;
+}
+
+/** The label of the button that leaves AI's plan for the manual data picker (new-user test V8, item 4). */
+export const PICK_DATA_MYSELF = 'Pick data myself';
+
+/**
+ * Describe with AI could not plan the App (new-user test V8, item 4): the Data
+ * step opened the manual picker instead, says why in plain words, and offers
+ * AI again. Nothing in the picker is disabled because of it.
+ */
+export interface DataStepAiFallback {
+  /** The server's error, code and all: shown in plain words, the code under Technical details. */
+  error: string;
+  onRetry: () => void;
+  onDismiss: () => void;
 }
 
 export const AI_DATA_STEP_INTRO = appStudioPlannerWords('ai').intro;
@@ -71,6 +88,7 @@ export function DataStep({
   onSkip,
   browser,
   ai,
+  aiFallback,
   next,
 }: {
   draft: AppStudioBuildDraft;
@@ -89,6 +107,8 @@ export function DataStep({
   browser: Omit<AddDataBrowserProps, 'draft' | 'sourcePolicy' | 'draftId'>;
   /** AI mode: the data an AI proposal picked. */
   ai?: DataStepAiProps;
+  /** Manual mode after Describe with AI failed: why, and Try AI again. */
+  aiFallback?: DataStepAiFallback;
 }): JSX.Element {
   if (ai) return <AiDataStep draft={draft} error={error} onBack={onBack} onDismissError={onDismissError} browser={browser} ai={ai} />;
   const items = appDataItems(draft.sources, known);
@@ -101,6 +121,7 @@ export function DataStep({
         <p>Pick the data this App will use. You can add more later from the Data panel.</p>
       </div>
     </header>
+    {aiFallback ? <StudioErrorBanner error={aiFallback.error} action={{ label: 'Try AI again', onClick: aiFallback.onRetry }} onDismiss={aiFallback.onDismiss} /> : null}
     {error ? <StudioErrorBanner error={error} {...(onDismissError ? { onDismiss: onDismissError } : {})} /> : null}
     <div className="data-step-body">
       <aside className="data-step-list" aria-labelledby="data-step-list-title">
@@ -169,6 +190,8 @@ function AiDataStep({
     </li>;
   };
   const activityLabel = ai.activitySteps[ai.activityIndex] ?? ai.activitySteps[0] ?? '';
+  // The server's words keep their code; the step shows a plain sentence and the code under Technical details.
+  const activityError = studioErrorWords(ai.activityError ?? 'App Studio could not prepare the proposal.');
   return <section className="studio-data-step ai-data-step" aria-labelledby="studio-data-step-title" aria-busy={running}>
     <header className="data-step-header">
       <button type="button" className="ghost-icon" onClick={onBack} aria-label="Back to Apps" title="Back to Apps"><ArrowLeft size={16} /></button>
@@ -194,7 +217,8 @@ function AiDataStep({
     {ai.status === 'error' ? <div className="data-step-activity error" role="alert">
       <div>
         <strong>{words.errorTitle}</strong>
-        <small>{ai.activityError ?? 'App Studio could not prepare the proposal.'}</small>
+        <small>{activityError.message}</small>
+        {activityError.technical ? <details className="studio-error-technical"><summary>Technical details</summary><code>{activityError.technical}</code></details> : null}
         <span className="data-step-activity-actions">
           {model && ai.onDismissActivityError ? <button type="button" onClick={ai.onDismissActivityError}>Keep current picks</button> : null}
           <button type="button" className="primary" onClick={ai.onRetry}>{words.retryLabel}</button>
@@ -234,7 +258,8 @@ function AiDataStep({
       </div>
     </div>
     <footer className="data-step-footer">
-      <button type="button" onClick={ai.onDiscard} disabled={running}>Discard</button>
+      {/* Always available, even while AI is still planning or after it failed. */}
+      <button type="button" onClick={ai.onDiscard}>{PICK_DATA_MYSELF}</button>
       <button
         type="button"
         className="primary"

@@ -19,6 +19,7 @@ import { relatedFieldParts } from '../datasets/related-fields.js';
 import { SAVED_QUERY_ROW_COUNT } from '../datasets/result-fields.js';
 import { extractColumnLineage, type ColumnLineageResult } from '../lineage/column-lineage.js';
 import { detectOutputDrift } from './output-drift.js';
+import { readBlockSource } from './block-source.js';
 import { validateBlockRetirements } from './retirement.js';
 import { validateBlockMetricMappings } from './metric-mapping.js';
 import { buildLineageGraph } from '../lineage/builder.js';
@@ -2527,9 +2528,8 @@ function manifestDatasetBlockSourceId(block: ManifestBlock): string {
 
 /** The runtime and metadata catalog bind block source revisions to raw DQL text. */
 function manifestDatasetBlockSourceRevision(projectRoot: string, block: ManifestBlock): string {
-  const path = join(projectRoot, block.filePath);
   try {
-    return `sha256:${createHash('sha256').update(readFileSync(path, 'utf8')).digest('hex')}`;
+    return `sha256:${createHash('sha256').update(readBlockSource(projectRoot, block.filePath)).digest('hex')}`;
   } catch {
     // This is handled by the existing block scan. A stable fallback preserves
     // deterministic diagnostics rather than depending on filesystem metadata.

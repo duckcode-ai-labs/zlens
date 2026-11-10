@@ -85,6 +85,16 @@ describe('fields from a saved query result (design D1)', () => {
     expect(monthly().result).toEqual({ savedQuery: 'monthly_revenue', groupBy: ['month'], asIs: ['avg_order_value'], typesFrom: 'probe' });
   });
 
+  it('never sums a season, a year or an id from a plain row query (new-user test V8, item 5)', () => {
+    const { fields } = savedQueryResultFields({
+      sourceId: 'app:block:nba:games',
+      columns: [{ name: 'SEASON', type: 'NUMBER' }, { name: 'TEAM_ID_HOME', type: 'NUMBER' }, { name: 'playerId', type: 'NUMBER' }, { name: 'PTS', type: 'NUMBER' }],
+    });
+    const sums = fields.filter((field): field is DatasetMeasureField => field.kind === 'measure' && field.aggregation === 'sum').map((field) => field.from);
+    expect(sums).toEqual(['PTS']);
+    expect(fields.find((field): field is DatasetPhysicalField => field.kind === 'physical' && field.name === 'SEASON')?.role).toBe('dimension');
+  });
+
   it('finds the grouping columns of an aggregate query from its column lineage', () => {
     expect(savedQueryGroupByFromOutputs([{ name: 'month' }, { name: 'gross_revenue', isAggregate: true }])).toEqual(['month']);
     expect(savedQueryGroupByFromOutputs([{ name: 'customer_name' }, { name: 'lifetime_spend' }])).toEqual([]);

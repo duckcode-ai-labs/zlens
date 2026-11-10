@@ -55,7 +55,7 @@ import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
 import { ReaderPreviewParts } from './ReaderPreviewParts';
 import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
-import { NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords } from './app-studio-words';
+import { NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords, studioErrorWords } from './app-studio-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -520,7 +520,9 @@ function AppStudioAiActivitySurface({
         <small>{docked ? 'Proposed tiles appear on the page for you to apply or discard. Sources keep their catalog trust.' : 'Data stays Certified or Not certified yet exactly as cataloged. You review it before the page is generated.'}</small>
       </> : <>
         <strong id="studio-ai-activity-title">{voice === 'keywords' ? appStudioPlannerWords('keywords').errorTitle : 'The source proposal needs another try'}</strong>
-        <small role="alert">{activity.error ?? 'App Studio could not prepare the source proposal.'}</small>
+        {/* Plain words; the server's code stays under Technical details (new-user test V8, item 4). */}
+        <small role="alert">{studioErrorWords(activity.error ?? 'App Studio could not prepare the source proposal.').message}</small>
+        {activity.error && studioErrorWords(activity.error).technical ? <details className="studio-error-technical"><summary>Technical details</summary><code>{activity.error}</code></details> : null}
         <span className="studio-ai-activity-actions">{onReturn ? <button type="button" onClick={onReturn}>Back to source review</button> : null}<button type="button" className="primary" onClick={onRetry}>{appStudioPlannerWords(voice).retryLabel}</button></span>
       </>}
     </div>
@@ -611,6 +613,14 @@ export function AppStudioV2({
   const [proposalAddingSourceId, setProposalAddingSourceId] = useState<string | null>(null);
   const [aiActivity, setAiActivity] = useState<AppStudioAiActivity | null>(null);
   const [aiActivityIndex, setAiActivityIndex] = useState(0);
+  /**
+   * Describe with AI could not plan the App (new-user test V8, item 4): the
+   * Data step opened the manual picker instead; this is the server's error,
+   * shown there in plain words with Try AI again.
+   */
+  const [aiPlanFallback, setAiPlanFallback] = useState<string | null>(null);
+  /** Counts AI plan requests; a reply to an older one (left with Pick data myself) is ignored. */
+  const aiPlanSequenceRef = useRef(0);
   const [sourceFeedback, setSourceFeedback] = useState<AppStudioSourceFeedback | null>(null);
   const [undoStack, setUndoStack] = useState<AppStudioBuildDraft[]>([]);
   const [redoStack, setRedoStack] = useState<AppStudioBuildDraft[]>([]);
@@ -785,7 +795,7 @@ export function AppStudioV2({
           setPrompt(aiResume.prompt);
           setStage('data');
           setAiDataFlow(true);
-          await requestAiProposal(selected, aiResume.prompt, aiResume.requiredSourceIds, false);
+          await requestAiProposal(selected, aiResume.prompt, aiResume.requiredSourceIds, false, true);
         }
         return;
       }
@@ -1056,7 +1066,7 @@ export function AppStudioV2({
       if (mode === 'ai') {
         setAiActivityIndex(0);
         setAiActivity({ status: 'running', retry: appStudioProposalRetry(prompt, []), returnToProposal: false });
-        await requestAiProposal(result.draft, prompt, [], false);
+        await requestAiProposal(result.draft, prompt, [], false, true);
       }
     } catch (cause) {
       setError(messageOf(cause));
@@ -1070,12 +1080,17 @@ export function AppStudioV2({
     nextPrompt = prompt,
     selectedBlockIds?: string[],
     returnToProposal = Boolean(proposal),
+    /** The Data step's first plan: when it fails, open the manual picker instead of a dead end. */
+    fallBackToPicking = false,
   ): Promise<boolean> => {
     if (!base) return false;
+    const sequence = ++aiPlanSequenceRef.current;
+    const current = () => sequence === aiPlanSequenceRef.current;
     const requiredSourceIds = appStudioProposalRequestSourceIds(selectedBlockIds, selectedSource?.id);
     const retry = appStudioProposalRetry(nextPrompt, requiredSourceIds ?? []);
     setAiActivityIndex(0);
     setAiActivity({ status: 'running', retry, returnToProposal });
+    setAiPlanFallback(null);
     setBusy(true);
     setError(null);
     try {
@@ -1088,18 +1103,33 @@ export function AppStudioV2({
         ...(targetPageId ? { pageId: targetPageId } : {}),
         mode: replacePageWithAi ? 'replace' : 'add',
       });
+      // The author chose Pick data myself while AI was planning: keep their choice.
+      if (!current()) return false;
       setProposal(result.proposal);
       setAiActivity(null);
       setCopilotOpen(false);
       setSavedMessage(appStudioPlannerVoice(result.proposal, aiConnected) === 'keywords' ? 'Keyword suggestions ready for review' : 'AI plan ready for review');
       return true;
     } catch (cause) {
+      if (!current()) return false;
       const message = messageOf(cause);
+      if (fallBackToPicking && !returnToProposal) {
+        // Never a dead end with every Add to App disabled: the manual picker
+        // opens, says why in plain words, and offers AI again.
+        setProposal(null);
+        setAiActivity(null);
+        setAiDataFlow(false);
+        setProposalPageId(null);
+        setStage('data');
+        setAiPlanFallback(message);
+        setSavedMessage('AI couldn’t plan this App · pick the data yourself');
+        return false;
+      }
       setSavedMessage(aiConnected === false ? 'Keyword suggestions need attention' : 'AI proposal needs attention');
       setAiActivity({ status: 'error', retry, returnToProposal, error: message });
       return false;
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   };
 
@@ -3475,8 +3505,13 @@ export function AppStudioV2({
     setProposalPageId(null);
     setSavedMessage('Review the proposed tiles · nothing is saved until you apply');
   };
-  /** Discard AI's picks; the Data step stays open so the author can pick data by hand. */
+  /**
+   * Pick data myself: leave AI's picks (or its plan still running) and pick
+   * data by hand; the Data step stays open. A reply that arrives later is ignored.
+   */
   const discardAiData = () => {
+    aiPlanSequenceRef.current += 1;
+    setBusy(false);
     setProposal(null);
     setAiActivity(null);
     setAiDataFlow(false);
@@ -3538,6 +3573,15 @@ export function AppStudioV2({
         known={knownItems}
         error={error}
         onDismissError={() => setError(null)}
+        {...(!aiStep && aiPlanFallback ? { aiFallback: {
+          error: aiPlanFallback,
+          onDismiss: () => setAiPlanFallback(null),
+          onRetry: () => {
+            setAiPlanFallback(null);
+            setAiDataFlow(true);
+            void requestAiProposal(draft, prompt, appData.map((item) => item.sourceId ?? item.id).slice(0, 12), false, true);
+          },
+        } } : {})}
         onBack={goBack}
         onOpenCanvas={openCanvas}
         onSkip={() => { setStage('canvas'); setPanel('sources'); }}

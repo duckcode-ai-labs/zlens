@@ -78,6 +78,38 @@ describe('start from a table', () => {
     expect(drafted.proposal.measures.map((measure) => measure.name)).toEqual(plain.proposal.measures.map((measure) => measure.name));
   });
 
+  it('keeps the row key Modeling saved when it is several columns together (new-user test V8, item 5)', () => {
+    const states = tableModelStates({
+      tables: [{ id: 'warehouse.nba.local_team_game_facts', relation: '"NBA"."LOCAL_TEAM_GAME_FACTS"' }, { id: 'warehouse.nba.local_player_game_facts', relation: '"NBA"."LOCAL_PLAYER_GAME_FACTS"' }],
+      entities: [{ dbtUniqueId: 'warehouse.nba.local_team_game_facts', localId: 'team_game', domain: 'nba', businessName: 'Team game', grain: 'GAME_ID, TEAM_ID', keys: ['GAME_ID', 'TEAM_ID'] }],
+      proposals: [{ id: 'ctxprop_nba', status: 'proposed', origin: 'warehouse_discovery', operations: [
+        { kind: 'modeling_change', change: { operation: 'upsert_entity', value: { id: 'player_game', domain: 'nba', dbtModel: 'warehouse.nba.local_player_game_facts', keys: ['GAME_ID', 'PLAYER_ID'] } } },
+      ] }],
+    });
+    expect(states.get('warehouse.nba.local_team_game_facts')).toEqual({ state: 'modeled', entity: 'Team game', domain: 'nba', keys: ['GAME_ID', 'TEAM_ID'] });
+    expect(states.get('warehouse.nba.local_player_game_facts')).toMatchObject({ state: 'drafted', keys: ['GAME_ID', 'PLAYER_ID'] });
+  });
+
+  it('checks Modeling\'s two-column row key as one key, so a team-game table is accepted (new-user test V8, item 5)', async () => {
+    const statements: string[] = [];
+    const run = async (sql: string) => {
+      statements.push(sql);
+      return [{ DQL_ROWS: 800, DQL_DISTINCT: 800, DQL_FILLED: 800 }];
+    };
+    const table = { id: 'warehouse.nba.local_team_game_facts', name: 'LOCAL_TEAM_GAME_FACTS', schema: 'NBA', relation: '"NBA"."LOCAL_TEAM_GAME_FACTS"', kind: 'table', columns: [{ name: 'GAME_ID', type: 'NUMBER' }, { name: 'TEAM_ID', type: 'NUMBER' }, { name: 'SEASON', type: 'NUMBER' }, { name: 'PTS', type: 'NUMBER' }] };
+    const drafted = await draftTableDataset({ table, driver: 'snowflake', run, modeledKeys: ['game_id', 'team_id'], modeledEntity: 'Team game' });
+    expect(drafted.rows).toBe(800);
+    expect(drafted.proposal.key).toEqual({ column: 'GAME_ID', columns: ['GAME_ID', 'TEAM_ID'], entity: 'team_game' });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain('GROUP BY "GAME_ID", "TEAM_ID"');
+    expect(statements[0]).toContain('"GAME_ID" IS NOT NULL AND "TEAM_ID" IS NOT NULL');
+    // Season is a grouping, never a sum.
+    expect(drafted.proposal.measures.filter((measure) => measure.aggregation === 'sum').map((measure) => measure.from)).toEqual(['PTS']);
+    // When the two columns repeat together, the single-column check still runs and finds no key.
+    const repeated = await draftTableDataset({ table, driver: 'snowflake', run: async (sql) => (sql.includes('dql_distinct"') ? [{ dql_rows: 800, dql_distinct: 790, dql_filled: 800 }] : [{ dql_rows: 800, dql_distinct_0: 400, dql_filled_0: 800, dql_distinct_1: 2, dql_filled_1: 800 }]), modeledKeys: ['GAME_ID', 'TEAM_ID'] });
+    expect(repeated.proposal.key).toBeUndefined();
+  });
+
   it('applies the duplicate-column answer before the number choices (design Q1.4)', () => {
     const proposal = {
       name: 'Orders', relation: 'orders', keyCandidates: [],

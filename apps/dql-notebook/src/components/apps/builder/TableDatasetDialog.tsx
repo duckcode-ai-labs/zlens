@@ -4,6 +4,9 @@ import { applyTableDuplicateChoices, duplicateColumnsQuestion, type TableDataset
 import { api, type CertificationByline, type WarehouseTableSummary } from '../../../api/client';
 import { messageOf } from './studio-ui';
 
+/** A table with no row key (new-user test V8, item 5): what to do, not a dead end. */
+export const TABLE_NO_ROW_KEY_WORDS = 'No column is filled and different on every row, so ZLens cannot count this table’s rows safely. Set its row key in Modeling (one column, or several that are different together, such as a game and a team), then check it again.';
+
 export type NumberChoice = { name: string; include: boolean; format: 'number' | 'currency' | 'percent'; currency?: string };
 type Choice = NumberChoice;
 
@@ -34,10 +37,14 @@ export function DatasetNumbersCheck({
   groupByKey?: boolean;
 }): JSX.Element {
   const dates = proposal.fields.filter((field) => field.role === 'time');
-  const groups = proposal.fields.filter((field) => field.role === 'dimension' || (groupByKey && field.role === 'key'));
+  // The parts of a row key of several columns (a team and a game) are groupings too.
+  const keyColumns = proposal.key?.columns ?? [];
+  const groups = proposal.fields.filter((field) => field.role === 'dimension' || ((groupByKey || keyColumns.length > 1) && field.role === 'key'));
   return <>
     {proposal.key ? (
-      <p className="table-dataset-row"><Check size={14} aria-hidden="true" /><span>Each row is one <strong>{proposal.key.timeGrain ?? proposal.key.entity.replace(/_/g, ' ')}</strong>: <code>{proposal.key.column}</code> is filled and different on all {rows.toLocaleString()} rows, so rows can be counted safely.</span></p>
+      <p className="table-dataset-row"><Check size={14} aria-hidden="true" /><span>Each row is one <strong>{proposal.key.timeGrain ?? proposal.key.entity.replace(/_/g, ' ')}</strong>: {keyColumns.length > 1
+        ? <>{keyColumns.map((column, index) => <span key={column}>{index ? (index === keyColumns.length - 1 ? ' and ' : ', ') : ''}<code>{column}</code></span>)} together are</>
+        : <><code>{proposal.key.column}</code> is</>} filled and different on all {rows.toLocaleString()} rows, so rows can be counted safely.</span></p>
     ) : (
       <p className="table-dataset-error" role="alert">{noKeyMessage}</p>
     )}
@@ -279,7 +286,7 @@ export function TableDatasetDialog({
               <input id="table-dataset-name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
             </label>
             {draft ? <DuplicateColumnQuestions proposal={draft.proposal} mode={duplicateMode} onMode={setDuplicateMode} /> : null}
-            <DatasetNumbersCheck proposal={proposal} rows={draft!.rows} choices={shownChoices} onChoice={setChoice} noKeyMessage="No column is filled and different on every row, so ZLens cannot count this table's rows safely. Choose a table with an id column." />
+            <DatasetNumbersCheck proposal={proposal} rows={draft!.rows} choices={shownChoices} onChoice={setChoice} noKeyMessage={TABLE_NO_ROW_KEY_WORDS} />
             {proposal.skipped?.length ? <p className="table-dataset-muted">Left out (names ZLens cannot use): {proposal.skipped.join(', ')}.</p> : null}
             {error ? <p className="table-dataset-error" role="alert">{error}</p> : null}
           </div>

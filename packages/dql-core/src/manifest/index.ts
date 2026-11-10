@@ -12,6 +12,7 @@ export {
   type DbtImportFilters,
 } from './builder.js';
 
+export { notebookBlockPath, readBlockSource } from './block-source.js';
 export { detectOutputDrift } from './output-drift.js';
 export { unreadableFilterParts, validateBlockMetricMappings } from './metric-mapping.js';
 export {

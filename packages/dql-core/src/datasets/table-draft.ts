@@ -60,7 +60,17 @@ export interface TableDatasetProposal {
    * period column ("month") that is the row key makes a summary: one row per
    * `timeGrain`, rolled up to longer periods only.
    */
-  key?: { column: string; entity: string; timeGrain?: string };
+  key?: {
+    column: string;
+    entity: string;
+    timeGrain?: string;
+    /**
+     * Several columns that are one row's identity together (GAME_ID and
+     * TEAM_ID): the row key Modeling saved, checked on the rows. `column` is
+     * the first of them. Absent for a one-column key.
+     */
+    columns?: string[];
+  };
   /** Columns worth profiling as the row identity, most likely first. */
   keyCandidates: string[];
   /** Columns left out because their names are not plain identifiers. */
@@ -251,7 +261,25 @@ export function nativeTimeGrain(field: Pick<TableDatasetField, 'name' | 'type' |
 const ID_NAME = /(^id$|_id$|_key$|_code$|_uuid$|^uuid$|_number$|_no$|^sku$)/i;
 const NOT_A_MEASURE = /(^id$|_id$|_key$|_code$|year|month|day|week|quarter|zip|postal|phone|lat|lon|lng|latitude|longitude|_no$|_number$|rank|version|age$)/i;
 const MONEY = /(amount|revenue|sales|price|cost|spend|fee|total|value|income|profit|margin|budget|premium|payment|paid|balance|salary|charge)/i;
-const RATE = /(rate|ratio|pct|percent|share)$/i;
+/** A column named for a year or season ends in one of these words: `SEASON`, `fiscal_year`, `fy`. */
+const YEAR_WORDS = new Set(['season', 'year', 'yr', 'fy']);
+/** A column with one of these words is an identifier, however it is spelled: `TEAM_ID_HOME`, `playerId`. */
+const ID_WORDS = new Set(['id', 'uuid', 'guid']);
+/**
+ * True for a number column that is a label, never an amount: a year or a
+ * season (`SEASON`, not `SEASON_WINS`), or an id. Adding these up across rows
+ * means nothing, so they are offered to group by, never summed.
+ */
+export function isLabelNumberColumnName(name: string): boolean {
+  const words = wordsFor(name).toLowerCase().split(/\s+/).filter(Boolean);
+  const last = words[words.length - 1];
+  return (last !== undefined && YEAR_WORDS.has(last)) || words.some((word) => ID_WORDS.has(word));
+}
+/** A percentage, rate, ratio, share or average: a sum of it across rows is wrong, so none is proposed. */
+const NON_SUMMABLE_WORDS = new Set(['pct', 'percent', 'percentage', 'rate', 'ratio', 'share', 'avg', 'average', 'mean', 'median']);
+function isNonSummableName(name: string): boolean {
+  return wordsFor(name).toLowerCase().split(/\s+/).some((word) => NON_SUMMABLE_WORDS.has(word));
+}
 
 /**
  * A money column stored in hundredths: `subtotal_cents`, `order_total_cents`,
@@ -372,7 +400,7 @@ export function proposeTableDataset(input: {
       }
       return { name, label: wordsFor(name), role: 'attribute', type: 'number', column: column.name, divideBy: 100 };
     }
-    if (column.kind === 'number' && (minor || !NOT_A_MEASURE.test(column.name))) {
+    if (column.kind === 'number' && (minor || (!NOT_A_MEASURE.test(column.name) && !isLabelNumberColumnName(column.name)))) {
       return { name: column.name, label: wordsFor(column.name), role: 'attribute', type: 'number' };
     }
     return { name: column.name, label: wordsFor(column.name), role: 'dimension', type: column.kind === 'number' ? 'number' : column.kind };
@@ -406,7 +434,9 @@ export function proposeTableDataset(input: {
       });
       continue;
     }
-    const rate = RATE.test(field.name);
+    // A percentage, rate or average summed across rows is wrong: it stays a
+    // number on each row (for filters and row detail), never a sum.
+    if (isNonSummableName(field.name)) continue;
     add({
       name: field.name.toLowerCase().replace(/[^a-z0-9_]/g, '_'),
       label: field.label,
@@ -414,9 +444,8 @@ export function proposeTableDataset(input: {
       from: field.name,
       format: MONEY.test(field.name) ? 'currency' : 'number',
       ...(MONEY.test(field.name) ? { currency: 'USD' } : {}),
-      // A rate summed across rows is meaningless; it is proposed off.
-      include: !rate,
-      reason: rate ? `${field.label} looks like a rate; adding it up across rows would be wrong, so it starts off.` : `Adds up ${field.label.toLowerCase()} across rows.`,
+      include: true,
+      reason: `Adds up ${field.label.toLowerCase()} across rows.`,
     });
   }
   for (const name of keyCandidates) {
@@ -582,6 +611,73 @@ export function applyTableProfile(proposal: TableDatasetProposal, profile: Table
   return { ...proposal, fields, measures: [rowCount, ...withoutKeyCount], key: { column: key, entity: entity.replace(/\s+/g, '_') } };
 }
 
+/** A check of several columns as one row key: rows, distinct combinations, rows with every column filled. */
+export interface TableCompositeKeyProfile {
+  rows: number;
+  distinct: number;
+  filled: number;
+}
+
+/** "GAME_ID and TEAM_ID", "A, B and C". */
+export function tableKeyColumnsWords(columns: readonly string[]): string {
+  return columns.length <= 1 ? columns.join('') : `${columns.slice(0, -1).join(', ')} and ${columns[columns.length - 1]}`;
+}
+
+/**
+ * Settle a row key of several columns together (the row key Modeling saved,
+ * such as GAME_ID and TEAM_ID for one team in one game), when the check shows
+ * every combination is filled and different on every row. The columns become
+ * key fields (still offered to group by) and a row count is added. Returns
+ * the proposal without a key when the check does not hold or a column is not
+ * a plain field of the table. `entity` names one row ("team game"), else the
+ * table's name does.
+ */
+export function applyCompositeTableKey(
+  proposal: TableDatasetProposal,
+  columns: readonly string[],
+  check: TableCompositeKeyProfile,
+  table: string,
+  entity?: string,
+): TableDatasetProposal {
+  const byName = new Map(proposal.fields.map((field) => [field.name.toLowerCase(), field]));
+  const keyFields = columns.map((column) => byName.get(column.toLowerCase()));
+  const holds = columns.length > 1
+    && keyFields.every((field) => field && !field.column && !field.divideBy && field.role !== 'time')
+    && check.rows > 0 && check.distinct === check.rows && check.filled === check.rows;
+  if (!holds) {
+    const { key: _key, ...rest } = proposal;
+    return rest;
+  }
+  const names = keyFields.map((field) => field!.name);
+  const keySet = new Set(names);
+  const rowName = singularWords(entity?.trim() || table);
+  const entityId = rowName.replace(/\s+/g, '_');
+  const fields = proposal.fields.map((field) => (keySet.has(field.name) ? { ...field, role: 'key' as const } : field));
+  // The parts of the key are labels: never summed. Their distinct counts stay.
+  const measures = proposal.measures.filter((measure) => !(measure.aggregation === 'sum' && keySet.has(measure.from)));
+  const rowCount: TableDatasetMeasure = {
+    name: `${entityId.replace(/[^a-z0-9]+/g, '_')}_count`.replace(/^_+/, '') || 'row_count',
+    label: `${wordsFor(rowName)} count`,
+    aggregation: 'count',
+    from: names[0]!,
+    format: 'number',
+    include: true,
+    reason: `Counts ${rowName} rows: ${tableKeyColumnsWords(names)} together are different on every row.`,
+  };
+  const taken = new Set(measures.map((measure) => measure.name));
+  return {
+    ...proposal,
+    fields,
+    measures: [...(taken.has(rowCount.name) ? [] : [rowCount]), ...measures],
+    key: { column: names[0]!, columns: names, entity: entityId },
+  };
+}
+
+/** The columns of a proposal's row key: one, or several together. */
+export function tableKeyColumns(key: NonNullable<TableDatasetProposal['key']>): string[] {
+  return key.columns?.length ? [...key.columns] : [key.column];
+}
+
 /** The table's profile query parts: which columns to count distinct values of. */
 export function tableProfileColumns(proposal: TableDatasetProposal): string[] {
   return proposal.keyCandidates.slice(0, 8);
@@ -606,7 +702,7 @@ export function tableDatasetDeclaration(proposal: TableDatasetProposal, blockNam
   return {
     grain: {
       entities: [proposal.key.entity],
-      keys: [proposal.key.column],
+      keys: tableKeyColumns(proposal.key),
       keyEvidence: `proof.${slug}`,
       ...(proposal.key.timeGrain ? { aggregate: true, timeGrain: proposal.key.timeGrain, timeBucketBy: proposal.key.column } : {}),
     },
@@ -623,7 +719,8 @@ export function tableDatasetDeclaration(proposal: TableDatasetProposal, blockNam
       name: measure.name,
       aggregation: measure.aggregation,
       from: measure.from,
-      additive: measure.aggregation === 'sum' ? 'additive' as const : 'non_additive' as const,
+      // A sum or a row count adds up across groups; a distinct count does not.
+      additive: measure.aggregation === 'sum' || measure.aggregation === 'count' ? 'additive' as const : 'non_additive' as const,
       allowedAggs: [measure.aggregation],
       format: measure.format,
       ...(measure.format === 'currency' && measure.currency ? { currency: measure.currency } : {}),
@@ -688,7 +785,7 @@ export function renderTableDatasetBlock(input: {
     const properties = [
       `agg = ${quote(measure.aggregation)}`,
       `from = ${quote(measure.from)}`,
-      `additive = ${quote(measure.aggregation === 'sum' ? 'additive' : 'non_additive')}`,
+      `additive = ${quote(measure.aggregation === 'sum' || measure.aggregation === 'count' ? 'additive' : 'non_additive')}`,
       `allowedAggs = [${quote(measure.aggregation)}]`,
       `format = ${quote(measure.format)}`,
       ...(measure.format === 'currency' && measure.currency ? [`currency = ${quote(measure.currency)}`] : []),
@@ -707,7 +804,7 @@ export function renderTableDatasetBlock(input: {
     '',
     '  grain = {',
     `    entities = [${quote(proposal.key.entity)}]`,
-    `    keys = [${quote(proposal.key.column)}]`,
+    `    keys = [${tableKeyColumns(proposal.key).map(quote).join(', ')}]`,
     `    keyEvidence = ${quote(`proof.${slug}`)}`,
     ...(proposal.key.timeGrain ? [`    timeGrain = ${quote(proposal.key.timeGrain)}`, `    timeBucketBy = ${quote(proposal.key.column)}`, '    aggregate = true'] : []),
     '  }',
@@ -750,7 +847,10 @@ export function tableDatasetCheckSentences(proposal: TableDatasetProposal, rows:
   const out: string[] = [];
   if (proposal.key) {
     const entity = proposal.key.timeGrain ?? proposal.key.entity.replace(/_/g, ' ');
-    out.push(`Row key: each row is one ${entity} (${proposal.key.column} is filled and different on all ${rows.toLocaleString('en-US')} rows)`);
+    const columns = tableKeyColumns(proposal.key);
+    out.push(columns.length > 1
+      ? `Row key: each row is one ${entity} (${tableKeyColumnsWords(columns)} together are filled and different on all ${rows.toLocaleString('en-US')} rows)`
+      : `Row key: each row is one ${entity} (${proposal.key.column} is filled and different on all ${rows.toLocaleString('en-US')} rows)`);
   }
   const formats = proposal.measures
     .filter((measure) => measure.include && measure.aggregation === 'sum')

@@ -132,7 +132,7 @@ export interface WarehouseTableSummary {
    * drafted by "Draft my models" and waits for review (design D7). Its
    * checked row key is reused by "Check and add".
    */
-  modeled?: { state: 'modeled' | 'drafted'; entity: string; domain: string; key?: string; proposalId?: string };
+  modeled?: { state: 'modeled' | 'drafted'; entity: string; domain: string; key?: string; keys?: string[]; proposalId?: string };
   /** Tables its rows point to through a many-to-one join; their fields come with it (design D2). */
   joins?: string[];
   /** Datasets "Check and add" already made from it, so it is never added twice (new-user round 3, problem 7). */

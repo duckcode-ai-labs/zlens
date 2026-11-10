@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deterministicDatasetQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
+import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, deterministicDatasetQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
 import { savedQueryResultDescriptor, type AppBuildRequirement, type DatasetDescriptor } from '@zlens/core';
 
@@ -43,13 +43,17 @@ describe('App Builder orchestrator', () => {
   });
 
   it('surfaces malformed configured planner output while offline planning stays deterministic', async () => {
+    const malformed = vi.fn(async () => 'not json');
     await expect(planAppBuildBrief({
       prompt: 'Build revenue and regional orders',
       candidates,
       requiredSourceIds: [],
       sourcePolicy: 'include_review_required',
-      complete: async () => 'not json',
+      complete: malformed,
     })).rejects.toThrow('APP_BUILD_PLANNER_OUTPUT_INVALID');
+    // One more try, asking for one compact JSON object, before it gives up (new-user test V8, item 4).
+    expect(malformed).toHaveBeenCalledTimes(2);
+    expect(malformed.mock.calls[1]?.[0].user).toContain(APP_BUILDER_RETRY_NOTE);
 
     const generic = await planAppBuildBrief({
       prompt: 'Build an analytics app from my certified DQL blocks and available warehouse tables.',
@@ -59,6 +63,69 @@ describe('App Builder orchestrator', () => {
     });
     expect(generic.requirements).toHaveLength(1);
     expect(generic.selectedSourceIds).toEqual(candidates.map((candidate) => candidate.sourceId));
+  });
+
+  describe('reads the planner reply whatever its shape, and tries once more (new-user test V8, item 4)', () => {
+    const plannerBrief = {
+      frame: { goal: 'Executive sales', metrics: ['revenue'], dimensions: ['date'], filters: [] },
+      requirements: [{ id: 'r1', question: 'Revenue trend', role: 'trend', required: true, measures: ['revenue'], dimensions: ['date'], filters: [] }],
+      components: [{ id: 'c1', title: 'Revenue trend', sourceId: 'app:block:sales:revenue', requirementIds: ['r1'], role: 'trend', view: 'line', rationale: 'Exact capability match' }],
+    };
+    const plan = (complete: (input: { system: string; user: string }) => Promise<string | { content: string; providerId?: string }>) => planAppBuildBrief({
+      prompt: 'Build an executive sales App',
+      candidates,
+      requiredSourceIds: [],
+      sourcePolicy: 'include_review_required',
+      complete,
+    });
+
+    it('plans from fenced JSON with sentences around it that have braces of their own, in one call', async () => {
+      const complete = vi.fn(async () => ({
+        content: `Here is the plan for {sales}:\n\`\`\`json\n${JSON.stringify(plannerBrief, null, 2)}\n\`\`\`\nTell me if you want {more}.`,
+        providerId: 'cortex',
+      }));
+      const brief = await plan(complete);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(brief.planningMode).toBe('ai');
+      expect(brief.plannerProvenance).toEqual({ version: 1, mode: 'ai', providerInvocation: 'succeeded', providerId: 'cortex' });
+      expect(brief.components.map((component) => component.sourceId)).toEqual(['app:block:sales:revenue']);
+    });
+
+    it('plans from a brief returned as a JSON-encoded string', async () => {
+      const brief = await plan(async () => JSON.stringify(JSON.stringify(plannerBrief)));
+      expect(brief.requirements.map((requirement) => requirement.id)).toEqual(['r1']);
+    });
+
+    it('asks once more when the first reply cannot be read, and plans from the second', async () => {
+      const complete = vi.fn()
+        .mockResolvedValueOnce({ content: 'I will build an executive sales app with a revenue trend.', providerId: 'cortex' })
+        .mockResolvedValueOnce({ content: JSON.stringify(plannerBrief), providerId: 'cortex' });
+      const brief = await plan(complete);
+      expect(complete).toHaveBeenCalledTimes(2);
+      expect(complete.mock.calls[0]?.[0].user).not.toContain(APP_BUILDER_RETRY_NOTE);
+      expect(complete.mock.calls[1]?.[0].user).toContain(APP_BUILDER_RETRY_NOTE);
+      expect(brief.planningMode).toBe('ai');
+      expect(brief.components.map((component) => component.sourceId)).toEqual(['app:block:sales:revenue']);
+    });
+
+    it('asks once more when the first reply has no grounded requirements', async () => {
+      const complete = vi.fn()
+        .mockResolvedValueOnce(JSON.stringify({ frame: { goal: 'Executive sales' }, requirements: [] }))
+        .mockResolvedValueOnce(JSON.stringify(plannerBrief));
+      const brief = await plan(complete);
+      expect(complete).toHaveBeenCalledTimes(2);
+      expect(brief.requirements).toHaveLength(1);
+    });
+
+    it('closes a reply cut off at the token limit and says the plan was cut short', async () => {
+      const full = JSON.stringify(plannerBrief, null, 2);
+      const cut = full.slice(0, full.indexOf('"rationale"') + 14);
+      const complete = vi.fn(async () => cut);
+      const brief = await plan(complete);
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(brief.components.map((component) => component.sourceId)).toEqual(['app:block:sales:revenue']);
+      expect(brief.warnings).toContain(APP_BUILDER_TRUNCATED_NOTE);
+    });
   });
 
   it('surfaces configured planner failures and derives offline requirements only when no planner is configured', async () => {
