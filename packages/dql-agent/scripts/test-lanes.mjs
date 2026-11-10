@@ -181,10 +181,12 @@ const EXPECTED_TEST_FILES = 194;
 // left out (warehouse-search-objects.test.ts, +1; open-formats plan L3b, zlens#290).
 // 2830 with Claude through Snowflake Cortex: its address, Snowflake sign-in tokens and key-pair JWT
 // (claude-cortex.test.ts, +10; Snowflake Native App plan step 1d).
-const EXPECTED_TESTS = 2830;
+// 2836 with Cortex through SQL when Snowflake refuses the REST API, and Cortex failures in plain words
+// (claude-cortex.test.ts, +6; Snowflake app end-to-end fixes D3, D5).
+const EXPECTED_TESTS = 2836;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2749.
+// The ordinary lane's share is the difference: 2755.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
