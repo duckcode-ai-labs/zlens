@@ -192,11 +192,14 @@ const EXPECTED_TEST_FILES = 197;
 // words applied by any of its words (sql-checks.test.ts, +1; new-user test B1/B2, 2026-11-10).
 // 2860 with the App Builder planner reply read whatever its shape and one retry
 // (app-builder-planner-json.test.ts +5, app-builder-orchestrator.test.ts +5; new-user test V8, item 4).
-// 2861 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1; new-user test V9).
-const EXPECTED_TESTS = 2861;
+// 2864 with a reading the host corrected carried by the answer, and a winning margin that is not a percentage
+// (ask-pipeline.test.ts +3), and which kinds a certified answer counts (certified-question.test.ts +1;
+// new-user test V9 retest).
+// 2865 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1; new-user test V9).
+const EXPECTED_TESTS = 2865;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2779.
+// The ordinary lane's share is the difference: 2783.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
