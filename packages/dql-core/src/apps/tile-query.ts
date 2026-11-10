@@ -6,6 +6,7 @@ import {
   type DatasetPhysicalField,
 } from '../datasets/descriptor.js';
 import { datasetAggregateComponentRequirements } from '../datasets/component-proof.js';
+import { datasetNameIdentity } from '../datasets/related-fields.js';
 import { savedQueryResultRollup } from '../datasets/result-fields.js';
 import { sha256Hex } from './sha256-sync.js';
 import { checkTileCalculations, normalizeTileCalculations, tileCalcMeasureReferences } from './tile-calcs.js';
@@ -150,17 +151,44 @@ export interface TileQueryDiagnostic {
 export interface TileQueryAdaptation {
   kind: 'aggregate_time_rollup' | 'aggregate_entity_rollup' | 'saved_query_rollup';
   message: string;
-  /**
-   * A roll-up over a Top N saved query's N rows. A certified Top N certifies
-   * those N rows, so the tile is certified for them; the receipt says the
-   * tile covers only them.
-   */
+  /** A roll-up over a Top N saved query's N rows: it runs, but it is not a certified total. */
   topRowsOnly?: number;
+  /**
+   * A tile that shows a Top N saved query's own N rows, one per group: its
+   * numbers are the certified ones, and the receipt says it covers only them.
+   */
+  showsTopRows?: number;
 }
 
-/** The receipt line for a tile over a Top N saved query's rows: what it covers, said plainly. */
+/** The receipt line for a tile that shows a Top N saved query's own rows. */
 export function topRowsTileMessage(savedQuery: string, rows: number): string {
   return `Covers only the ${rows} rows ${savedQuery} keeps (it is a Top ${rows}), not all of the data.`;
+}
+
+/**
+ * Whether a tile over a saved query's result holds one of its rows in each
+ * group: it groups by every grouping column of the saved query, each at its
+ * own period, where a name stands for the key it names and the key for its
+ * name (a bar by PLAYER_NAME over rows grouped by PLAYER_ID and PLAYER_NAME),
+ * and asks for no subtotals.
+ */
+function groupsEachSavedQueryRow(descriptor: DatasetDescriptor, query: TileQuery): boolean {
+  const groupBy = descriptor.result?.groupBy ?? [];
+  if (groupBy.length === 0 || query.rollups?.length) return false;
+  const shown = new Set<string>();
+  for (const dimension of query.dimensions) {
+    const field = descriptor.fields.find((candidate): candidate is DatasetPhysicalField => candidate.kind === 'physical' && candidate.name.toLowerCase() === dimension.field.toLowerCase());
+    if (!field) return false;
+    if (dimension.timeGrain && dimension.timeGrain !== field.time?.baseGrain) return false;
+    shown.add(field.name.toLowerCase());
+    const key = datasetNameIdentity(descriptor, field.name)?.key;
+    if (key) shown.add(key.toLowerCase());
+  }
+  return groupBy.every((column) => {
+    if (shown.has(column.toLowerCase())) return true;
+    const key = datasetNameIdentity(descriptor, column)?.key;
+    return Boolean(key && shown.has(key.toLowerCase()));
+  });
 }
 
 export interface TileQueryValidation {
@@ -481,11 +509,12 @@ export function validateTileQuery(descriptor: DatasetDescriptor, query: TileQuer
     });
   }
   if (savedQueryRollup.adaptation) {
-    // A Top N's rows are what its certification covers: the receipt says the
-    // tile covers only them, not that they are uncertified (V9).
+    // A total over a Top N's rows is not a total of the data (#178). A tile
+    // that still holds one of its rows in each group shows them as they were
+    // certified (V9: the Lakers bar by name read "Not certified yet").
     const { topRowsOnly } = savedQueryRollup.adaptation;
-    adaptations.push(topRowsOnly && descriptor.result
-      ? { ...savedQueryRollup.adaptation, message: topRowsTileMessage(descriptor.result.savedQuery, topRowsOnly) }
+    adaptations.push(topRowsOnly && descriptor.result && groupsEachSavedQueryRow(descriptor, query)
+      ? { kind: 'saved_query_rollup', message: topRowsTileMessage(descriptor.result.savedQuery, topRowsOnly), showsTopRows: topRowsOnly }
       : savedQueryRollup.adaptation);
   }
   if (descriptor.grain.aggregate && aggregateSafety.entityRollup) {

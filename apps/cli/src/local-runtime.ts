@@ -23822,8 +23822,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 const executedParameterEvidence = datasetBoundParameterEvidence(invocation.values);
                 const executedParameterFingerprint = `sha256:${fingerprintDashboardRuntimeState(invocation.values)}`;
                 const rolledUp = compiled.validation.adaptations.some((adaptation) => adaptation.kind === 'saved_query_rollup');
-                // A Top N saved query keeps only its first N rows; certified, it certifies them, and the tile covers only them.
-                const topRowsOnly = compiled.validation.adaptations.find((adaptation) => adaptation.kind === 'saved_query_rollup' && adaptation.topRowsOnly)?.topRowsOnly;
+                // A total over a Top N saved query's rows is not certified, whatever the saved query is.
+                const topRowsOnly = compiled.validation.adaptations.some((adaptation) => adaptation.kind === 'saved_query_rollup' && adaptation.topRowsOnly);
+                const savedQueryTileTrust = topRowsOnly ? 'review_required' as const : descriptor.trust;
                 datasetEffectiveQueries.set(item.i, structuredClone(effectiveDatasetQuery));
                 tiles.push({
                   tileId: item.i,
@@ -23836,7 +23837,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   compiledSqlFingerprint: execution.compiledSqlFingerprint,
                   resultFingerprint: execution.resultFingerprint,
                   executionFingerprint: tileExecutionFingerprint,
-                  trustState: descriptor.trust,
+                  trustState: savedQueryTileTrust,
                   citation: { kind: 'dataset_query', name: descriptor.label, path: block.filePath },
                   filters: {
                     applied: compiled.appliedFilters,
@@ -23900,13 +23901,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                       parameters: datasetSourceParameters,
                     }),
                     sql: execution.preparation.executedSql.slice(0, 40_000),
-                    trustState: descriptor.trust,
+                    trustState: savedQueryTileTrust,
                     explanation: [
                       rolledUp
                         ? (compiled.validation.adaptations.find((adaptation) => adaptation.kind === 'saved_query_rollup')?.message ?? `Rolled up from the result of ${savedQueryResult.savedQuery}.`)
                         : `Shows the rows of ${savedQueryResult.savedQuery} as they are.`,
                       topRowsOnly
-                        ? `This tile ran as one query over the result of the saved query ${savedQueryResult.savedQuery}, which keeps only its top ${topRowsOnly} rows; its trust is the saved query's own, for those rows.`
+                        ? `This tile ran as one query over the result of the saved query ${savedQueryResult.savedQuery}, which keeps only its top rows; a total of them is not certified.`
                         : `This tile ran as one query over the complete result of the saved query ${savedQueryResult.savedQuery}; its trust is the saved query's own.`,
                       filterResolution.unbound.length > 0 ? `${filterResolution.unbound.length} explicitly unmapped dashboard filter(s) did not apply.` : 'All mapped dashboard filters were bound through the saved query\'s result columns.',
                     ],

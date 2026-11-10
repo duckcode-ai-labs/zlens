@@ -207,12 +207,12 @@ describe('a Top N saved query (0.2.4)', () => {
     expect(topBeverage(['customer_name']).result?.keepsFirstRows).toBe(10);
   });
 
-  it('says a total over its rows covers only them', () => {
+  it('marks a total over its rows as not a certified total', () => {
     const total = validateTileQuery(topBeverage(['customer_name']), { dimensions: [], measures: [{ measure: 'beverage_revenue' }] });
     expect(total.outcome).toBe('adapted');
     expect(total.adaptations).toEqual([{
       kind: 'saved_query_rollup',
-      message: 'Covers only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data.',
+      message: 'Totals only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data, so it is not a certified total.',
       topRowsOnly: 10,
     }]);
   });

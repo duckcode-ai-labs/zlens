@@ -71,7 +71,7 @@ export interface ReaderTrustTile {
     trust?: string;
     /** ZLens checked the data and someone added it, but nobody certified it yet (receipt: "Checked, not certified yet"). */
     checked?: boolean | null;
-    validation?: { outcome?: string; adaptations?: Array<{ kind?: string; message?: string; topRowsOnly?: number }> } | null;
+    validation?: { outcome?: string; adaptations?: Array<{ kind?: string; message?: string; topRowsOnly?: number; showsTopRows?: number }> } | null;
     /** Joins to related tables the tile used (design D2), in plain words. */
     joins?: Array<{ trust?: string; sentence?: string; changedSinceCertified?: { at?: string | null } | null }> | null;
   } | null;
@@ -278,18 +278,20 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
       const changed = dataset.joins.find((join) => join.trust !== 'certified' && join.changedSinceCertified?.at);
       return trust('review', changedJoinDetail(changed?.changedSinceCertified?.at) ?? UNCERTIFIED_JOIN_DETAIL);
     }
+    // A total over a Top N saved query's rows is not a total of the data.
+    const topRows = dataset.validation?.adaptations?.find((adaptation) => adaptation.topRowsOnly);
+    if (outcome === 'adapted' && topRows) return trust('review', topRows.message ?? 'Totals only the top rows of a saved query, so it is not a certified total.');
     const calculated = Boolean((item.query as { calculations?: unknown[] } | undefined)?.calculations?.length);
     if (dataset.trust === 'certified' && outcome !== 'needs_review') {
       // A calculation is certified when every input is (T2): checked
       // arithmetic over certified measures, through certified joins.
       if (calculated) return certifiedTrust('Calculated from certified data: every input is certified.', tile.certification);
-      // A certified Top N saved query (the question asked for the top 3)
-      // certifies its rows: a tile over them is certified and says it covers
-      // only them (V9: the page said "Not certified yet", the Apps card
-      // "All tiles certified").
-      const topRows = dataset.validation?.adaptations?.find((adaptation) => adaptation.topRowsOnly);
-      if (outcome === 'adapted' && topRows) {
-        return certifiedTrust(`Certified data. ${topRows.message ?? 'It covers only the top rows of a saved query, not all of the data.'}`, tile.certification);
+      // A tile that shows a certified Top N's own rows, one each (a bar by
+      // player name over rows grouped by player id and name), shows certified
+      // numbers, and says it covers only them (V9).
+      const shownRows = dataset.validation?.adaptations?.find((adaptation) => adaptation.showsTopRows);
+      if (outcome === 'adapted' && shownRows) {
+        return certifiedTrust(`Certified data. ${shownRows.message ?? 'It shows only the top rows of a saved query, not all of the data.'}`, tile.certification);
       }
       return outcome === 'adapted'
         ? certifiedTrust('Certified data; the query was adapted within what it certifies.', tile.certification)

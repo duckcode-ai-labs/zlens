@@ -5,14 +5,17 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
   it('gives the server and the reader one answer for the same run tile', () => {
     expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'adapted' } } })?.state).toBe('certified');
     expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'needs_review' } } })?.state).toBe('review');
-    // A certified Top N saved query certifies its rows: a tile over them is
-    // certified and says it covers only them (V9; 0.2.4 left it "Not certified yet").
-    const topRowsRun = (trust: string) => ({ status: 'ok', dataset: { trust, validation: { outcome: 'adapted', adaptations: [{ kind: 'saved_query_rollup', message: 'Covers only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data.', topRowsOnly: 10 }] } } });
-    const topRows = readerTileTrust({ query: {} }, topRowsRun('certified'));
-    expect(topRows?.state).toBe('certified');
-    expect(topRows?.detail).toBe('Certified data. Covers only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data.');
-    // A Top N nobody certified stays as it is.
-    expect(readerTileTrust({ query: {} }, topRowsRun('review_required'))).toMatchObject({ state: 'review', label: NOT_CERTIFIED_YET });
+    // A total over a Top N saved query's rows runs, but is not a certified total (0.2.4).
+    const topRows = readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'adapted', adaptations: [{ kind: 'saved_query_rollup', message: 'Totals only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data, so it is not a certified total.', topRowsOnly: 10 }] } } });
+    expect(topRows?.state).toBe('review');
+    expect(topRows?.label).toBe(NOT_CERTIFIED_YET);
+    expect(topRows?.detail).toContain('Totals only the 10 rows top_beverage_customers keeps');
+    // A tile that shows a certified Top N's own rows, one each, is certified and says it covers only them (V9).
+    const shownRun = (trust: string) => ({ status: 'ok', dataset: { trust, validation: { outcome: 'adapted', adaptations: [{ kind: 'saved_query_rollup', message: 'Covers only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data.', showsTopRows: 10 }] } } });
+    const shown = readerTileTrust({ query: {} }, shownRun('certified'));
+    expect(shown?.state).toBe('certified');
+    expect(shown?.detail).toBe('Certified data. Covers only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data.');
+    expect(readerTileTrust({ query: {} }, shownRun('review_required'))).toMatchObject({ state: 'review', label: NOT_CERTIFIED_YET });
     expect(readerTileTrust({ semantic: {} }, { status: 'ok', tileType: 'semantic' })?.state).toBe('governed');
     expect(readerTileTrust({ block: {} }, { status: 'error' })?.state).toBe('blocked');
     expect(readerTileTrust({ text: { markdown: 'x' } }, { status: 'ok', tileType: 'text' })).toBeNull();

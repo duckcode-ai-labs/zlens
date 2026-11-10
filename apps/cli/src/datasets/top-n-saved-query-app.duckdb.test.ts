@@ -17,12 +17,13 @@ import { startLocalServer } from '../local-runtime.js';
  * a bar by name) published while the editor skipped the tile check, so
  * `dql.app.json` stored "1 of 1". The page's run then said "0 of 1 tile
  * certified": the bar groups by one of the two grouping columns, so the check
- * read it as a total over a Top 3, which it never counted as certified. The
- * Apps card kept reading the stored count: "All tiles certified".
+ * read it as a total over a Top 3. The Apps card kept reading the stored
+ * count: "All tiles certified".
  *
- * Now a certified Top N certifies its rows: every tile over them is
- * certified and says it covers only them, and the Apps list works out the
- * count as it is now, so it says what the page says.
+ * Now a tile that shows the Top N's own rows (each name holds one of them) is
+ * certified and says it covers only them; a total of them is still not
+ * certified (#178). The Apps list works the count out as it is now, so it says
+ * what the page says.
  *
  * Needs a DuckDB connector root (ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT).
  */
@@ -53,7 +54,7 @@ async function certify(base: string, input: { source: string; path: string; meta
 }
 
 describe('an App over a certified Top N saved query (V9)', () => {
-  duckDbIt('is certified on the page, in the editor and on the Apps list, and the list follows the page', async () => {
+  duckDbIt('its bar of rows is certified and its total is not, on the page, in the editor and on the Apps list', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-top-n-app-'));
     const databasePath = join(projectRoot, 'app-datasets-pilot.duckdb');
     const connection: ConnectionConfig = { driver: 'duckdb', filepath: databasePath, moduleSearchPaths: [connectorRoot!] };
@@ -69,7 +70,7 @@ describe('an App over a certified Top N saved query (V9)', () => {
       const base = `http://127.0.0.1:${port}`;
 
       // Ask's answer to "top 2 customers by revenue", saved and certified.
-      // Like the Lakers query (player id and name), it groups by two columns.
+      // Like the Lakers query (player id and name), it groups by a key and its name.
       const saved = await call(base, '/api/blocks/save-from-cell', {
         cellId: 'agent-run-1',
         name: 'top_customers',
@@ -77,7 +78,7 @@ describe('an App over a certified Top N saved query (V9)', () => {
         owner: 'commerce@example.test',
         description: 'The two customers with the most revenue.',
         tags: ['revenue'],
-        content: 'SELECT customer_id, region, SUM(net_amount) AS net_revenue\nFROM order_lines\nGROUP BY customer_id, region\nORDER BY net_revenue DESC, customer_id\nLIMIT 2',
+        content: "SELECT customer_id, 'Customer ' || customer_id AS customer_name, SUM(net_amount) AS net_revenue\nFROM order_lines\nGROUP BY customer_id, customer_name\nORDER BY net_revenue DESC, customer_id\nLIMIT 2",
         sourceQuestion: 'Who are our top 2 customers by revenue?',
       });
       expect(saved.status, saved.text).toBe(201);
@@ -97,15 +98,15 @@ describe('an App over a certified Top N saved query (V9)', () => {
       const fields = await call(base, '/api/app-datasets/saved-queries/fields', { sourceId: candidate.sourceId });
       expect(fields.status, fields.text).toBe(200);
       // LIMIT 2 on a grouped result is a real Top 2 (a LIMIT 501 on a one-row COUNT(*) is not).
-      expect(fields.body.descriptor).toMatchObject({ trust: 'certified', result: { savedQuery: 'top_customers', groupBy: ['customer_id', 'region'], keepsFirstRows: 2 } });
+      expect(fields.body.descriptor).toMatchObject({ trust: 'certified', result: { savedQuery: 'top_customers', groupBy: ['customer_id', 'customer_name'], keepsFirstRows: 2 } });
       const source = (await list()).find((item) => item.name === 'top_customers');
       const composed = await call(base, `/api/app-builds/${encodeURIComponent(draft.id)}/compose`, {
         mode: 'manual',
         expectedRevision: draft.revision,
         expectedProposalHash: draft.proposalHash,
         selections: [
-          // The Lakers tile: a bar by one of the two grouping columns.
-          { sourceId: source.sourceId, pageId: 'overview', view: 'chart', title: 'Revenue by customer', query: { dimensions: [{ field: 'customer_id' }], measures: [{ measure: 'net_revenue' }], respectsGlobalFilters: true } },
+          // The Lakers tile: a bar by name, over rows grouped by key and name.
+          { sourceId: source.sourceId, pageId: 'overview', view: 'chart', title: 'Revenue by customer', query: { dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'net_revenue' }], respectsGlobalFilters: true } },
           // A total of the Top 2.
           { sourceId: source.sourceId, pageId: 'overview', view: 'kpi', title: 'Top 2 revenue', query: { dimensions: [], measures: [{ measure: 'net_revenue' }], respectsGlobalFilters: true } },
         ],
@@ -113,14 +114,14 @@ describe('an App over a certified Top N saved query (V9)', () => {
       expect(composed.status, composed.text).toBe(200);
       draft = composed.body.draft;
 
-      // The editor's page run: both certified.
+      // The editor's page run: the bar certified, the total not.
       const preview = await call(base, `/api/app-builds/${encodeURIComponent(draft.id)}/dashboards/overview/run`, { fullRun: true });
       expect(preview.status, preview.text).toBe(200);
       const previewBar = preview.body.tiles.find((tile: Json) => tile.title === 'Revenue by customer');
       const previewKpi = preview.body.tiles.find((tile: Json) => tile.title === 'Top 2 revenue');
       expect(previewBar).toMatchObject({ status: 'ok', trustState: 'certified' });
-      expect(previewKpi).toMatchObject({ status: 'ok', trustState: 'certified' });
-      expect(previewBar.result.rows.map((row: Json) => [row.customer_id, Number(row.net_revenue)]).sort()).toEqual([['C-001', 70], ['C-002', 30]]);
+      expect(previewKpi).toMatchObject({ status: 'ok', trustState: 'review_required' });
+      expect(previewBar.result.rows.map((row: Json) => [row.customer_name, Number(row.net_revenue)]).sort()).toEqual([['Customer C-001', 70], ['Customer C-002', 30]]);
       expect(Number(previewKpi.result.rows[0].net_revenue)).toBe(100);
 
       const receipt = await call(base, `/api/app-builds/${encodeURIComponent(draft.id)}`, {
@@ -138,7 +139,7 @@ describe('an App over a certified Top N saved query (V9)', () => {
 
       // The count stored at publish (the publish dialog's answer).
       const appFile = join(projectRoot, 'apps', draft.appId, 'dql.app.json');
-      expect(JSON.parse(readFileSync(appFile, 'utf-8')).tileTrust).toEqual({ certified: 2, total: 2 });
+      expect(JSON.parse(readFileSync(appFile, 'utf-8')).tileTrust).toEqual({ certified: 1, total: 2 });
 
       // The published page: the same count, from its own run, and each tile says what it covers.
       const dashboard = JSON.parse(readFileSync(join(projectRoot, 'apps', draft.appId, 'dashboards', 'overview.dqld'), 'utf-8'));
@@ -149,24 +150,26 @@ describe('an App over a certified Top N saved query (V9)', () => {
         return { run, summary: appTrustSummary(dashboard.layout.items, tiles) };
       };
       const page = await pageTrust();
-      expect(page.summary).toMatchObject({ certified: 2, total: 2, text: 'All tiles certified' });
-      const bar = page.run.body.tiles.find((tile: Json) => tile.title === 'Revenue by customer');
-      const barTrust = readerTileTrust(dashboard.layout.items.find((item: Json) => item.i === bar.tileId), bar);
-      expect(barTrust).toMatchObject({ state: 'certified', label: 'Certified' });
-      expect(barTrust?.detail).toBe('Certified data. Covers only the 2 rows top_customers keeps (it is a Top 2), not all of the data.');
+      expect(page.summary).toMatchObject({ certified: 1, total: 2, text: '1 of 2 tiles certified' });
+      const trustOf = (title: string) => {
+        const tile = page.run.body.tiles.find((item: Json) => item.title === title);
+        return readerTileTrust(dashboard.layout.items.find((item: Json) => item.i === tile.tileId), tile);
+      };
+      expect(trustOf('Revenue by customer')).toMatchObject({ state: 'certified', label: 'Certified', detail: 'Certified data. Covers only the 2 rows top_customers keeps (it is a Top 2), not all of the data.' });
+      expect(trustOf('Top 2 revenue')).toMatchObject({ state: 'review', label: 'Not certified yet', detail: 'Totals only the 2 rows top_customers keeps (it is a Top 2), not all of the data, so it is not a certified total.' });
 
       // The Apps list: the same count.
       const listed = async () => (await call(base, '/api/apps')).body.apps.find((app: Json) => app.id === draft.appId);
-      expect((await listed()).tileTrust).toEqual({ certified: 2, total: 2 });
+      expect((await listed()).tileTrust).toEqual({ certified: 1, total: 2 });
 
       // A stale stored count (an App published before a rule changed, as the
       // Lakers App was) no longer decides the card: the list says what the page says.
       const stored = JSON.parse(readFileSync(appFile, 'utf-8'));
-      writeFileSync(appFile, `${JSON.stringify({ ...stored, tileTrust: { certified: 0, total: 2 } }, null, 2)}\n`);
-      expect((await listed()).tileTrust).toEqual({ certified: 2, total: 2 });
+      writeFileSync(appFile, `${JSON.stringify({ ...stored, tileTrust: { certified: 2, total: 2 } }, null, 2)}\n`);
+      expect((await listed()).tileTrust).toEqual({ certified: 1, total: 2 });
 
-      // And the other way: the saved query is no longer certified. The page
-      // and the list both say so, while the stored count still says 2 of 2.
+      // And when the saved query is no longer certified, the page and the
+      // list both say so, while the stored count still says 1 of 2.
       writeFileSync(appFile, `${JSON.stringify(stored, null, 2)}\n`);
       const certifiedSource = readFileSync(join(projectRoot, certifiedPath), 'utf-8');
       writeFileSync(join(projectRoot, certifiedPath), certifiedSource.replace('status = "certified"', 'status = "draft"'));
