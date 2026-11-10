@@ -115,6 +115,13 @@ describe('the checks an AI-drafted statement passes before it runs', () => {
     expect(missingStatedValues("SELECT * FROM s WHERE c IN ('Acme', 'Contoso')", several).map((item) => item.value)).toEqual(['Fabrikam']);
   });
 
+  it('a name the reading wrote in several words is applied by any of its words', () => {
+    const reading = { version: 1, kind: 'analytics', reading: 'x', measures: [], groupBy: [], display: [], filters: [{ ref: 'column:t.team.nickname', op: 'eq', values: ['Boston Celtics'], source: 'question' }], unresolved: [], provenance: {}, expectedShape: 'scalar' } as never;
+    const stated = statedValues('how many home games did they win in 2008', reading);
+    expect(stated.find((item) => item.value === 'Boston Celtics')?.name).toBe('Boston Celtics');
+    expect(missingStatedValues("SELECT COUNT(*) FROM g JOIN t ON g.team_id = t.team_id WHERE t.nickname ILIKE '%celtics%' AND g.season = 2008", stated)).toEqual([]);
+  });
+
   it('a ref the reading put where a value goes is a field, not a value the SQL must spell', () => {
     const intent = { version: 1, kind: 'analytics', reading: 'x', measures: [], groupBy: [], display: [], filters: [{ ref: 'column:main.match.team_1', op: 'eq', values: ['column:main.match.match_winner'], source: 'question' }], unresolved: [], provenance: {}, expectedShape: 'grouped' } as never;
     expect(statedValues('which team won', intent)).toEqual([]);

@@ -126,7 +126,14 @@ export function statedValues(question: string, intent?: AnalyticalIntentV1, opti
     // the bare column, none of which spells the word.
     // A ref the reading put where a value goes ("column:main.match.match_winner",
     // comparing two columns) names a field, not a value the data holds.
-    for (const literal of literals) if (typeof literal === 'string' && /[A-Za-z]/.test(literal) && literal.length <= 80 && !NOT_VALUES.has(literal.toLowerCase()) && !namedText.has(literal.trim().toLowerCase()) && !/^(true|false|yes|no|y|n|t|f)$/i.test(literal.trim()) && !REF_LITERAL.test(literal.trim())) add(literal, 'text');
+    for (const literal of literals) {
+      if (!(typeof literal === 'string' && /[A-Za-z]/.test(literal) && literal.length <= 80 && !NOT_VALUES.has(literal.toLowerCase()) && !namedText.has(literal.trim().toLowerCase()) && !/^(true|false|yes|no|y|n|t|f)$/i.test(literal.trim()) && !REF_LITERAL.test(literal.trim()))) continue;
+      const before = values.length;
+      add(literal, 'text');
+      // A name the reading wrote in several capitalised words ("Boston Celtics") is applied by any of its words,
+      // as a name in the question is: the data may hold only "Celtics" (new-user test, V7 retest, 2026-11-10).
+      if (values.length > before && /^[A-Z][\w&'-]*(\s+[A-Z][\w&'-]*)+$/.test(literal.trim())) values[values.length - 1]!.name = literal.trim();
+    }
     for (const clause of intent.unresolved) for (const word of properNouns(`x ${named.length ? withoutBlockNames(clause.clause, named) : clause.clause}`)) add(word, 'text');
   }
   return values;

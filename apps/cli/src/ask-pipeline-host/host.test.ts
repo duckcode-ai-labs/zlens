@@ -1202,6 +1202,83 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     expect(drafts.map((dispatch) => [dispatch.label, dispatch.outcome])).toEqual([['draft', 'declined'], ['widen', 'sql']]);
   });
 
+  describe('a statement that reads a total of every kind gets one second look (new-user test B1)', () => {
+    const tables: Record<string, string[]> = {
+      local_team_season_facts: ['team_name', 'season', 'wins'],
+      local_team_game_facts: ['game_id', 'team_name', 'season', 'win'],
+    };
+    const nba = {
+      sources: Object.fromEntries(Object.entries(tables).map(([name, columns]) => [name, { name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.${name}`, schema: 'nba', columns: Object.fromEntries(columns.map((column) => [column, { name: column }])) } }])),
+      modeling: { rules: { 'nba.team_season_sums_every_game_id': {
+        localId: 'team_season_sums_every_game_id', domain: 'nba', status: 'draft',
+        expression: "LOCAL_TEAM_SEASON_FACTS adds up every row of LOCAL_TEAM_GAME_FACTS, every first character of GAME_ID included: WINS totals 41,201, as WIN does in LOCAL_TEAM_GAME_FACTS. For one kind (one first character of GAME_ID), sum LOCAL_TEAM_GAME_FACTS filtered on it: CAST(GAME_ID AS VARCHAR) LIKE '2%' gives 36,288.",
+      } } },
+    };
+    const totals = 'SELECT team_name, wins FROM nba.local_team_season_facts WHERE season = 2015 ORDER BY wins DESC LIMIT 1';
+    const oneKind = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+    const askNba = async (question: string, second: string) => {
+      const prompts: string[] = [];
+      const provider: AgentProvider = {
+        name: 'ollama', available: async () => true,
+        generate: async (messages) => {
+          if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return unreadable;
+          const prompt = messages.map((message) => message.content).join('\n');
+          prompts.push(prompt);
+          return prompt.includes('Read the question again') ? second : totals;
+        },
+      };
+      const statements: string[] = [];
+      const route = createAskPipelineRouteExecutor({
+        projectRoot: '/tmp/ask-schema-lane-kinds',
+        executor: { executeQuery: vi.fn(async (sql: string) => {
+          statements.push(sql);
+          if (sql.includes('information_schema.columns')) {
+            const rows = Object.entries(tables).flatMap(([name, columns]) => new RegExp(`'${name}'`).test(sql)
+              ? columns.map((column) => ({ table_schema: 'nba', table_name: name, column_name: column, data_type: /wins?$|season/.test(column) ? 'NUMBER' : 'VARCHAR' }))
+              : []);
+            return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+          }
+          return { columns: ['team_name', 'wins'], rowCount: 1, executionTimeMs: 1, rows: [{ team_name: 'Golden State Warriors', wins: 73 }] };
+        }) } as unknown as QueryExecutor,
+        resolveConnection: async () => connection,
+        getSemanticLayer: () => undefined,
+        getManifest: () => ({ snapshotId: 'snapshot:schema-lane-kinds', manifest: nba as never }),
+        selectProvider: async () => provider,
+        compileSemantic: async () => { throw new Error('no semantic layer'); },
+        priorIntent: () => undefined,
+      });
+      const result = await route({
+        runId: 'run:schema-lane-kinds',
+        request: { question, requestedMode: 'ask' } as AgentRunRequest,
+        route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
+      });
+      return { prompts, statements: statements.filter((sql) => !sql.includes('information_schema')), result };
+    };
+
+    it('a question about one kind is answered from the table the total adds up, filtered on that kind', async () => {
+      const { prompts, statements, result } = await askNba('Which team had the most regular season wins in 2015?', oneKind);
+      expect(prompts).toHaveLength(2);
+      expect(prompts[0]).toContain('model rule team_season_sums_every_game_id');
+      expect(prompts[1]).toContain('LOCAL_TEAM_SEASON_FACTS adds up all of LOCAL_TEAM_GAME_FACTS, every kind of GAME_ID together');
+      expect(prompts[1]).toContain('nba.local_team_game_facts');
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toContain("FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%'");
+      expect(result.status).toBe('completed');
+      expect(JSON.stringify(result)).not.toContain('every kind of GAME_ID together, so it counts every kind');
+      const story = result.askPipelineReceipt?.story ?? [];
+      expect(story.some((entry) => entry.title.startsWith('The SQL reads LOCAL_TEAM_SEASON_FACTS, a total of every kind of GAME_ID'))).toBe(true);
+    });
+
+    it('a question about every kind keeps the total, and the answer says it counts every kind', async () => {
+      const { prompts, statements, result } = await askNba('Which team had the most wins in 2015?', totals);
+      expect(prompts).toHaveLength(2);
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toContain('FROM nba.local_team_season_facts WHERE season = 2015');
+      expect(result.status).toBe('completed');
+      expect(JSON.stringify(result)).toContain('it comes from LOCAL_TEAM_SEASON_FACTS, which adds up all of LOCAL_TEAM_GAME_FACTS, every kind of GAME_ID together, so it counts every kind');
+    });
+  });
+
   it('what the user said in the conversation chooses tables and reaches the draft', async () => {
     const wide = { sources: {
       opportunities: { name: 'opportunities', origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: 'model.opportunities', schema: 'sales', columns: { deal_ref: { name: 'deal_ref' }, stage: { name: 'stage' } } } },
