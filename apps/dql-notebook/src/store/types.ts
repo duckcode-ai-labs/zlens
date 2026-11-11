@@ -174,7 +174,7 @@ export interface ParamConfig {
 }
 export type SidebarPanel = 'files' | 'schema' | 'block_library' | 'connection' | 'lineage' | 'git' | 'apps' | 'readiness' | 'skills' | 'domains' | 'settings' | null;
 export type DevPanelTab = 'logs' | 'errors';
-export type MainView = 'home' | 'ask' | 'notebook' | 'business_artifact' | 'lineage' | 'lineage_detail' | 'block_studio' | 'imports' | 'connection' | 'git' | 'apps' | 'readiness' | 'skills' | 'domains' | 'modeling' | 'settings' | 'agent_log' | 'ask_trace' | 'ask_observability' | 'help' | 'host_page';
+export type MainView = 'home' | 'ask' | 'notebook' | 'business_artifact' | 'lineage' | 'lineage_detail' | 'block_studio' | 'imports' | 'connection' | 'git' | 'apps' | 'readiness' | 'skills' | 'domains' | 'modeling' | 'settings' | 'ask_trace' | 'ask_observability' | 'help' | 'host_page';
 
 export type GlobalAiAudience = 'stakeholder' | 'analyst';
 
@@ -1627,8 +1627,12 @@ export interface NotebookState {
   activePersona: ActivePersona | null;
   // Global, context-aware AI right rail (stakeholder copilot across surfaces).
   globalAi: GlobalAiState;
-  // The agent run currently open in the Agent Steps (agent_log) page, if any.
+  // The agent run whose steps are open, if any. The steps page opens OVER the
+  // view it was opened from, so going back leaves that view exactly as it was
+  // (a notebook keeps its AI chat open and its thread).
   agentLogRun?: AgentRun;
+  /** The view the steps page was opened from: "Back" returns there. */
+  agentLogFromView?: MainView;
   /** OBS-009: only the requested run id is durable navigation state. */
   askTraceRunId?: string;
 }
@@ -1641,6 +1645,7 @@ export type InspectorContext =
 export type NotebookAction =
   | { type: 'SET_MAIN_VIEW'; view: MainView }
   | { type: 'OPEN_AGENT_LOG'; run: AgentRun }
+  | { type: 'CLOSE_AGENT_LOG' }
   | { type: 'OPEN_ASK_TRACE'; runId: string }
   /** OBS-013: local Ask trace catalog. Only a route is stored, never trace payloads. */
   | { type: 'OPEN_ASK_OBSERVABILITY' }

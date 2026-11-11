@@ -154,16 +154,51 @@ export const REFUSAL_SENTENCES: Record<string, string> = {
   filter_not_applied: 'The prepared query did not apply a restriction, so it was not used.',
 };
 
-const INTERNAL_CODE = /\b(?:exploration_not_opted_in|no_certified_block|semantic_runtime_unavailable|semantic_compile_failed|exploration_declined|exploration_check_failed|join_path_required|not_semantic|not_relational|block_not_applicable)\b|sha256:|\b(?:metric|measure|dimension|entity|column|relation|block|concept):[A-Za-z_]/;
+/**
+ * A project setting by its config key (`agent.runtimeValueGrounding.searchSafeColumns`,
+ * `modeling.mode in dql.config.json`). Those are an admin's words: Settings
+ * and the health check name them, an answer's steps never do.
+ */
+const CONFIG_KEY = /\bagent\.(?:runtimeValueGrounding|valueProfile|resultReview|askAutoExploration|narration)\b(?:\.[A-Za-z]+)*|\bdql\.config\.json\b/;
 
-/** Whether a sentence still carries an internal code (used by tests). */
+const INTERNAL_CODE = new RegExp(`\\b(?:exploration_not_opted_in|no_certified_block|semantic_runtime_unavailable|semantic_compile_failed|exploration_declined|exploration_check_failed|join_path_required|not_semantic|not_relational|block_not_applicable)\\b|sha256:|\\b(?:metric|measure|dimension|entity|column|relation|block|concept):[A-Za-z_]|${CONFIG_KEY.source}`);
+
+/** Whether a sentence still carries an internal code or a config key (used by tests). */
 export function containsInternalCode(text: string): boolean {
   return INTERNAL_CODE.test(text);
 }
 
+/**
+ * Settings the reader cannot change, said as what they mean. Runs stored
+ * before the host said it in words keep the old detail, so the known
+ * sentences are matched here as well as fixed where they are written.
+ */
+const SETTING_SENTENCES: Array<[RegExp, string]> = [
+  [/^no text column of these tables is allowlisted for value search\b[^;]*(?:;\s*the AI chooses the field from names and descriptions)?\.?$/i,
+    'Searching stored values is not turned on for these tables, so the AI chose the field from its name and description.'],
+];
+
+/**
+ * Text with its config keys and admin instructions taken out. A known
+ * sentence becomes what it means for the reader; a parenthesis that names a
+ * setting is dropped; a sentence that tells someone to change a setting is
+ * dropped. SQL is left exactly as it is.
+ */
+export function withoutConfigHints(text: string): string {
+  if (!CONFIG_KEY.test(text) || /^\s*(?:select|with)\b/i.test(text)) return text;
+  const trimmed = text.trim();
+  for (const [pattern, sentence] of SETTING_SENTENCES) {
+    if (pattern.test(trimmed)) return sentence;
+  }
+  const withoutAsides = trimmed.replace(/\s*\([^()]*\)/g, (aside) => (CONFIG_KEY.test(aside) ? '' : aside));
+  const sentences = withoutAsides.split(/(?<=[.;])\s+/).filter((sentence) => !CONFIG_KEY.test(sentence));
+  const kept = sentences.join(' ').replace(/\s{2,}/g, ' ').replace(/\s+([.;,])/g, '$1').trim();
+  return kept || 'A project setting that an admin controls is not turned on.';
+}
+
 /** Refs and codes turned into words: `metric:orders.total_revenue` → "total revenue". */
 export function plainRefs(text: string): string {
-  return text
+  return withoutConfigHints(text)
     // "jaffle_shop"."dev"."orders" reads as jaffle_shop.dev.orders.
     .replace(/"[A-Za-z0-9_$]+"(?:\."[A-Za-z0-9_$]+")+/g, (name) => name.replace(/"/g, ''))
     .replace(/\bsha256:[0-9a-f]+\b/gi, '')
@@ -228,9 +263,9 @@ function storyOf(value: unknown): RunStoryEntry | undefined {
   if (!entry || typeof entry.title !== 'string' || typeof entry.at !== 'number') return undefined;
   return {
     phase: str(entry.phase) ?? 'step',
-    title: entry.title,
+    title: withoutConfigHints(entry.title),
     state: entry.state === 'missed' || entry.state === 'failed' ? entry.state : 'done',
-    ...(str(entry.detail) ? { detail: str(entry.detail)!.slice(0, 2_000) } : {}),
+    ...(str(entry.detail) ? { detail: withoutConfigHints(str(entry.detail)!).slice(0, 2_000) } : {}),
     ...(num(entry.ms) !== undefined ? { ms: num(entry.ms) } : {}),
     at: entry.at,
   };

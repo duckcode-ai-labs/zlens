@@ -87,7 +87,7 @@ import type { QueryResult, AppSummary, CellChartConfig, Cell, BlockParameterDefi
 import { useNotebook } from '../../store/NotebookStore';
 import { projectExamplePrompts } from './project-prompts';
 import { buildConversationContext } from './agentConversationContext';
-import { describeJoin, explainAskRun, explanationForTrace, isAskPipelineReceipt, type RunExplanation } from './ask-run-explanation';
+import { describeJoin, explainAskRun, explanationForTrace, isAskPipelineReceipt, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
 import { runContextLine, runContextSummary } from './run-context-summary';
 import { AskRunChecks, AskRunDataUsed, AskRunFlow } from './AskRunFlow';
 import { InvestigationFlow } from './InvestigationFlow';
@@ -2030,10 +2030,11 @@ function askStoryStepOf(value: unknown): AskStoryStep | undefined {
   const state = record.state === 'missed' || record.state === 'failed' ? record.state : 'done';
   return {
     phase: typeof record.phase === 'string' ? record.phase : 'step',
-    title: record.title,
+    // A setting's config key is an admin's word, never a step's (V11 tester).
+    title: withoutConfigHints(record.title),
     state,
     at: record.at,
-    ...(typeof record.detail === 'string' && record.detail ? { detail: record.detail } : {}),
+    ...(typeof record.detail === 'string' && record.detail ? { detail: withoutConfigHints(record.detail) } : {}),
     ...(typeof record.ms === 'number' ? { ms: record.ms } : {}),
   };
 }
@@ -2520,7 +2521,7 @@ function RunCard({
       {run.summary && !(acceptedAskAnswer(run) && sameText(cleanPresentationText(run.summary), cleanAnswerText(acceptedAskAnswer(run)!))) ? (
         <div style={{ fontSize: 12.5, lineHeight: 1.45, color: t.textSecondary }}>{cleanPresentationText(run.summary)}</div>
       ) : null}
-      {acceptedAskAnswer(run) ? <div style={answerBoxStyle(t)}><StructuredAnswerText text={cleanAnswerText(acceptedAskAnswer(run)!)} t={t} /></div> : null}
+      {acceptedAskAnswer(run) ? <div style={answerBoxStyle(t)}><StructuredAnswerText text={cleanAnswerText(run.status === 'blocked' ? withoutConfigHints(acceptedAskAnswer(run)!) : acceptedAskAnswer(run)!)} t={t} /></div> : null}
 
       <AnalyticalTaskOutcomeList
         outcomes={run.analyticalTaskOutcomes}
@@ -3119,6 +3120,44 @@ interface AskRunCardProps {
   onRepairedRun: (sourceRunId: string, repairedRun: AgentRun) => void;
 }
 
+/** The heading a blocked run's card shows. The steps page leads with the same words. */
+export function askBlockedHeading(run: AgentRun): string {
+  return askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : askFailureOrigin(run) === 'no_data' ? 'No matching data' : 'Couldn’t run this query';
+}
+
+export interface AskRunNoAnswer {
+  kind: 'blocked' | 'cancelled' | 'clarify';
+  heading: string;
+  text?: string;
+}
+
+/**
+ * Why a run gave no answer, in the words its chat card used: the same heading
+ * and the same sentence, so the steps page and the card never disagree.
+ * Undefined for a run that answered.
+ */
+export function askRunNoAnswer(run: AgentRun): AskRunNoAnswer | undefined {
+  if (run.status === 'cancelled' || run.stopReason === 'cancelled' || run.route === 'cancelled') {
+    return { kind: 'cancelled', heading: 'Stopped by user', ...(run.summary ? { text: run.summary } : {}) };
+  }
+  if (run.status === 'needs_clarification') {
+    const asked = cleanAnswerText(acceptedAskAnswer(run) ?? run.summary ?? '');
+    return { kind: 'clarify', heading: 'Needs clarification', ...(asked ? { text: asked } : {}) };
+  }
+  if (run.status !== 'blocked') return undefined;
+  const answer = acceptedAskAnswer(run);
+  const text = answer ? cleanAnswerText(withoutConfigHints(answer)) : cleanPresentationText(askFailureDetail(run) ?? '');
+  return { kind: 'blocked', heading: askBlockedHeading(run), ...(text ? { text } : {}) };
+}
+
+/** The answer payload "How it was answered" reads: the artifact that carries the run's record, else the first. */
+export function askRunAnswerPayload(run: Pick<AgentRun, 'artifacts'>): Record<string, unknown> {
+  const artifacts = run.artifacts ?? [];
+  const withRecord = artifacts.find((artifact) => isAskPipelineReceipt(payloadOf(artifact).askPipeline));
+  const primary = withRecord ?? artifacts[0];
+  return primary ? payloadOf(primary) : {};
+}
+
 function AskRunCard(props: AskRunCardProps) {
   const {
   run,
@@ -3176,11 +3215,14 @@ function AskRunCard(props: AskRunCardProps) {
   // A clarify turn's `answer` IS the question being asked, and a blocked run's
   // `answer` is the business-language reason the loop wrote. Dropping both left
   // the user with a canned headline and nothing actionable underneath.
-  const presentationAnswer = acceptedAskAnswer(run);
+  // A blocked run's answer is its reason, written for the reader: a config key
+  // in it (`modeling.mode in dql.config.json`) is an admin's word (V11 tester).
+  const acceptedAnswer = acceptedAskAnswer(run);
+  const presentationAnswer = blocked && acceptedAnswer ? withoutConfigHints(acceptedAnswer) : acceptedAnswer;
   const outcomeLabel = cancelled
     ? 'Stopped by user'
     : blocked
-    ? (askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : askFailureOrigin(run) === 'no_data' ? 'No matching data' : 'Couldn’t run this query')
+    ? askBlockedHeading(run)
     : needsClarification
       ? 'Needs clarification'
       : !certified && !readFromAppView(run) && run.artifacts.some((artifact) => artifact.kind === 'research_run' && investigationReportOf(payloadOf(artifact)))
@@ -4081,7 +4123,7 @@ type CanonicalPerformanceTraceState =
  * record, or — for a run rebuilt from a saved thread turn — read back from the
  * saved run's trace. `unavailable` when a saved run has no record any more.
  */
-function useAskRunExplanation(run: AgentRun, payload: Record<string, unknown>): { explanation?: RunExplanation; unavailable: boolean } {
+export function useAskRunExplanation(run: AgentRun, payload: Record<string, unknown>): { explanation?: RunExplanation; unavailable: boolean } {
   const receipt = askPipelineReceiptOf(run);
   const savedRunId = receipt ? undefined : run.agentRunId;
   const [fetched, setFetched] = useState<{ runId: string; explanation?: RunExplanation }>();
@@ -6702,7 +6744,8 @@ function cleanAnswerText(answer: string): string {
 }
 
 function cleanPresentationText(value: string): string {
-  return toAiGeneratedWording(value)
+  // Failure text is shown to whoever asked; settings are named in Settings, not here.
+  return toAiGeneratedWording(withoutConfigHints(value))
     .replace(/^\s*Review required:\s*/gim, '')
     .replace(/\bqueued for review\b/gi, 'saved as a draft')
     .trim();

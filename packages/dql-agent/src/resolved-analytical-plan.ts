@@ -652,10 +652,12 @@ export function buildResolvedAnalyticalPlan(
   // question WITHOUT it silently changes what was asked — "what customer type
   // is Wesley Jenkins" became "list every customer" — so the plan carries it as
   // a gap rather than dropping it. Live value lookup is opt-in per project, so
-  // the remedy is named here instead of leaving a bare failure.
+  // the remedy is named here instead of leaving a bare failure: in the
+  // reader's words, since a business user reads this gap. The config key
+  // (agent.runtimeValueGrounding) is for admins, in Settings and the health check.
   const unboundMembers = filters.length === 0 ? (input.evidence.unboundMemberTerms ?? []) : [];
   const unboundMemberGaps = unboundMembers.length > 0
-    ? [`The named value ${unboundMembers.map((term) => `“${term}”`).join(' and ')} could not be bound to a governed member, so it was not applied as a filter. Enable live value grounding (agent.runtimeValueGrounding.mode = "safe_automatic" with a searchSafeColumns allowlist) or filter on a modeled dimension.`]
+    ? [`The named value ${unboundMembers.map((term) => `“${term}”`).join(' and ')} could not be matched to a value the project knows, so it was not applied as a filter. Name the field it belongs to, or ask an admin whether searching stored values is turned on for this project.`]
     : [];
   const missingInformation = uniqueSorted([
     ...input.resolution.missingInformation,
