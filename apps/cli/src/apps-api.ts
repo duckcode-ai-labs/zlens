@@ -98,6 +98,7 @@ import {
   type LocalAppInvestigationReportSection,
 } from '@zlens/project';
 import type { LocalOperation, LocalOperationProgress } from './local-operation-coordinator.js';
+import { answerLongRequest } from './long-request.js';
 import { readEnv } from '@zlens/core';
 
 interface Ctx {
@@ -922,163 +923,165 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
 
   const draftAiProposalMatch = path.match(/^\/api\/app-builds\/([^/]+)\/ai-proposals$/);
   if (draftAiProposalMatch && req.method === 'POST') {
-    try {
-      const id = decodeURIComponent(draftAiProposalMatch[1]);
-      const current = loadStoredAppBuildDraft(projectRoot, id);
-      if (!current) {
-        sendJson(res, 404, { ok: false, error: 'App Build Draft not found.' });
-        return true;
+    // Describe with AI: one planner call on Cortex can take over a minute (V10: 80-90 s).
+    await answerLongRequest(req, res, async () => {
+      try {
+        const id = decodeURIComponent(draftAiProposalMatch[1]);
+        const current = loadStoredAppBuildDraft(projectRoot, id);
+        if (!current) {
+          return { status: 404, body: { ok: false, error: 'App Build Draft not found.' } };
+        }
+        const body = await readJson<{
+          prompt?: string;
+          expectedRevision?: number;
+          proposalHash?: string;
+          selectedBlockIds?: string[];
+          pageId?: string;
+          mode?: AppBuildProposalMode;
+        }>(req);
+        if (body.expectedRevision !== current.revision || body.proposalHash !== current.proposalHash) {
+          return { status: 409, body: { ok: false, error: 'APP_BUILD_REVISION_CONFLICT: refresh before asking AI to change this draft.' } };
+        }
+        const proposal = await proposeAppBuildDraftOperations(projectRoot, current, {
+          prompt: cleanString(body.prompt) || current.frame.goal,
+          selectedBlockIds: body.selectedBlockIds,
+          pageId: body.pageId,
+          mode: body.mode,
+        }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
+        writeAppBuildDraftAiProposal(projectRoot, proposal);
+        return { status: 201, body: { ok: true, proposal } };
+      } catch (err) {
+        return { status: 400, body: { ok: false, error: err instanceof Error ? err.message : String(err) } };
       }
-      const body = await readJson<{
-        prompt?: string;
-        expectedRevision?: number;
-        proposalHash?: string;
-        selectedBlockIds?: string[];
-        pageId?: string;
-        mode?: AppBuildProposalMode;
-      }>(req);
-      if (body.expectedRevision !== current.revision || body.proposalHash !== current.proposalHash) {
-        sendJson(res, 409, { ok: false, error: 'APP_BUILD_REVISION_CONFLICT: refresh before asking AI to change this draft.' });
-        return true;
-      }
-      const proposal = await proposeAppBuildDraftOperations(projectRoot, current, {
-        prompt: cleanString(body.prompt) || current.frame.goal,
-        selectedBlockIds: body.selectedBlockIds,
-        pageId: body.pageId,
-        mode: body.mode,
-      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
-      writeAppBuildDraftAiProposal(projectRoot, proposal);
-      sendJson(res, 201, { ok: true, proposal });
-    } catch (err) {
-      sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
+    });
     return true;
   }
 
   const composeBuildMatch = path.match(/^\/api\/app-builds\/([^/]+)\/compose$/);
   if (composeBuildMatch && req.method === 'POST') {
-    try {
-      const id = decodeURIComponent(composeBuildMatch[1]);
-      const current = loadStoredAppBuildDraft(projectRoot, id);
-      if (!current) {
-        sendJson(res, 404, { ok: false, error: 'App Build Draft not found.' });
-        return true;
+    // Build pages can read saved-query fields on the warehouse before it binds tiles.
+    await answerLongRequest(req, res, async () => {
+      try {
+        const id = decodeURIComponent(composeBuildMatch[1]);
+        const current = loadStoredAppBuildDraft(projectRoot, id);
+        if (!current) {
+          return { status: 404, body: { ok: false, error: 'App Build Draft not found.' } };
+        }
+        const body = await readJson<AppBuildComposeRequest>(req);
+        if (body.expectedRevision !== current.revision || body.expectedProposalHash !== current.proposalHash) {
+          return { status: 409, body: { ok: false, error: 'APP_BUILD_REVISION_CONFLICT: refresh before composing this App.' } };
+        }
+        if (ctx.datasetsEnabled === false && body.mode === 'manual' && body.selections.some((selection) => selection.query !== undefined)) {
+          return { status: 409, body: {
+            ok: false,
+            error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before composing them.',
+          } };
+        }
+        const result = await composeStoredAppBuildDraft(projectRoot, current, body, ctx.resolveDatasetSourceAuthority);
+        return { status: 200, body: { ok: true, ...result } };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { status: message.includes('APP_BUILD_') ? 409 : 400, body: { ok: false, error: message } };
       }
-      const body = await readJson<AppBuildComposeRequest>(req);
-      if (body.expectedRevision !== current.revision || body.expectedProposalHash !== current.proposalHash) {
-        sendJson(res, 409, { ok: false, error: 'APP_BUILD_REVISION_CONFLICT: refresh before composing this App.' });
-        return true;
-      }
-      if (ctx.datasetsEnabled === false && body.mode === 'manual' && body.selections.some((selection) => selection.query !== undefined)) {
-        sendJson(res, 409, {
-          ok: false,
-          error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before composing them.',
-        });
-        return true;
-      }
-      const result = await composeStoredAppBuildDraft(projectRoot, current, body, ctx.resolveDatasetSourceAuthority);
-      sendJson(res, 200, { ok: true, ...result });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      sendJson(res, message.includes('APP_BUILD_') ? 409 : 400, { ok: false, error: message });
-    }
+    });
     return true;
   }
 
   const reviseProposalMatch = path.match(/^\/api\/app-builds\/([^/]+)\/ai-proposals\/([^/]+)\/revisions$/);
   if (reviseProposalMatch && req.method === 'POST') {
-    try {
-      const id = decodeURIComponent(reviseProposalMatch[1]);
-      const proposalId = decodeURIComponent(reviseProposalMatch[2]);
-      const current = loadStoredAppBuildDraft(projectRoot, id);
-      const previous = current ? loadAppBuildDraftAiProposal(projectRoot, id, proposalId) : null;
-      if (!current || !previous) {
-        sendJson(res, 404, { ok: false, error: 'App Build proposal not found.' });
-        return true;
+    // A revision is another planner call.
+    await answerLongRequest(req, res, async () => {
+      try {
+        const id = decodeURIComponent(reviseProposalMatch[1]);
+        const proposalId = decodeURIComponent(reviseProposalMatch[2]);
+        const current = loadStoredAppBuildDraft(projectRoot, id);
+        const previous = current ? loadAppBuildDraftAiProposal(projectRoot, id, proposalId) : null;
+        if (!current || !previous) {
+          return { status: 404, body: { ok: false, error: 'App Build proposal not found.' } };
+        }
+        const body = await readJson<{
+          expectedRevision?: number;
+          expectedProposalHash?: string;
+          answers?: Record<string, string>;
+          selectedSourceIds?: string[];
+          additionalSourceIds?: string[];
+        }>(req);
+        if (body.expectedRevision !== current.revision || body.expectedProposalHash !== current.proposalHash
+          || previous.baseRevision !== current.revision || previous.baseProposalHash !== current.proposalHash) {
+          return { status: 409, body: { ok: false, error: 'APP_BUILD_PROPOSAL_CONFLICT: refresh before revising this proposal.' } };
+        }
+        const answers = body.answers ?? {};
+        const answerText = previous.clarifications.flatMap((question) => {
+          const answerId = answers[question.id];
+          const choice = question.choices.find((candidate) => candidate.id === answerId);
+          return choice ? [`${question.question}: ${choice.label}`] : [];
+        });
+        const selectedSourceIds = unique([
+          ...(body.selectedSourceIds ?? previous.defaultSelectedSourceIds ?? []),
+          ...(body.additionalSourceIds ?? []),
+        ].map(cleanString).filter(Boolean));
+        const proposal = await proposeAppBuildDraftOperations(projectRoot, current, {
+          prompt: [previous.prompt || current.frame.goal, answerText.length ? `Clarification decisions: ${answerText.join('; ')}` : ''].filter(Boolean).join('\n'),
+          selectedBlockIds: selectedSourceIds,
+          // A revision answers the same request: same page, same add/replace choice.
+          pageId: previous.targetPageId,
+          mode: previous.mode ?? 'replace',
+        }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
+        proposal.defaultSelectedSourceIds = selectedSourceIds.filter((sourceId) => proposal.operations.some((operation) => (
+          operation.type === 'upsert_source' && operation.source.id === sourceId
+        )));
+        writeAppBuildDraftAiProposal(projectRoot, proposal);
+        return { status: 201, body: { ok: true, proposal } };
+      } catch (err) {
+        return { status: 400, body: { ok: false, error: err instanceof Error ? err.message : String(err) } };
       }
-      const body = await readJson<{
-        expectedRevision?: number;
-        expectedProposalHash?: string;
-        answers?: Record<string, string>;
-        selectedSourceIds?: string[];
-        additionalSourceIds?: string[];
-      }>(req);
-      if (body.expectedRevision !== current.revision || body.expectedProposalHash !== current.proposalHash
-        || previous.baseRevision !== current.revision || previous.baseProposalHash !== current.proposalHash) {
-        sendJson(res, 409, { ok: false, error: 'APP_BUILD_PROPOSAL_CONFLICT: refresh before revising this proposal.' });
-        return true;
-      }
-      const answers = body.answers ?? {};
-      const answerText = previous.clarifications.flatMap((question) => {
-        const answerId = answers[question.id];
-        const choice = question.choices.find((candidate) => candidate.id === answerId);
-        return choice ? [`${question.question}: ${choice.label}`] : [];
-      });
-      const selectedSourceIds = unique([
-        ...(body.selectedSourceIds ?? previous.defaultSelectedSourceIds ?? []),
-        ...(body.additionalSourceIds ?? []),
-      ].map(cleanString).filter(Boolean));
-      const proposal = await proposeAppBuildDraftOperations(projectRoot, current, {
-        prompt: [previous.prompt || current.frame.goal, answerText.length ? `Clarification decisions: ${answerText.join('; ')}` : ''].filter(Boolean).join('\n'),
-        selectedBlockIds: selectedSourceIds,
-        // A revision answers the same request: same page, same add/replace choice.
-        pageId: previous.targetPageId,
-        mode: previous.mode ?? 'replace',
-      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
-      proposal.defaultSelectedSourceIds = selectedSourceIds.filter((sourceId) => proposal.operations.some((operation) => (
-        operation.type === 'upsert_source' && operation.source.id === sourceId
-      )));
-      writeAppBuildDraftAiProposal(projectRoot, proposal);
-      sendJson(res, 201, { ok: true, proposal });
-    } catch (err) {
-      sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
+    });
     return true;
   }
 
   const generateGapMatch = path.match(/^\/api\/app-builds\/([^/]+)\/ai-proposals\/([^/]+)\/gaps$/);
   if (generateGapMatch && req.method === 'POST') {
-    try {
-      const id = decodeURIComponent(generateGapMatch[1]);
-      const proposalId = decodeURIComponent(generateGapMatch[2]);
-      const current = loadStoredAppBuildDraft(projectRoot, id);
-      const previous = current ? loadAppBuildDraftAiProposal(projectRoot, id, proposalId) : null;
-      if (!current || !previous) {
-        sendJson(res, 404, { ok: false, error: 'App Build proposal not found.' });
-        return true;
+    // A gap is a typed Dataset draft written by AI.
+    await answerLongRequest(req, res, async () => {
+      try {
+        const id = decodeURIComponent(generateGapMatch[1]);
+        const proposalId = decodeURIComponent(generateGapMatch[2]);
+        const current = loadStoredAppBuildDraft(projectRoot, id);
+        const previous = current ? loadAppBuildDraftAiProposal(projectRoot, id, proposalId) : null;
+        if (!current || !previous) {
+          return { status: 404, body: { ok: false, error: 'App Build proposal not found.' } };
+        }
+        const body = await readJson<{ expectedRevision?: number; expectedProposalHash?: string; requirementId?: string; domain?: string; sourceRelation?: string }>(req);
+        if (body.expectedRevision !== current.revision || body.expectedProposalHash !== current.proposalHash
+          || previous.baseRevision !== current.revision || previous.baseProposalHash !== current.proposalHash) {
+          return { status: 409, body: { ok: false, error: 'APP_BUILD_PROPOSAL_CONFLICT: refresh before generating a gap.' } };
+        }
+        const requirementOperation = previous.operations.find((operation) => operation.type === 'set_requirements');
+        const requirement = requirementOperation?.type === 'set_requirements'
+          ? requirementOperation.requirements.find((candidate) => candidate.id === cleanString(body.requirementId))
+          : undefined;
+        const coverage = requirementOperation?.type === 'set_requirements'
+          ? requirementOperation.coverage?.find((candidate) => candidate.requirementId === requirement?.id)
+          : undefined;
+        if (!requirement || coverage?.status === 'covered') {
+          return { status: 404, body: { ok: false, error: 'APP_BUILD_GAP_NOT_FOUND: choose an uncovered App requirement.' } };
+        }
+        if (!ctx.createDatasetGapProposal) {
+          throw new Error('APP_BUILD_DATASET_GAP_UNAVAILABLE: this runtime cannot prepare a typed Dataset review draft.');
+        }
+        const sourceRelation = typeof body.sourceRelation === 'string' ? cleanString(body.sourceRelation) : undefined;
+        const domain = typeof body.domain === 'string' ? cleanString(body.domain) : undefined;
+        const contextProposal = await ctx.createDatasetGapProposal({
+          appBuildId: current.id,
+          requirement,
+          ...(domain ? { domain } : {}),
+          ...(sourceRelation ? { sourceRelation } : {}),
+        });
+        return { status: 201, body: { ok: true, contextProposal, requirementId: requirement.id } };
+      } catch (err) {
+        return { status: 400, body: { ok: false, error: err instanceof Error ? err.message : String(err) } };
       }
-      const body = await readJson<{ expectedRevision?: number; expectedProposalHash?: string; requirementId?: string; domain?: string; sourceRelation?: string }>(req);
-      if (body.expectedRevision !== current.revision || body.expectedProposalHash !== current.proposalHash
-        || previous.baseRevision !== current.revision || previous.baseProposalHash !== current.proposalHash) {
-        sendJson(res, 409, { ok: false, error: 'APP_BUILD_PROPOSAL_CONFLICT: refresh before generating a gap.' });
-        return true;
-      }
-      const requirementOperation = previous.operations.find((operation) => operation.type === 'set_requirements');
-      const requirement = requirementOperation?.type === 'set_requirements'
-        ? requirementOperation.requirements.find((candidate) => candidate.id === cleanString(body.requirementId))
-        : undefined;
-      const coverage = requirementOperation?.type === 'set_requirements'
-        ? requirementOperation.coverage?.find((candidate) => candidate.requirementId === requirement?.id)
-        : undefined;
-      if (!requirement || coverage?.status === 'covered') {
-        sendJson(res, 404, { ok: false, error: 'APP_BUILD_GAP_NOT_FOUND: choose an uncovered App requirement.' });
-        return true;
-      }
-      if (!ctx.createDatasetGapProposal) {
-        throw new Error('APP_BUILD_DATASET_GAP_UNAVAILABLE: this runtime cannot prepare a typed Dataset review draft.');
-      }
-      const sourceRelation = typeof body.sourceRelation === 'string' ? cleanString(body.sourceRelation) : undefined;
-      const domain = typeof body.domain === 'string' ? cleanString(body.domain) : undefined;
-      const contextProposal = await ctx.createDatasetGapProposal({
-        appBuildId: current.id,
-        requirement,
-        ...(domain ? { domain } : {}),
-        ...(sourceRelation ? { sourceRelation } : {}),
-      });
-      sendJson(res, 201, { ok: true, contextProposal, requirementId: requirement.id });
-    } catch (err) {
-      sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
+    });
     return true;
   }
 
