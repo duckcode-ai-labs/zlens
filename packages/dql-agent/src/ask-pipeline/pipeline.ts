@@ -106,6 +106,12 @@ export interface RunAskPipelineInput {
    */
   kindsNote?: (candidate: { sql: string; relations: string[] }) => string | undefined;
   deadlineMs?: number;
+  /**
+   * Milliseconds left before the host stops admitting new AI calls for this run (its soft target), which can come
+   * well before `deadlineMs`. The reading keeps enough of it for the SQL draft, and a draft that finds none left
+   * says the run ran out of time instead of naming a gap in the data.
+   */
+  dispatchWindowMs?: () => number;
   /** Host cancellation for the entire request; no new phase starts after it fires. */
   signal?: AbortSignal;
   cardBudget?: number;
@@ -168,6 +174,10 @@ export interface RunAskPipelineInput {
   stopAfter?: 'reading';
 }
 
+/** What the SQL draft needs of the run after the reading: the host admits a draft call on a 30 s bound, plus settling. */
+const DRAFT_RESERVE_MS = 35_000;
+/** A provider call the host refused because the run's time was spent (its soft target, or too little of the deadline left). */
+const OUT_OF_TIME = /soft target elapsed|of the run deadline remain|RUN_SOFT_TARGET_EXCEEDED|RUN_DEADLINE_INSUFFICIENT/i;
 const fingerprintSql = (sql: string) => `sha256:${createHash('sha256').update(sql).digest('hex').slice(0, 24)}`;
 
 function summarizeRefusal(refusal: PreparedRefusal): string {
@@ -863,8 +873,14 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       step('schema', 'The tables hold no rows for this', 'missed', { detail: message });
       return { kind: 'gap', gap: 'not_retrieved', message, nearest: [], text: `No matching data: ${message}.`, receipt, intent: reading, offerExploration: false };
     };
+    // THE RUN RAN OUT OF TIME, not out of data: no draft could start (or the host refused the draft's call for
+    // time). Said as such; a gap message here sent people to rephrase a question the next run answers (new-user
+    // test V11 retest: K4 and G1 read for over two minutes, then "could not match this question to the
+    // project's fields").
+    let outOfTime = false;
     for (let attempt = 1; attempt <= 2; attempt += 1) {
-      if (remaining() < 12_000 || input.signal?.aborted) break;
+      if (input.signal?.aborted) break;
+      if (remaining() < 12_000 || (input.dispatchWindowMs && input.dispatchWindowMs() <= 0)) { outOfTime = true; break; }
       const draftStarted = now();
       const drafted = await prepareExploratory(hint && hint.kind === 'analytics' ? hint : undefined, input.vocabulary, input.prepareDeps, options.draftQuestion ?? input.question, { reason: why, ...(previous ? { previous } : {}) });
       mark(attempt === 1 ? 'schema_draft' : 'schema_redraft', draftStarted);
@@ -913,6 +929,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       const candidate = drafted.candidates[0];
       if (!candidate) {
         const refused = drafted.refusals[0];
+        if (refused && OUT_OF_TIME.test(refused.message)) outOfTime = true;
         step('schema', 'Could not draft SQL from the schema', 'failed', { ...(refused ? { detail: refused.message } : {}), ms: draftMs });
         // NO TABLES COULD BE READ AT ALL: a setup problem, not an answer about
         // the data. Saying "the project's data does not describe it" here sent
@@ -1004,6 +1021,14 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       receipt.failure = { stage: 'execute', reason: lastFailure.code, message: lastFailure.message, ...(lastFailure.warehouse ? { warehouse: lastFailure.warehouse } : {}) };
       return { kind: 'failed', stage: 'execute', message: lastFailure.message, text: composeFailedText('execute', lastFailure.message, lastFailure.warehouse), receipt, intent: reading };
     }
+    if (outOfTime) {
+      const readSeconds = Math.round((timings.resolve ?? 0) / 1_000);
+      const message = `Ask ran out of time before the AI could write the SQL${readSeconds >= 20 ? ` (reading the question took the AI model ${readSeconds} s)` : ''}`;
+      receipt.intent = reading; receipt.reading = reading.reading;
+      receipt.failure = { stage: 'prepare', reason: 'provider_timeout', message };
+      step('schema', 'Ran out of time before the SQL could be written', 'failed', { detail: message });
+      return { kind: 'failed', stage: 'prepare', message, text: `No query was run: ${message}. Nothing is wrong with the question: ask it again, or ask a simpler one.`, receipt, intent: reading };
+    }
     return undefined;
   };
   const recordSelection = (selected: AnalyticalIntentV1) => {
@@ -1074,6 +1099,15 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   // 1. Resolve. Only certified blocks and authored semantics are governed; a
   // reading over anything else goes to AI-written SQL when it is available.
   const aiSqlAvailable = Boolean(input.prepareDeps.draftSql && (input.explorationOptIn || input.explorationAuto));
+  // ONE MORE READING CALL ONLY WHEN THE SQL STILL FITS AFTER IT. A correction carries the first reply and the
+  // problems, so it costs up to half again what the last reading call cost; after it, the draft must still start
+  // inside the window for new calls and finish before the deadline. Without AI-written SQL, the correction is the
+  // only way on.
+  const mayDispatchAgain = (lastDispatchMs: number) => {
+    if (!aiSqlAvailable || !input.dispatchWindowMs) return true;
+    const correction = lastDispatchMs * 1.5;
+    return input.dispatchWindowMs() > correction + 2_000 && remaining() > correction + DRAFT_RESERVE_MS;
+  };
   // The reading is the question's own when nothing else owns it: no edit of
   // the thread's last analysis, no settled identity, no clarification pending.
   const ownReading = !settled && !input.prior && !memberGuidance(input) && !input.selection && !input.memberSelection && !input.conversation?.pendingClarification;
@@ -1105,6 +1139,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     renderedCards, ...(input.conversation ? { conversation: input.conversation } : {}),
     maxAttempts: remaining() > 15_000 ? 2 : 1,
     aiLane: aiSqlAvailable,
+    mayDispatchAgain,
     onDispatch: (event) => { receipt.dispatches.push({ purpose: `intent:${event.purpose}`, ms: event.ms, reply: event.raw.slice(0, 1500), at: Date.now(), attempt: event.attempt, label: event.purpose === 'resolve' ? 'read' : 'correct', ...(event.promptChars !== undefined ? { promptChars: event.promptChars } : {}) }); dispatchStep(event); },
     expand: expandForClauses,
   });
@@ -1533,7 +1568,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     // certified block that does not apply is still re-read into metrics.
     const repairable = prepared.refusals.find((refusal) => refusal.repairable && !(aiSqlAvailable && refusal.tier === 'semantic'));
     // A settled reading is never re-read: its caller chose it.
-    if (!repairable || round > 0 || remaining() < 12_000 || settled) break;
+    if (!repairable || round > 0 || remaining() < 12_000 || settled || !mayDispatchAgain(timings.resolve ?? 0)) break;
     const repairStarted = now();
     resolution = await resolveIntent({
       coverageQuestion: input.question,

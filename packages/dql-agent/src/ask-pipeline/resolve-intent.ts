@@ -59,6 +59,13 @@ export interface ResolveIntentInput {
   coverageQuestion?: string;
   /** Milliseconds the run can still spend; a timed-out interpreter dispatch is retried once when this allows another. */
   budgetMs?: number;
+  /**
+   * Whether one more reading call (a correction, a re-ask after retrieval, a retry) still leaves the run time to
+   * write the SQL, judged by how long the last reading call took. False ends the reading as failed, so the SQL is
+   * drafted from the question itself (new-user test V11 retest: a 83 s reading and a 74 s correction left no time to
+   * draft, and the run said the question did not match the project's fields).
+   */
+  mayDispatchAgain?: (lastDispatchMs: number) => boolean;
   /** The obligations of the original question, when this resolution is a repair of an earlier reading. */
   ledger?: IntentLedger;
   /** Round number for ledger entries (0 = the first resolution, 1 = the pipeline's repair). */
@@ -1904,6 +1911,18 @@ export function auditLedger(question: string, intent: AnalyticalIntentV1, ledger
   return { entries, dropped };
 }
 
+/**
+ * The question back to the user for an open clause. A clause the reading already wrote as a question ("best player —
+ * which stat should define 'best' (total points, …)?") is asked as written, never wrapped in another question
+ * (new-user test V11 retest, Q16: 'Which did you mean for "best player — which stat should define …?"?').
+ */
+export function clauseQuestion(clause: string): string {
+  const asked = clause.trim();
+  if (!/\?\s*$/.test(asked)) return `Which did you mean for "${asked}"?`;
+  const tail = asked.split(/\s[—–-]\s/).pop()!.trim();
+  return `${tail.charAt(0).toUpperCase()}${tail.slice(1)}`;
+}
+
 /** A retry after a provider timeout needs room for one more full dispatch (the subscription CLI's 60 s) plus 15 s for the rest of the turn. */
 const PROVIDER_TIMEOUT_RETRY_BUDGET_MS = 75_000;
 
@@ -1944,11 +1963,16 @@ export async function resolveIntent(input: ResolveIntentInput): Promise<IntentRe
   // is not one of the model's attempts: the re-ask after it is one more turn,
   // like the retry after a provider timeout. Under a 90 s run budget the
   // interpreter otherwise spends its only correction on the retrieval fix.
+  // How long the last reading call took, and whether the run stopped reading to keep its time for the SQL.
+  let lastDispatchMs = 0;
+  let outOfTime = false;
   while (attempts < maxAttempts + (timeoutRetried ? 1 : 0) + (expanded ? 1 : 0)) {
+    if (attempts > 0 && input.mayDispatchAgain && !input.mayDispatchAgain(lastDispatchMs)) { outOfTime = true; break; }
     attempts += 1;
     const started = now();
     const reply = await generateStructured(input.provider, messages, ANALYTICAL_INTENT_JSON_SCHEMA, input.providerOptions);
-    input.onDispatch?.({ attempt: attempts, purpose: attempts === 1 ? 'resolve' : 'correct', raw: reply.raw, ms: now() - started, promptChars: messages.reduce((sum, message) => sum + message.content.length, 0), ...(attempts > 1 && lastProblems.length ? { problems: lastProblems } : {}) });
+    lastDispatchMs = now() - started;
+    input.onDispatch?.({ attempt: attempts, purpose: attempts === 1 ? 'resolve' : 'correct', raw: reply.raw, ms: lastDispatchMs, promptChars: messages.reduce((sum, message) => sum + message.content.length, 0), ...(attempts > 1 && lastProblems.length ? { problems: lastProblems } : {}) });
     if (reply.error === 'provider_error') {
       // A provider that timed out, or exited with an empty reply, is retried
       // exactly once, on the same run and request, when the budget can hold
@@ -2253,7 +2277,7 @@ export async function resolveIntent(input: ResolveIntentInput): Promise<IntentRe
     }
     if (validation.problems.length === 0 || (material && validation.problems.every((problem) => problem.path === 'measures'))) {
       if (material) {
-        return { status: 'clarify', intent: validation.intent, question: material.question ?? `Which did you mean for "${material.clause}"?`, options: material.options, attempts, ...(ledger ? { ledger, ledgerEntries } : {}) };
+        return { status: 'clarify', intent: validation.intent, question: material.question ?? clauseQuestion(material.clause), options: material.options, attempts, ...(ledger ? { ledger, ledgerEntries } : {}) };
       }
       return { status: 'resolved', intent: validation.intent, attempts, problems: [], ...(ledger ? { ledger, ledgerEntries } : {}) };
     }
@@ -2261,6 +2285,12 @@ export async function resolveIntent(input: ResolveIntentInput): Promise<IntentRe
     lastIntent = validation.intent;
     lastDetail = validation.problems.map((problem) => `${problem.path}: ${problem.message}`).join('; ');
     messages.push({ role: 'assistant', content: reply.raw }, { role: 'user', content: correctionMessage(validation.problems, unseenCard) });
+  }
+  // OUT OF TIME TO CORRECT: the reading so far is not used (it still needed a correction, or a retrieval), and the
+  // caller drafts the SQL from the question; a question back to the user built from a half-corrected reading is not
+  // what was asked.
+  if (outOfTime) {
+    return { status: 'failed', reason: lastIntent || lastProblems.length ? 'invalid' : 'unparseable', detail: `no time was left to correct the reading${lastDetail ? ` (${lastDetail})` : ''}`, problems: lastProblems, attempts, code: 'reading_out_of_time' };
   }
   // A reading that only failed to account for the PREVIOUS analysis's clauses
   // is not a broken reading, it is an ambiguous continuation: ask which

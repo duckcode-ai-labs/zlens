@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { codeKindsFrom, droppedQuestionWords, holdsCode, joinKindNames, kindFilterOf, kindNamesFrom, kindNamesMessages, kindNoun, kindDatesFrom, kindDatesSql, kindsAnswerLine, kindsContextLine, kindsDeclineNote, kindsLookNote, readingWithoutKindClaims, statedKindFirsts, summaryKindsRead } from './ask-pipeline-host/host.js';
+import { codeKindsFrom, droppedQuestionWords, holdsCode, joinKindNames, kindFilterOf, kindNamesFrom, kindNamesMessages, kindNoun, kindDatesFrom, kindDatesSql, kindsAnswerLine, kindsContextLine, kindsDeclineNote, kindsLookNote, kindsNamedIn, readingWithoutKindClaims, statedKindFirsts, summaryKindsRead } from './ask-pipeline-host/host.js';
 import { activeProviderForDeadline, askTraceReason, deadlineScaleForProvider } from './local-runtime.js';
 
 /**
@@ -189,6 +189,23 @@ describe('game types in plain words, and a reading that agrees with its answer (
     expect(statedKindFirsts('Celtics', withWords)).toEqual([]);
     expect(statedKindFirsts('Games', withWords)).toEqual([]);
     expect(statedKindFirsts('Playoffs', kinds)).toEqual([]);
+  });
+
+  it('finds the kinds a question or a follow-up reading names, never from the period alone (V11 retest, N4)', () => {
+    const withWords = { ...named, words: { '4': ['postseason', 'the playoffs'], '2': ['season'] } };
+    expect(kindsNamedIn('Which of the top 5 teams in the 2019 regular season had a winning record?', withWords, 'SEASON')).toEqual(['2']);
+    expect(kindsNamedIn('Which team had the most regular-season wins in 2015?', withWords, 'SEASON')).toEqual(['2']);
+    expect(kindsNamedIn('How many postseason games did the Heat win in 2012?', withWords, 'SEASON')).toEqual(['4']);
+    expect(kindsNamedIn('Points in the 2016 playoffs', withWords, 'SEASON')).toEqual(['4']);
+    expect(kindsNamedIn('Wins in the 2010 regular season and playoffs combined', withWords, 'SEASON')).toEqual(['2', '4']);
+    expect(kindsNamedIn('How many play-in games were there in 2021?', withWords, 'SEASON')).toEqual(['5']);
+    expect(kindsNamedIn('Pre season wins in 2018', { ...named, names: { '1': 'pre-season games' } }, 'SEASON')).toEqual(['1']);
+    // The period, a word that is only the period, or a negated kind names none.
+    expect(kindsNamedIn("How many points did LeBron James score in the 2012 season?", withWords, 'SEASON')).toEqual([]);
+    expect(kindsNamedIn('How many games did LeBron play in 2012?', withWords, 'SEASON')).toEqual([]);
+    expect(kindsNamedIn('Total wins in 2015, excluding the preseason', withWords, 'SEASON')).toEqual([]);
+    expect(kindsNamedIn('Teams that did not make the playoffs in 2016', withWords, 'SEASON')).toEqual([]);
+    expect(kindsNamedIn('Points in the 2016 playoffs', kinds, 'SEASON')).toEqual([]);
   });
 
   it('says which games an answer counts in the names a reader uses, with the code beside them', () => {

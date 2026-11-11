@@ -612,7 +612,16 @@ export function readsAsNewQuestion(question: string): boolean {
   // "List them by…") edits the answer on screen.
   if (!/^(who|what|which|when|where|why|how)\b/i.test(normalized)) return false;
   if (/^(what|how) about\b/i.test(normalized)) return false;
-  if (/\b(it|its|he|him|his|she|her|hers|those|these|same|above|previous|prior|instead|again|aforementioned)\b/i.test(normalized)) return false;
+  if (/\b(those|these|same|above|previous|prior|instead|again|aforementioned)\b/i.test(normalized)) return false;
+  // A pronoun points back unless the question named what it stands for first: in "What was the biggest winning
+  // margin in a single game, and who won it?" the "it" is that game (new-user test V11 retest: the question was
+  // read as an edit of the answer before it, and blocked). The part before the second clause must be a whole
+  // question of its own.
+  const pronoun = /\b(it|its|he|him|his|she|her|hers)\b/i.exec(normalized);
+  if (pronoun) {
+    const head = /^(.*?)(?:,\s*|\s+)(?:and|or|but)\s+(?:who|what|which|when|where|why|how|in which|for which|by how much)\b/i.exec(normalized.slice(0, pronoun.index));
+    if (!head || head[1]!.split(' ').filter(Boolean).length < 5) return false;
+  }
   // "that" as the thing acted on ("expand that", "break that down") points back; as a relative pronoun ("teams
   // that won") it does not.
   return !/\b(expand|show|change|break|split|sort|rank|filter|limit|do|redo|make|turn|keep|add|drop|remove)\s+that\b/i.test(normalized);
