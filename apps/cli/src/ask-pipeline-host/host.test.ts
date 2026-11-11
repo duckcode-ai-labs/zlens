@@ -1409,11 +1409,14 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     it('a name matched by either of its parts is matched by both when one part alone picks other rows (V12 gate, G3)', async () => {
       const either = "SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND (team_name ILIKE '%Lakers%' OR team_name ILIKE '%Los Angeles%')";
       const both = "SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND team_name ILIKE '%Lakers%' AND team_name ILIKE '%Los Angeles%'";
-      const { prompts, statements, result } = await askNba('How many games did the Los Angeles Lakers win in 2015?', both, either);
-      expect(prompts[1]).toContain('it matches "Los Angeles Lakers" by either of its parts ("Lakers" OR "Los Angeles"), and in local_team_game_facts each part alone also matches other rows; match both parts (AND)');
+      const { prompts, statements, result } = await askNba('How many games did the Los Angeles Lakers win in 2015?', 'SELECT 1 AS never_asked', either);
+      // The host joins the parts itself, after the warehouse says either part alone picks other rows: the AI is not asked to.
+      expect(prompts.some((prompt) => prompt.includes('The previous statement was not run because'))).toBe(false);
       expect(statements).toContain(`SELECT 1 FROM nba.local_team_game_facts WHERE (team_name ILIKE '%Los Angeles%') AND NOT (team_name ILIKE '%Lakers%')`);
-      expect(statements.some((sql) => sql.includes("team_name ILIKE '%Lakers%' AND team_name ILIKE '%Los Angeles%'"))).toBe(true);
+      expect(statements.some((sql) => sql.includes("team_name ILIKE '%Lakers%' AND team_name ILIKE '%Los Angeles%'") && !/HAVING|NOT \(/.test(sql))).toBe(true);
       expect(result.status).toBe('completed');
+      expect((result.askPipelineReceipt?.story ?? []).some((entry) => entry.title === 'Matched "Los Angeles Lakers" by both of its parts')).toBe(true);
+      void both;
     });
 
     it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {

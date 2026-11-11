@@ -176,13 +176,16 @@ export interface NamePartsByOr {
   conditions: [string, string];
   /** The table both conditions read, when the statement says which. */
   relation?: string;
+  /** The two conditions and their OR, as the statement spells them. */
+  text: string;
 }
 
 /**
  * A name the question states, matched by EITHER of its parts: "Los Angeles Lakers" as
  * `NICKNAME ILIKE '%Lakers%' OR CITY ILIKE '%Los Angeles%'`. Each part alone may pick other rows (the Clippers
- * play in Los Angeles too), so the host asks the warehouse whether the parts pick the same rows (new-user test,
- * V12 gate: G3 counted 15 preseason games for the Lakers, 9 of them theirs). Only two parts of one table.
+ * play in Los Angeles too), so the host asks the warehouse whether the parts pick the same rows, and matches
+ * both when they do not (new-user test, V12 gate: G3 counted 15 preseason games for the Lakers, 9 of them
+ * theirs). Only two parts of one table.
  */
 export function namePartsMatchedByOr(sql: string, stated: StatedValue[]): NamePartsByOr[] {
   const names = [...new Set(stated.flatMap((item) => (item.kind === 'text' && item.name ? [item.name] : [])))];
@@ -206,6 +209,7 @@ export function namePartsMatchedByOr(sql: string, stated: StatedValue[]): NamePa
       parts: [leftPart!, rightPart!],
       conditions: [`${bare(leftColumn!)} ${leftOp} '%${leftPart}%'`, `${bare(rightColumn!)} ${rightOp} '%${rightPart}%'`],
       ...(relation ? { relation } : {}),
+      text: match[0],
     });
   }
   return found;
