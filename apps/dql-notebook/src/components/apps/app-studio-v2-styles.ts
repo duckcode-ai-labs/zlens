@@ -1630,6 +1630,9 @@ export const APP_STUDIO_V2_STYLES = `
 .data-step-group h3 { margin:4px 0 0; font-size:13px; font-weight:600; }
 .data-step-group > p { margin:0; color:var(--text-tertiary); font-size:12px; }
 .data-step-notes ul { list-style:disc; padding-left:18px; gap:3px; }
+.data-step-retry { align-self:flex-start; justify-self:start; border:1px solid var(--accent); color:var(--accent); background:var(--accent-dim); border-radius:8px; padding:6px 10px; font-size:12px; font-weight:600; cursor:pointer; }
+.data-step-retry:disabled { opacity:.55; cursor:default; }
+.data-step-empty .data-step-retry { margin-left:auto; flex:none; }
 .data-step-notes ul li { display:list-item; padding:0; border:0; background:transparent; color:var(--text-secondary); font-size:12px; line-height:1.45; }
 .data-step-list .studio-ai-questions > div { display:grid; gap:6px; }
 .data-step-list .studio-ai-questions > div > p { margin:0; color:var(--text-secondary); font-size:12px; line-height:1.45; }

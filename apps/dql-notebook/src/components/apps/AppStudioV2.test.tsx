@@ -45,6 +45,15 @@ async function componentInspector() {
   return studio.ComponentInspector;
 }
 
+// V11: the Describe with AI box on an NBA project still showed a finance example.
+describe('Describe with AI example text', () => {
+  it('uses the chosen domain\'s words, or none, never another business\'s', () => {
+    expect(studio.describeWithAiPlaceholder('Nba')).toBe('For example: the Nba numbers your team checks most, how they changed over time, and the detail behind them.');
+    expect(studio.describeWithAiPlaceholder('')).toBe('For example: the numbers your team checks most, how they changed over time, and the detail behind them.');
+    expect(studio.describeWithAiPlaceholder(undefined)).not.toMatch(/revenue|finance/i);
+  });
+});
+
 describe('Studio Dataset mark interaction (APP-041)', () => {
   it('passes the source-qualified row callback into an interactive bar mark', async () => {
     const onSelectDatasetMark = vi.fn();

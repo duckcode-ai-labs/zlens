@@ -33,6 +33,8 @@ export interface AppBuildHandoffInput {
   /** The request, kept as the App's goal; App Studio plans pages from it. */
   goal: string;
   name?: string;
+  /** The App's id; the caller makes it unique in the project. From the name when absent. */
+  appId?: string;
   domain?: string;
   audience?: string;
   /** The data AI picked. App Studio requires these when it plans pages. */
@@ -145,7 +147,7 @@ export function createAppBuildHandoffDraft(
   const audience = input.audience?.trim() || 'stakeholders';
   return createAppBuildDraft({
     id: options.id ?? newAppBuildDraftId(),
-    appId: suggestAppId(name),
+    appId: input.appId?.trim() || suggestAppId(name),
     name,
     authoringMode: 'ai',
     template: 'blank',

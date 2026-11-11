@@ -69,6 +69,12 @@ describe('scheduled App page runs (RFC 0008 step 3c)', () => {
     expect(summary.queries[2]!.error).toBe('The warehouse timed out.');
   });
 
+  it('writes a season or a year as a year, never 2,014 (V11)', () => {
+    const latest: AppPageRunTile = { tileId: 'latest', title: 'Latest season', status: 'ok', tileType: 'dataset', vizType: 'kpi', certificationStatus: 'certified', columns: ['SEASON'], rows: [{ SEASON: 2018 }], rowCount: 1 };
+    const wins: AppPageRunTile = { ...latest, tileId: 'wins', title: 'Wins', columns: ['WINS'], rows: [{ WINS: 2014 }] };
+    expect(summarizeAppPageRun('Overview', [latest, wins], 1).markdown).toContain('- Latest season: **2018** (certified)\n- Wins: **2,014** (certified)');
+  });
+
   it('posts JSON to http(s) webhooks and reports what was not delivered', async () => {
     const fetchImpl = vi.fn(async (url: string) => (url.includes('bad') ? new Response('failed', { status: 500 }) : new Response(null, { status: 204 })));
     const notifier = createWebhookNotifier(fetchImpl as unknown as typeof fetch);

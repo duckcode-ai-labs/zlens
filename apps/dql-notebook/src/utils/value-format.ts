@@ -1,3 +1,7 @@
+import { formatYearValue, isYearLikeColumn } from '@zlens/core/apps/year-values';
+
+export { formatYearValue, isYearLikeColumn };
+
 export type DisplayValueKind =
   | 'currency'
   | 'percent'
@@ -14,7 +18,6 @@ const CURRENCY_NAME_RE = /(?:^|_)(?:revenue|sales|spend|amount|price|cost|profit
 const PERCENT_NAME_RE = /(?:^|_)(?:percent|percentage|pct|ratio|share|conversion|churn|retention|utilization)(?:_|$)/i;
 const INTEGER_NAME_RE = /(?:^|_)(?:count|orders?|customers?|accounts?|users?|products?|items?|units?|quantity|rank|position|days?|months?|years?|distinct)(?:_|$)/i;
 const AVERAGE_NAME_RE = /(?:^|_)(?:average|avg|mean)(?:_|$)/i;
-const YEAR_NAME_RE = /(?:^|_)(?:year|yr)$/i;
 const MONTH_NAME_RE = /(?:^|_)(?:month|monthly|month_num|month_number|month_of_year)$/i;
 const DATE_NAME_RE = /(?:^|_)(?:date|day|month|quarter|year|time|timestamp|daily|weekly|monthly|quarterly|yearly|hourly)(?:_|$)|_(?:at|on)$/i;
 const YEAR_MONTH_RE = /^(\d{4})-(\d{2})$/;
@@ -39,7 +42,7 @@ export function inferDisplayValueKind(column: string, values: unknown[] = [], fo
   const explicit = explicitKind(format);
   if (explicit) return explicit;
   if (MONTH_NAME_RE.test(column)) return 'month';
-  if (YEAR_NAME_RE.test(column)) return 'year';
+  if (isYearLikeColumn(column)) return 'year';
   if (DATE_NAME_RE.test(column)) return 'date';
   if (AVERAGE_NAME_RE.test(column) && CURRENCY_NAME_RE.test(column)) return 'currency';
   if (PERCENT_NAME_RE.test(column)) return 'percent';
@@ -93,6 +96,11 @@ export function formatDisplayValue(
   options: { compact?: boolean; format?: string; meta?: DisplayColumnMeta } = {},
 ): string {
   if (value === null || value === undefined) return '';
+  // A year is a year whatever the column's number format says, unless it is money or a share.
+  if (options.meta?.kind !== 'currency' && options.meta?.kind !== 'percent' && options.format !== 'currency' && options.format !== 'percent') {
+    const year = formatYearValue(column, value);
+    if (year !== undefined) return year;
+  }
   const numeric = numericValue(value);
   // Percentage points are a difference of percentages, never re-scaled.
   if (options.meta?.kind === 'percent' && options.meta.unit === 'percentage_points' && numeric !== undefined) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, deterministicDatasetQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
+import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, APP_BUILDER_TRUNCATED_PICKED_NOTE, deterministicDatasetQuery, plainPlannerText, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
 import { savedQueryResultDescriptor, type AppBuildRequirement, type DatasetDescriptor } from '@zlens/core';
 
@@ -178,7 +178,7 @@ describe('App Builder orchestrator', () => {
     expect(brief.components.find((component) => component.sourceId === candidates[0].sourceId)?.requirementIds).toEqual(['requirement-1']);
     expect(brief.components.find((component) => component.sourceId === candidates[1].sourceId)?.requirementIds).toEqual(['requirement-2']);
     expect(brief.components.find((component) => component.sourceId === 'app:block:customers:growth')?.requirementIds).toEqual([]);
-    expect(brief.warnings).toEqual(['New customer growth can\'t answer “New-customer growth for the last 90 days” with its approved fields yet.']);
+    expect(brief.warnings).toEqual(['New customer growth doesn\'t answer “New-customer growth for the last 90 days”. Add data that does, or remove that question.']);
     expect(brief.warnings.join(' ')).not.toMatch(/requirement-\d/);
   });
 
@@ -270,7 +270,7 @@ describe('App Builder orchestrator', () => {
     });
 
     expect(brief.components).toEqual([expect.objectContaining({ sourceId: revenueCandidate.sourceId, requirementIds: [] })]);
-    expect(brief.warnings).toEqual(['Revenue trend can\'t answer what you asked with its approved fields yet.']);
+    expect(brief.warnings).toEqual(['Revenue trend doesn\'t answer what you asked. Add data that does.']);
   });
 
   it('keeps an explicitly required deterministic source without claiming unsupported coverage', async () => {
@@ -285,7 +285,7 @@ describe('App Builder orchestrator', () => {
     expect(brief.planningMode).toBe('deterministic_fallback');
     expect(brief.selectedSourceIds).toEqual([revenueOrders.sourceId]);
     expect(brief.components).toEqual([expect.objectContaining({ sourceId: revenueOrders.sourceId, requirementIds: [] })]);
-    expect(brief.warnings).toEqual(['Revenue orders can\'t answer what you asked with its approved fields yet.']);
+    expect(brief.warnings).toEqual(['Revenue orders doesn\'t answer what you asked. Add data that does.']);
   });
 
   it('names sources and questions in plain words, never ids, in planner notes', async () => {
@@ -633,6 +633,121 @@ describe('a planned tile on a field its source does not have (V11)', () => {
       }),
     });
     expect(asIs.components.map((component) => component.sourceId)).toEqual([sourceId]);
+  });
+});
+
+describe('AI plan for the V11 retest: splits, a dropped part of the request, and a plan cut short', () => {
+  // The tester's notebook block "Warriors Wins By Game Type": WINS per SEASON and GAME_TYPE (2015: 3 preseason,
+  // 73 regular season, 15 playoff). Their description asked for "regular-season wins and losses, and playoff
+  // wins, shown separately".
+  const sourceId = 'app:block:nba:warriors-wins-by-game-type';
+  const block = (columns: Array<{ name: string; type: string }>, groupBy: string[]): AppSourceCatalogRecord => ({
+    ...source(sourceId, 'Warriors Wins By Game Type', 'draft'),
+    domain: 'nba',
+    capabilities: {
+      measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [],
+      dataset: savedQueryResultDescriptor({
+        sourceId, sourceRevision: 'sha256:wins', savedQuery: 'warriors_wins_by_game_type', qualifiedId: 'nba::block::warriors_wins_by_game_type',
+        lifecycle: 'draft', certified: false, typesFrom: 'probe', columns, groupBy,
+      })!,
+    },
+  });
+  const winsByGameType = block([{ name: 'SEASON', type: 'BIGINT' }, { name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'WINS', type: 'BIGINT' }], ['SEASON', 'GAME_TYPE']);
+  const prompt = 'Help a Warriors fan see how the Golden State Warriors did in each season from 2014 to 2018: regular-season wins and losses, and playoff wins, shown separately';
+  const split = 'How many wins did the Warriors have each season, split by regular season vs playoffs?';
+  const plan = (candidate: AppSourceCatalogRecord, components: unknown[], requirements: unknown[] = [{ id: 'r1', question: split, role: 'breakdown', required: true, measures: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] }]) => planAppBuildBrief({
+    prompt,
+    candidates: [candidate],
+    requiredSourceIds: [sourceId],
+    sourcePolicy: 'include_review_required',
+    complete: async () => JSON.stringify({ frame: { goal: prompt, metrics: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] }, requirements, components }),
+  });
+
+  it('groups a tile by the split its title and question ask for, so the plan covers it, and never titles a split the query does not apply', async () => {
+    // What Cortex sent: both tiles titled by season and game type, both grouped by season alone.
+    const bySeason = { dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }] };
+    const brief = await plan(winsByGameType, [
+      { id: 'c1', title: 'Warriors Wins by Season and Game Type (2014–2018)', sourceId, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'Wins by season and game type.', query: bySeason },
+      { id: 'c2', title: 'Warriors Wins Detail by Season and Game Type', sourceId, requirementIds: ['r1'], role: 'detail', view: 'table', rationale: 'The exact counts.', query: bySeason },
+    ]);
+    expect(brief.components.map((component) => [component.title, component.query?.dimensions.map((dimension) => dimension.field), component.requirementIds])).toEqual([
+      ['Warriors Wins by Season and Game Type (2014–2018)', ['SEASON', 'GAME_TYPE'], ['r1']],
+      ['Warriors Wins Detail by Season and Game Type', ['SEASON', 'GAME_TYPE'], ['r1']],
+    ]);
+    expect(brief.warnings.filter((warning) => /doesn't answer|covers only part/.test(warning))).toEqual([]);
+
+    // A source with no game type: the title loses the split instead of claiming it.
+    const winsBySeason = block([{ name: 'SEASON', type: 'BIGINT' }, { name: 'WINS', type: 'BIGINT' }], ['SEASON']);
+    const plain = await plan(winsBySeason, [
+      { id: 'c1', title: 'Warriors Wins by Season and Game Type (2014–2018)', sourceId, requirementIds: [], role: 'breakdown', view: 'bar', rationale: 'Wins by season.', query: bySeason },
+    ], [{ id: 'r1', question: 'Warriors wins by season', role: 'breakdown', required: true, measures: ['WINS'], dimensions: ['SEASON'], filters: [] }]);
+    expect(plain.components.map((component) => [component.title, component.query?.dimensions.map((dimension) => dimension.field)])).toEqual([
+      ['Warriors Wins by Season (2014–2018)', ['SEASON']],
+    ]);
+  });
+
+  it('answers "Revise with AI" on a split by values with the split, not a total', async () => {
+    // V11: the publish question asked for regular season vs playoffs; the revision proposed one KPI, 417.
+    const brief = await plan(winsByGameType, [
+      { id: 'c1', title: 'Total Warriors Wins (2014-2018)', sourceId, requirementIds: ['r1'], role: 'kpi', view: 'kpi', rationale: 'The total.', query: { dimensions: [], measures: [{ measure: 'WINS' }] } },
+    ], [{ id: 'r1', question: 'How many wins did the Warriors have, split by regular season vs playoffs?', role: 'kpi', required: true, measures: ['WINS'], dimensions: [], filters: [] }]);
+    expect(brief.components).toEqual([expect.objectContaining({
+      role: 'breakdown',
+      query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] },
+      requirementIds: ['r1'],
+    })]);
+  });
+
+  it('lists a part of the request the plan drops as a gap, in the request\'s own words', async () => {
+    const brief = await plan(winsByGameType, [
+      { id: 'c1', title: 'Warriors Wins by Season and Game Type', sourceId, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'Wins.', query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] } },
+    ]);
+    // Losses were asked for and never planned; "shown separately" is how to show it, not a question.
+    expect(brief.requirements.map((requirement) => requirement.question)).toEqual([split, 'Losses']);
+    expect(brief.components.every((component) => !component.requirementIds.includes(brief.requirements[1]!.id))).toBe(true);
+  });
+
+  it('says the AI\'s reasons in App Studio\'s words, never the trust codes on the cards', async () => {
+    // V11: "Why: … trust remains review_required as supplied".
+    const brief = await plan(winsByGameType, [
+      { id: 'c1', title: 'Warriors Wins by Season and Game Type', sourceId, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'The only source with SEASON and GAME_TYPE together; trust remains review_required as supplied.', query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] } },
+    ]);
+    expect(brief.components[0]!.rationale).toBe('The only source with SEASON and GAME_TYPE together; trust remains not certified yet as supplied.');
+    expect(JSON.stringify(brief)).not.toMatch(/review_required|governed_only/);
+    expect(plainPlannerText('Policy include_review_required, status not_required')).toBe('Policy certified and not-certified data, status not needed');
+  });
+
+  it('asks again when the plan is cut short before any tile, and picks data for its questions if it is cut short again', async () => {
+    // V11 try 2: after 64 s, "AI picked 0 sources" and "The AI plan was cut short", with both gaps answered
+    // by the data listed beside them. The reply had its requirements, and was cut before its components.
+    const cut = JSON.stringify({
+      frame: { goal: prompt, metrics: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] },
+      requirements: [{ id: 'r1', question: split, role: 'breakdown', required: true, measures: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] }],
+    }).slice(0, -1) + ', "components": [{"id": "c1", "title": "Warriors Wi';
+    const whole = JSON.stringify({
+      frame: { goal: prompt, metrics: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] },
+      requirements: [{ id: 'r1', question: split, role: 'breakdown', required: true, measures: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: [] }],
+      components: [{ id: 'c1', title: 'Wins by season and game type', sourceId, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'Wins.', query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] } }],
+    });
+    const input = { prompt, candidates: [winsByGameType], requiredSourceIds: [], sourcePolicy: 'include_review_required' as const };
+
+    const again = vi.fn().mockResolvedValueOnce(cut).mockResolvedValueOnce(whole);
+    const retried = await planAppBuildBrief({ ...input, complete: again });
+    expect(again).toHaveBeenCalledTimes(2);
+    expect(again.mock.calls[1]![0].user).toContain(APP_BUILDER_RETRY_NOTE);
+    expect(retried.components.map((component) => [component.sourceId, component.requirementIds])).toEqual([[sourceId, ['r1']]]);
+    expect(retried.warnings).not.toContain(APP_BUILDER_TRUNCATED_NOTE);
+
+    const cutTwice = vi.fn().mockResolvedValue(cut);
+    const picked = await planAppBuildBrief({ ...input, complete: cutTwice });
+    expect(cutTwice).toHaveBeenCalledTimes(2);
+    expect(picked.selectedSourceIds).toEqual([sourceId]);
+    expect(picked.components).toEqual([expect.objectContaining({
+      sourceId,
+      requirementIds: ['r1'],
+      query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] },
+    })]);
+    expect(picked.warnings).toContain(APP_BUILDER_TRUNCATED_PICKED_NOTE);
   });
 });
 

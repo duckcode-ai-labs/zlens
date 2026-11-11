@@ -155,6 +155,14 @@ export function DataStep({
   </section>;
 }
 
+/** Asks AI for a new plan from the same description. */
+export const AI_TRY_AGAIN = 'Try again';
+
+/** The planner's note for a reply cut off at its length limit. */
+export function planWasCutShort(warning: string): boolean {
+  return warning.startsWith('The AI plan was cut short');
+}
+
 function AiDataStep({
   draft,
   error,
@@ -230,7 +238,10 @@ function AiDataStep({
         <div className="data-step-list-head"><h2 id="data-step-list-title">{words.picksTitle}</h2><small>{model ? `${model.picked.length} ${model.picked.length === 1 ? 'source' : 'sources'}` : 'Looking…'}</small></div>
         {!model ? <ul className="data-step-skeleton" aria-hidden="true">{[0, 1, 2].map((index) => <li key={index}><span className="add-data-mark" /><p><strong>&nbsp;</strong><small>&nbsp;</small></p></li>)}</ul> : <>
           {model.picked.length ? <ul aria-label={words.picksTitle}>{model.picked.map((pick) => pickRow(pick, true))}</ul>
-            : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data picked</strong><small>{words.emptyPicksHint}</small></p></div>}
+            : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data picked</strong><small>{words.emptyPicksHint}</small></p>
+              {/* V11: AI picked nothing (its plan was cut short), and nothing offered to ask again. */}
+              {voice === 'ai' ? <button type="button" className="data-step-retry" onClick={ai.onRevise} disabled={locked}>{AI_TRY_AGAIN}</button> : null}
+            </div>}
           {model.suggestions.length ? <section className="data-step-group" aria-labelledby="data-step-suggestions">
             <h3 id="data-step-suggestions">{words.removedTitle}</h3>
             <p>Data you removed stays here.</p>
@@ -239,6 +250,7 @@ function AiDataStep({
           {model.warnings.length ? <section className="data-step-group data-step-notes" aria-labelledby="data-step-notes">
             <h3 id="data-step-notes">{words.notesTitle}</h3>
             <ul aria-label={words.notesLabel}>{model.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul>
+            {voice === 'ai' && model.picked.length > 0 && model.warnings.some(planWasCutShort) ? <button type="button" className="data-step-retry" onClick={ai.onRevise} disabled={locked}>{AI_TRY_AGAIN}</button> : null}
           </section> : null}
           {model.uncovered.length ? <section className="studio-ai-questions" aria-label="Not covered yet">
             <header><strong>Not covered yet</strong><small>{model.uncovered.length} {model.uncovered.length === 1 ? (voice === 'keywords' ? 'note' : 'gap') : (voice === 'keywords' ? 'notes' : 'gaps')}</small></header>

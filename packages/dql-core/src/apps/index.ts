@@ -14,6 +14,8 @@ export {
   memberAttributes,
   appFolderRelPath,
   suggestAppId,
+  projectAppIdentities,
+  uniqueNewAppIdentity,
 } from './app-document.js';
 export type {
   AppDocument,
@@ -29,6 +31,7 @@ export type {
   AppNotebookRef,
   AppDocumentParseError,
   AppDocumentLoadResult,
+  TakenAppIdentities,
 } from './app-document.js';
 
 export { readDashboardVizStyle } from './viz-style.js';
@@ -304,3 +307,5 @@ export type {
   DashboardFilterReachFilter,
   DashboardFilterReachPage,
 } from './filter-reach.js';
+
+export { isYearLikeColumn, yearOf, formatYearValue } from './year-values.js';

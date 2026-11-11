@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { DataStep, PICK_DATA_MYSELF, type DataStepAiProps } from './DataStep';
+import { AI_TRY_AGAIN, DataStep, PICK_DATA_MYSELF, type DataStepAiProps } from './DataStep';
 import { AI_PLAN_FAILED_WORDS } from '../app-studio-words';
 import { DataPanel } from './DataPanel';
 import { AddDataBrowser, RemoveDataButton } from './AddDataBrowser';
@@ -240,6 +240,25 @@ describe('AI Data step (design D3, AI path)', () => {
     const kept = new Set([ordersId, marginId]);
     expect(appStudioProposalSourceAddMode({ alreadyProposed: false, reviewRequired: false, sourcePolicy: 'governed_only' })).toBe('replan');
     expect(appStudioProposalRequiredSourceIds(kept, topCustomersQuery.sourceId)).toEqual([ordersId, marginId, topCustomersQuery.sourceId]);
+  });
+
+  // V11 try 2: "AI picked 0 sources · No data picked" and "The AI plan was cut short", with Build pages off and nothing to ask again.
+  it('offers Try again when AI picked no data, or when its plan was cut short', () => {
+    const onRevise = vi.fn();
+    const empty = renderAi(aiProps({ onRevise }, new Set()));
+    expect(empty.markup).toContain('No data picked');
+    expect(button(empty.tree, /Build pages with/).props.disabled).toBe(true);
+    (button(empty.tree, AI_TRY_AGAIN).props.onClick as () => void)();
+    expect(onRevise).toHaveBeenCalledTimes(1);
+
+    const proposal = { ...aiProposal(), warnings: ['The AI plan was cut short, so it may cover less than you asked. Add more data or tiles yourself.'] };
+    const summary = summarizeAppStudioAiPlan(proposal);
+    const cut = renderAi(aiProps({ model: appStudioAiDataModel(proposal, summary, new Set(proposal.defaultSelectedSourceIds), [orderLinesDataset, marginMetrics]) }));
+    expect(cut.markup).toContain('The AI plan was cut short');
+    expect(button(cut.tree, AI_TRY_AGAIN)).toBeDefined();
+    // Not on a plan that was not cut short, and never for keyword suggestions (no AI to ask).
+    expect(() => button(renderAi(aiProps()).tree, AI_TRY_AGAIN)).toThrow();
+    expect(() => button(renderAi(aiProps({ voice: 'keywords' }, new Set())).tree, AI_TRY_AGAIN)).toThrow();
   });
 
   it('shows the activity steps while AI re-plans and locks the picks', () => {

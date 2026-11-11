@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { TileQuery } from '@zlens/core/apps/tile-query';
 import { api, type DatasetTileQueryPreview } from '../../../api/client';
+import { formatYearValue } from '../../../utils/value-format';
 
 type PreviewState =
   | { state: 'idle' }
@@ -83,15 +84,18 @@ export function TileLivePreview({
     {rows.length ? <div className="dataset-live-preview-table">
       <table>
         <thead><tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
-        <tbody>{rows.slice(0, PREVIEW_ROWS).map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{formatCell(row[column])}</td>)}</tr>)}</tbody>
+        <tbody>{rows.slice(0, PREVIEW_ROWS).map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{formatCell(column, row[column])}</td>)}</tr>)}</tbody>
       </table>
       {total > PREVIEW_ROWS ? <small>Showing {PREVIEW_ROWS} of {total}.</small> : null}
     </div> : null}
   </section>;
 }
 
-function formatCell(value: unknown): string {
+function formatCell(column: string, value: unknown): string {
   if (value === null || value === undefined) return '—';
+  // A season or year reads 2014, never 2,014 (V11).
+  const year = formatYearValue(column, value);
+  if (year !== undefined) return year;
   if (typeof value === 'number') return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 4 });
   return String(value);
 }

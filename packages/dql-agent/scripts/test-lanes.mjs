@@ -202,10 +202,13 @@ const EXPECTED_TEST_FILES = 197;
 // (app-builder-orchestrator.test.ts +1; new-user test V10).
 // 2868 with a planned tile on a field its source lacks refused before Apply
 // (app-builder-orchestrator.test.ts +1; V11).
-const EXPECTED_TESTS = 2868;
+// 2873 with the App Builder planner applying the split a tile's title or question asks for, answering a split
+// by values with the split, listing a dropped part of the request as a gap, keeping trust codes out of its
+// reasons, and asking again when its reply is cut off before any tile (app-builder-orchestrator.test.ts +5; V12).
+const EXPECTED_TESTS = 2873;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2787.
+// The ordinary lane's share is the difference: 2792.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
