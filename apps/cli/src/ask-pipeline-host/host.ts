@@ -3298,12 +3298,13 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         for (const item of stated.filter((value) => value.kind === 'year')) {
           if (new RegExp(`(?<![0-9])${item.value}(?![0-9])`).test(sql)) continue;
           for (const rule of rules) {
-            const match = /Rows whose ([A-Za-z0-9_$"]+) starts with ([0-9A-Za-z, ]+?) all fall in the calendar year after their ([A-Za-z_]+)/.exec(rule);
+            // "Rows whose GAME_ID starts with 4 (40,377 rows) or 5 (349 rows) all fall in the calendar year after their SEASON".
+            const match = /Rows whose ([A-Za-z0-9_$"]+) starts with (.+?) all fall in the calendar year after their ([A-Za-z_]+)/.exec(rule);
             if (!match) continue;
             const column = match[3]!;
             const value = String(Number(item.value) - 1);
             if (!new RegExp(`(^|[^A-Za-z0-9_])"?${column}"?\\s*=\\s*'?${value}'?(?![0-9])`, 'i').test(sql)) continue;
-            const firsts = match[2]!.split(/,|\bor\b|\band\b/).map((part) => part.trim()).filter(Boolean);
+            const firsts = [...match[2]!.matchAll(/(?:^|,|\bor\b|\band\b)\s*([0-9A-Za-z])(?![0-9A-Za-z,])/g)].map((first) => first[1]!);
             const kinds = codeKinds.find((item) => item.code.toLowerCase() === match[1]!.replace(/"/g, '').toLowerCase());
             const names = firsts.map((first) => kinds?.names?.[first]);
             found.push({ year: item.value, column, value, kinds: names.every(Boolean) ? joinKindNames(names as string[]) : `rows whose ${match[1]!.replace(/"/g, '')} starts with ${orList(firsts)}` });

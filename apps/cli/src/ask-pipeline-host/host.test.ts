@@ -1424,7 +1424,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const manifest = { ...nba, modeling: { rules: {
         ...nba.modeling.rules,
         'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule },
-        'nba.playoff_calendar_year': { localId: 'playoff_calendar_year', domain: 'nba', status: 'draft', expression: 'Rows whose GAME_ID starts with 4, 5 all fall in the calendar year after their SEASON: for those rows, calendar year Y is SEASON Y − 1.' },
+        'nba.playoff_calendar_year': { localId: 'playoff_calendar_year', domain: 'nba', status: 'draft', expression: 'SEASON is the year a season starts. Rows whose GAME_ID starts with 4 (40,377 rows) or 5 (349 rows) all fall in the calendar year after their SEASON (SEASON 2012\'s 4 rows run 2013-04-20 to 2013-06-20): for those rows, calendar year Y is SEASON Y − 1.' },
       } } };
       const shifted = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
       const { result } = await askNba('Which team won the most playoff games in 2016?', shifted, shifted, manifest);
