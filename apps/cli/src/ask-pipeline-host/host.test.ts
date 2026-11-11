@@ -1317,6 +1317,20 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(all.result.answer).toContain('it counts every kind of game together: preseason, regular-season, playoff and play-in games (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
     });
 
+    it('a stated game type is applied by a statement that keeps that kind by its code (V10 retest)', async () => {
+      const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
+      const manifest = { ...nba, modeling: { rules: { ...nba.modeling.rules, 'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule } } } };
+      const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      // "Playoffs" is a value the question states; the statement keeps the playoffs by GAME_ID, not by that word.
+      const kept = await askNba('Which team won the most games in the 2015 Playoffs?', playoffs, playoffs, manifest);
+      expect(kept.result.status).toBe('completed');
+      expect(kept.result.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+      // Keeping another kind does not apply it.
+      const regular = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const wrong = await askNba('Which team won the most games in the 2015 Playoffs?', regular, regular, manifest);
+      expect(wrong.result.answer).toContain('does not apply "Playoffs"');
+    });
+
     it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {
       const every = 'SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY team_name ORDER BY wins DESC LIMIT 1';
       const { prompts, statements, result } = await askNba('Which team won the most games in 2015?', every, every);

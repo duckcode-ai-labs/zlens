@@ -284,6 +284,8 @@ export interface CodeKinds {
    * ("4 (playoff games, 31,236 rows)"), or named once from the rules and the dates (`kindNamesFrom`).
    */
   names?: Record<string, string>;
+  /** Other words a reader uses for each kind ("postseason" for the playoffs), named with the names. */
+  words?: Record<string, string[]>;
 }
 
 /**
@@ -403,26 +405,52 @@ export function kindNamesMessages(kinds: CodeKinds): AgentMessage[] {
   const noun = kindNoun(kinds.code);
   return [
     { role: 'system', content: `You name the kinds of ${noun}s a coded key tells apart, in the words a business reader uses. Reply with one JSON object only.` },
-    { role: 'user', content: `KEY: the first character of ${kinds.code} says what kind of ${noun} a row is: ${kinds.values.map((value) => `${value.first} (${value.rows.toLocaleString('en-US')} rows)`).join(', ')}.\nRULES: ${kinds.expressions.join(' ')}\n${kinds.dates ? `WHEN EACH KIND FALLS: in ${kinds.dates.period} ${kinds.dates.value}, ${kinds.dates.ranges.map((range) => `${range.first} from ${range.from} to ${range.to}`).join(', ')}.\n` : ''}Name each kind's ${noun}s, plural, in at most four words (for example "returned orders"). Use null for a kind the rules and dates do not make clear. Reply as {${kinds.values.map((value) => `"${value.first}": "…"`).join(', ')}}.` },
+    { role: 'user', content: `KEY: the first character of ${kinds.code} says what kind of ${noun} a row is: ${kinds.values.map((value) => `${value.first} (${value.rows.toLocaleString('en-US')} rows)`).join(', ')}.\nRULES: ${kinds.expressions.join(' ')}\n${kinds.dates ? `WHEN EACH KIND FALLS: in ${kinds.dates.period} ${kinds.dates.value}, ${kinds.dates.ranges.map((range) => `${range.first} from ${range.from} to ${range.to}`).join(', ')}.\n` : ''}Name each kind's ${noun}s, plural, in at most four words (for example "returned orders"), then up to three other words or short phrases a reader uses for that kind (for example "returns"). Use null for a kind the rules and dates do not make clear. Reply as {${kinds.values.map((value) => `"${value.first}": ["…", "…"]`).join(', ')}}.` },
   ];
 }
 
-export function kindNamesFrom(reply: string, kinds: CodeKinds): Record<string, string> | undefined {
+export function kindNamesFrom(reply: string, kinds: CodeKinds): { names?: Record<string, string>; words?: Record<string, string[]> } | undefined {
   const json = /\{[\s\S]*\}/.exec(reply)?.[0];
   if (!json) return undefined;
   let parsed: unknown;
   try { parsed = JSON.parse(json); } catch { return undefined; }
   if (!parsed || typeof parsed !== 'object') return undefined;
+  const clean = (value: unknown) => {
+    if (typeof value !== 'string') return undefined;
+    const text = value.trim().replace(/\s+/g, ' ').toLowerCase();
+    return /^[a-z][a-z -]{1,40}$/.test(text) && text.split(' ').length <= 4 ? text : undefined;
+  };
   const names: Record<string, string> = {};
+  const words: Record<string, string[]> = {};
   for (const value of kinds.values) {
-    const name = (parsed as Record<string, unknown>)[value.first];
-    if (typeof name !== 'string') continue;
-    const clean = name.trim().replace(/\s+/g, ' ').toLowerCase();
-    if (/^[a-z][a-z -]{1,40}$/.test(clean) && clean.split(' ').length <= 4) names[value.first] = clean;
+    const given = (parsed as Record<string, unknown>)[value.first];
+    const list = Array.isArray(given) ? given : [given];
+    const name = clean(list[0]);
+    if (!name) continue;
+    names[value.first] = name;
+    const others = [...new Set(list.slice(1, 4).map(clean).filter((word): word is string => Boolean(word) && word !== name))];
+    if (others.length) words[value.first] = others;
   }
   // Two kinds called the same tell a reader nothing.
   if (new Set(Object.values(names)).size !== Object.keys(names).length) return undefined;
-  return Object.keys(names).length ? names : undefined;
+  if (!Object.keys(names).length) return undefined;
+  return { names, ...(Object.keys(words).length ? { words } : {}) };
+}
+
+/**
+ * The kinds a value the question states names ("Playoffs", "the postseason"), by their names and other words: a
+ * statement that keeps that kind applies the value (V10 retest: "does not apply \"Playoffs\"" refused SQL that
+ * kept only the playoffs by GAME_ID). Words match by their stems, and the kind's own noun ("games") is not needed.
+ */
+export function statedKindFirsts(value: string, kinds: Pick<CodeKinds, 'code' | 'names' | 'words'>): string[] {
+  const noun = kindNoun(kinds.code);
+  const tokens = (text: string) => text.toLowerCase().split(/[^a-z]+/).filter((word) => word.length > 1 && !['the', 'of', 'a', 'an'].includes(word)).map(stemOf).filter((word) => word !== noun);
+  const asked = tokens(value);
+  if (!asked.length) return [];
+  return Object.entries(kinds.names ?? {}).filter(([first, name]) => [name, ...(kinds.words?.[first] ?? [])].some((said) => {
+    const known = tokens(said);
+    return known.length > 0 && (asked.every((word) => known.includes(word)) || known.every((word) => asked.includes(word)));
+  })).map(([first]) => first);
 }
 
 /** "regular-season and playoff games": names that end in the same word share it. */
@@ -474,15 +502,24 @@ export function readingWithoutKindClaims(reading: string, terms: string[]): stri
   if (!words.length) return undefined;
   const termPattern = new RegExp(`(?<![a-z])(?:${words.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/[- ]/g, '[- ]?')).join('|')})`, 'i');
   const claim = (text: string) => termPattern.test(text) && KIND_CLAIM_SCHEMA.test(text) && (KIND_CLAIM_NEGATION.test(text) || KIND_CLAIM_ONLY.test(text));
-  let text = reading.replace(/\s*\(([^()]*)\)/g, (whole, inner: string) => claim(inner) ? '' : whole);
+  // A bracket a clause keeps travels with it, and a sentence never ends inside one or at "vs." (V11 check: "(… regular
+  // season vs. playoffs in one certified block)" was cut in two, and half of it stayed).
+  const brackets: string[] = [];
+  let text = reading.replace(/\s*\(([^()]*)\)/g, (whole, inner: string) => {
+    if (claim(inner)) return '';
+    brackets.push(whole);
+    return `\u0000${brackets.length - 1}\u0000`;
+  }).replace(/\b(vs|e\.g|i\.e|etc|incl|approx)\./gi, (abbreviation) => `${abbreviation.slice(0, -1)}\u0001`);
+  const restore = (part: string) => part.replace(/\u0000(\d+)\u0000/g, (_whole, index: string) => brackets[Number(index)] ?? '').replace(/\u0001/g, '.');
+  const removedBracket = /\(/.test(reading) && brackets.length < (reading.match(/\([^()]*\)/g) ?? []).length;
   const parts = text.split(/(\.\s+|;\s*|\s+[—–]\s+|\s+-\s+|,\s+(?=(?:but|however|although|since|so|because|as|while|and no)\b)|\s+(?=because\b))/i);
   const kept: string[] = [];
-  let dropped = text !== reading;
+  let dropped = removedBracket;
   // What follows a dropped claim in the same sentence is its consequence ("…, so the record as asked cannot be
   // built"): it goes with it when it is a negative too.
   let following = false;
   for (let index = 0; index < parts.length; index += 2) {
-    const clause = parts[index] ?? '';
+    const clause = restore(parts[index] ?? '');
     if (index > 0 && /^(?:\.\s+|;\s*)$/.test(parts[index - 1] ?? '')) following = false;
     if (claim(clause) || (following && (KIND_CLAIM_NEGATION.test(clause) || KIND_CLAIM_ONLY.test(clause)))) { dropped = true; following = true; continue; }
     if (kept.length) kept.push(parts[index - 1] ?? ' ');
@@ -494,7 +531,8 @@ export function readingWithoutKindClaims(reading: string, terms: string[]): stri
 }
 
 /** When each kind's rows fall and what each is called, by snapshot, connection and key: worked out once; undefined parts could not be. */
-const KIND_DATES = new Map<string, { dates?: CodeKinds['dates']; names?: Record<string, string> }>();
+interface KindsFound { dates?: CodeKinds['dates']; names?: Record<string, string>; words?: Record<string, string[]>; /** Naming was asked (or failed) for this snapshot. */ named?: boolean }
+const KIND_DATES = new Map<string, KindsFound>();
 
 const QUESTION_STOP = new Set(['which', 'what', 'when', 'where', 'whom', 'whose', 'many', 'much', 'most', 'least', 'more', 'less', 'does', 'have', 'with', 'from', 'that', 'this', 'there', 'their', 'they', 'them', 'been', 'were', 'will', 'would', 'could', 'should', 'each', 'every', 'over', 'under', 'between', 'during', 'about', 'show', 'give', 'list', 'tell', 'find', 'highest', 'lowest', 'best', 'worst', 'total', 'number', 'count', 'average', 'than', 'then', 'also', 'only', 'just', 'into', 'ever', 'time', 'times', 'year', 'years', 'ours', 'your', 'some', 'same', 'other', 'like', 'make', 'made', 'together', 'overall', 'please', 'currently', 'lately', 'recent', 'recently', 'data', 'database', 'dataset', 'table', 'tables', 'rows', 'record', 'records']);
 const stemOf = (word: string) => {
@@ -2904,47 +2942,54 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const withKindDates = async (kinds: CodeKinds): Promise<CodeKinds> => {
         if (!connection) return kinds;
         const cacheKey = `${deps.getManifest().snapshotId}|${connectionKey(connection)}|${kinds.code.toLowerCase()}`;
-        const known = (found: { dates?: CodeKinds['dates']; names?: Record<string, string> } | undefined): CodeKinds => ({
+        const known = (found: KindsFound | undefined): CodeKinds => ({
           ...kinds,
           ...(found?.dates ? { dates: found.dates } : {}),
           // A name the rule writes is the project's own and wins.
           ...(found?.names || kinds.names ? { names: { ...(found?.names ?? {}), ...(kinds.names ?? {}) } } : {}),
+          ...(found?.words ? { words: found.words } : {}),
         });
-        if (KIND_DATES.has(cacheKey)) return known(KIND_DATES.get(cacheKey));
-        const ruleTable = current.entries.flatMap((entry) => entry.kind === 'relation' && entryPhysicalRelation(entry) && sameTable(entryPhysicalRelation(entry)!, kinds.table, 'tail') ? [entryPhysicalRelation(entry)!] : []);
-        const candidates = [...relations, ...ruleTable].map((relation) => {
-          const columns = knownColumns(relation);
-          return {
-            relation,
-            code: columns.find((column) => holdsCode(column, kinds.code)),
-            date: columns.find((column) => /(^|_)date$/i.test(column.replace(/"/g, ''))),
-            period: columns.find((column) => /^(season|year|fiscal_year|season_year)$/i.test(column.replace(/"/g, ''))),
-          };
-        });
-        const table = candidates.find((item) => item.code && item.date && item.period);
-        let dates: CodeKinds['dates'];
-        if (table) {
-          try {
-            const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier.replace(/"/g, ''));
-            const result = await deps.executor.executeQuery(kindDatesSql(table.relation, table.code!, table.date!, table.period!, quote), [], {}, connection, { maxRows: 10, ...(request.signal ? { signal: request.signal } : {}), ...(request.runBudget ? { deadlineMs: Math.min(10_000, request.runBudget.remainingMs()) } : {}) });
-            dates = kindDatesFrom(result.rows ?? [], table.period!.replace(/"/g, ''));
-          } catch { dates = undefined; }
+        const cached = KIND_DATES.get(cacheKey);
+        let dates = cached?.dates;
+        if (!cached) {
+          const ruleTable = current.entries.flatMap((entry) => entry.kind === 'relation' && entryPhysicalRelation(entry) && sameTable(entryPhysicalRelation(entry)!, kinds.table, 'tail') ? [entryPhysicalRelation(entry)!] : []);
+          const candidates = [...relations, ...ruleTable].map((relation) => {
+            const columns = knownColumns(relation);
+            return {
+              relation,
+              code: columns.find((column) => holdsCode(column, kinds.code)),
+              date: columns.find((column) => /(^|_)date$/i.test(column.replace(/"/g, ''))),
+              period: columns.find((column) => /^(season|year|fiscal_year|season_year)$/i.test(column.replace(/"/g, ''))),
+            };
+          });
+          const table = candidates.find((item) => item.code && item.date && item.period);
+          if (table) {
+            try {
+              const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier.replace(/"/g, ''));
+              const result = await deps.executor.executeQuery(kindDatesSql(table.relation, table.code!, table.date!, table.period!, quote), [], {}, connection, { maxRows: 10, ...(request.signal ? { signal: request.signal } : {}), ...(request.runBudget ? { deadlineMs: Math.min(10_000, request.runBudget.remainingMs()) } : {}) });
+              dates = kindDatesFrom(result.rows ?? [], table.period!.replace(/"/g, ''));
+            } catch { dates = undefined; }
+          }
         }
-        // Named only from evidence (the dates), once, when the rule does not name every kind itself.
-        let names: Record<string, string> | undefined;
+        // Named only from evidence (the dates), once, when the rule does not name every kind itself. A run with no
+        // time left to ask leaves the naming to the next one, never "no names" for the snapshot (V10 retest: one
+        // slow answer went back to the codes).
+        let named = cached?.named ? { names: cached.names, words: cached.words } : undefined;
         const unnamed = kinds.values.some((value) => !kinds.names?.[value.first]);
-        if (dates && unnamed && !request.signal?.aborted && (!request.runBudget || request.runBudget.remainingMs() > 30_000)) {
+        if (!cached?.named && dates && unnamed && !request.signal?.aborted && (!request.runBudget || request.runBudget.remainingMs() > 30_000)) {
           const trace = deps.dispatchOptions?.('draft', request);
           try {
             const reply = await provider.generate(kindNamesMessages({ ...kinds, dates }), { temperature: 0, ...(trace?.options ?? {}), ...(request.signal ? { signal: request.signal } : {}) });
             trace?.settle('ok');
-            names = kindNamesFrom(reply, kinds);
+            const parsed = kindNamesFrom(reply, kinds);
+            named = { names: parsed?.names, words: parsed?.words };
           } catch (error) {
             trace?.settle(request.signal?.aborted ? 'cancelled' : 'error', error);
-            names = undefined;
+            // Asked and failed: not asked again for this snapshot.
+            named = { names: undefined, words: undefined };
           }
         }
-        const found = { ...(dates ? { dates } : {}), ...(names ? { names } : {}) };
+        const found: KindsFound = { ...(dates ? { dates } : {}), ...(named?.names ? { names: named.names } : {}), ...(named?.words ? { words: named.words } : {}), named: Boolean(named) };
         KIND_DATES.set(cacheKey, found);
         return known(found);
       };
@@ -3137,7 +3182,13 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       };
       const failedChecks = async (sql: string): Promise<string[]> => {
         const failures: string[] = [];
-        const missing = missingStatedValues(sql, stated);
+        // A stated kind ("Playoffs") is applied by a statement that keeps that kind by its code (V10 retest).
+        const keepsStatedKind = (value: string) => codeKinds.some((kinds) => {
+          const firsts = statedKindFirsts(value, kinds);
+          const filter = firsts.length ? kindFilterOf(sql, kinds.code) : undefined;
+          return Boolean(filter?.filtered && firsts.some((first) => filter.kinds.includes(first)));
+        });
+        const missing = missingStatedValues(sql, stated).filter((item) => item.kind !== 'text' || !keepsStatedKind(item.name ?? item.value));
         if (missing.length) failures.push(`it does not apply ${missing.map((item) => item.kind === 'fiscal_year' ? `"${item.value}" (fiscal year ${item.value.replace(/^FY/i, '').length === 2 ? `20${item.value.replace(/^FY/i, '')}` : item.value.replace(/^FY/i, '')}: restrict a fiscal-year field, or the dates that fiscal year spans)` : `"${item.value}"`).join(', ')} from the question`);
         const missingRequired = missingRequiredFilters(sql, required);
         if (missingRequired.length) failures.push(`it does not apply the required filter ${missingRequired.map((item) => item.text).join(', ')}`);
@@ -3339,6 +3390,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         if (intent?.reading?.trim() && kindsRead.length) {
           const terms = kindsRead.flatMap(({ kinds, code }) => [
             ...Object.values(kinds?.names ?? {}).flatMap((name) => [name, name.replace(new RegExp(`\\s+${kindNoun(code)}s?$`), '')]),
+            ...Object.values(kinds?.words ?? {}).flat(),
             `${kindNoun(code)} type`, `${kindNoun(code)}-type`, 'type of game', 'kind of game',
           ]);
           const filteredNamed = kindsRead.find(({ kinds, filter }) => filter.filtered && filter.kinds.length && filter.kinds.every((first) => kinds?.names?.[first]));
