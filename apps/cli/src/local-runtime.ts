@@ -66,6 +66,7 @@ import { resolveNpmInvocation } from './npm-runtime.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason } from './deployment-locks.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
+import { LONG_REQUEST_PATH, answerLongRequest, handleLongRequestPoll } from './long-request.js';
 import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions } from './snowflake-app-settings.js';
 import { SnowflakeAppBackups } from './snowflake-app-backups.js';
 import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
@@ -21653,77 +21654,76 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // from governed results when the page runs (RFC 0008 step 8).
     const storyDraftRoute = path.match(/^\/api\/app-builds\/([^/]+)\/dashboards\/([^/]+)\/(story|canvas)-draft$/);
     if (req.method === 'POST' && storyDraftRoute) {
-      try {
-        const draftId = decodeURIComponent(storyDraftRoute[1]);
-        const dashboardId = decodeURIComponent(storyDraftRoute[2]);
-        const kind = storyDraftRoute[3] as 'story' | 'canvas';
-        const body = await readJSON(req).catch(() => ({}));
-        const runId = typeof body.runId === 'string' ? body.runId : '';
-        const evidence = dashboardRunEvidence.get(runId);
-        const draft = loadStoredAppBuildDraft(projectRoot, draftId);
-        const page = draft?.pages.find((candidate) => candidate.id === dashboardId);
-        if (!draft || !page) {
-          res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ ok: false, error: 'App draft page not found.' }));
-          return;
+      // One AI call that may take minutes (up to 180 s, 300 s for a page): a
+      // proxy that ends requests at 90 s (the Snowflake ingress) is outlasted
+      // by answering it as a long request the page polls (long-request.ts).
+      await answerLongRequest(req, res as unknown as ServerResponse, async () => {
+        try {
+          const draftId = decodeURIComponent(storyDraftRoute[1]);
+          const dashboardId = decodeURIComponent(storyDraftRoute[2]);
+          const kind = storyDraftRoute[3] as 'story' | 'canvas';
+          const body = await readJSON(req).catch(() => ({}));
+          const runId = typeof body.runId === 'string' ? body.runId : '';
+          const evidence = dashboardRunEvidence.get(runId);
+          const draft = loadStoredAppBuildDraft(projectRoot, draftId);
+          const page = draft?.pages.find((candidate) => candidate.id === dashboardId);
+          if (!draft || !page) {
+            return { status: 404, body: { ok: false, error: 'App draft page not found.' } };
+          }
+          if (!evidence || evidence.expiresAt < Date.now() || evidence.appId !== draftId || evidence.dashboardId !== dashboardId || !evidence.storyBindings) {
+            return { status: 409, body: { ok: false, error: `Run the whole page first; the ${kind === 'story' ? 'story' : 'page'} is drafted from its latest complete results.` } };
+          }
+          const instruction = typeof body.instruction === 'string' ? body.instruction.trim().slice(0, 600) : '';
+          const selected = await selectAssistProvider(projectRoot).catch(() => null);
+          const providerConfig = selected ? getEffectiveProviderConfig(projectRoot, selected.id) : undefined;
+          // Result values reach the model only inside the privacy boundary: on
+          // this machine, or wherever the host's boundary rule allows (HH-5).
+          const localModel = valuesMayReachProvider({
+            selected,
+            projectRoot,
+            hosted: Boolean(hostHooks),
+            relations: storyValueRelations(evidence.storyBindings, evidence.tileRelations)?.relations,
+            withoutHost: 'this-machine',
+          });
+          const model = providerConfig?.model;
+          const input: StoryDraftInput = {
+            pageTitle: page.metadata.title,
+            ...(page.story?.goal || draft.frame.goal ? { goal: page.story?.goal ?? draft.frame.goal } : {}),
+            ...(draft.frame.audience ? { audience: draft.frame.audience } : {}),
+            ...(instruction ? { instruction } : {}),
+            catalog: evidence.storyBindings,
+            tiles: page.layout.items
+              .filter((item) => !item.text && Object.values(evidence.storyBindings!).some((binding) => binding.tileId === item.i))
+              .map((item) => ({ tileId: item.i, title: item.title ?? item.i, kind: item.driver ? 'driver' : String(item.viz.type) })),
+            includeValues: localModel,
+          };
+          const started = Date.now();
+          const complete = selected
+            ? (messages: Parameters<typeof selected.provider.generate>[0]) => selected.provider.generate(messages, {
+              maxTokens: kind === 'canvas' ? 4500 : 1800,
+              temperature: 0.3,
+              ...(kind === 'story' ? { responseJsonSchema: { type: 'object', properties: { blocks: { type: 'array' } }, required: ['blocks'] } } : {}),
+              signal: AbortSignal.timeout(kind === 'canvas' ? 300_000 : 180_000),
+            })
+            : null;
+          const result = kind === 'story'
+            ? await draftStoryNarrative(input, complete, { ...(model ? { model } : {}) })
+            : await draftCanvasPage(input, complete, { ...(model ? { model } : {}) });
+          return { status: 200, body: {
+            ok: true,
+            ...('narrative' in result ? { narrative: result.narrative } : { canvas: result.canvas }),
+            generatedBy: result.generatedBy,
+            attempts: result.attempts,
+            issues: result.issues.slice(0, 20),
+            provider: selected?.id ?? null,
+            model: model ?? null,
+            sawValues: localModel,
+            elapsedMs: Date.now() - started,
+          } };
+        } catch (error) {
+          return { status: 500, body: { ok: false, error: error instanceof Error ? error.message : String(error) } };
         }
-        if (!evidence || evidence.expiresAt < Date.now() || evidence.appId !== draftId || evidence.dashboardId !== dashboardId || !evidence.storyBindings) {
-          res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ ok: false, error: `Run the whole page first; the ${kind === 'story' ? 'story' : 'page'} is drafted from its latest complete results.` }));
-          return;
-        }
-        const instruction = typeof body.instruction === 'string' ? body.instruction.trim().slice(0, 600) : '';
-        const selected = await selectAssistProvider(projectRoot).catch(() => null);
-        const providerConfig = selected ? getEffectiveProviderConfig(projectRoot, selected.id) : undefined;
-        // Result values reach the model only inside the privacy boundary: on
-        // this machine, or wherever the host's boundary rule allows (HH-5).
-        const localModel = valuesMayReachProvider({
-          selected,
-          projectRoot,
-          hosted: Boolean(hostHooks),
-          relations: storyValueRelations(evidence.storyBindings, evidence.tileRelations)?.relations,
-          withoutHost: 'this-machine',
-        });
-        const model = providerConfig?.model;
-        const input: StoryDraftInput = {
-          pageTitle: page.metadata.title,
-          ...(page.story?.goal || draft.frame.goal ? { goal: page.story?.goal ?? draft.frame.goal } : {}),
-          ...(draft.frame.audience ? { audience: draft.frame.audience } : {}),
-          ...(instruction ? { instruction } : {}),
-          catalog: evidence.storyBindings,
-          tiles: page.layout.items
-            .filter((item) => !item.text && Object.values(evidence.storyBindings!).some((binding) => binding.tileId === item.i))
-            .map((item) => ({ tileId: item.i, title: item.title ?? item.i, kind: item.driver ? 'driver' : String(item.viz.type) })),
-          includeValues: localModel,
-        };
-        const started = Date.now();
-        const complete = selected
-          ? (messages: Parameters<typeof selected.provider.generate>[0]) => selected.provider.generate(messages, {
-            maxTokens: kind === 'canvas' ? 4500 : 1800,
-            temperature: 0.3,
-            ...(kind === 'story' ? { responseJsonSchema: { type: 'object', properties: { blocks: { type: 'array' } }, required: ['blocks'] } } : {}),
-            signal: AbortSignal.timeout(kind === 'canvas' ? 300_000 : 180_000),
-          })
-          : null;
-        const result = kind === 'story'
-          ? await draftStoryNarrative(input, complete, { ...(model ? { model } : {}) })
-          : await draftCanvasPage(input, complete, { ...(model ? { model } : {}) });
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({
-          ok: true,
-          ...('narrative' in result ? { narrative: result.narrative } : { canvas: result.canvas }),
-          generatedBy: result.generatedBy,
-          attempts: result.attempts,
-          issues: result.issues.slice(0, 20),
-          provider: selected?.id ?? null,
-          model: model ?? null,
-          sawValues: localModel,
-          elapsedMs: Date.now() - started,
-        }));
-      } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ ok: false, error: error instanceof Error ? error.message : String(error) }));
-      }
+      }, { serialize: serializeJSON });
       return;
     }
 
@@ -26128,6 +26128,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       return;
     }
+
+    // A long App Builder request the page polls for its answer (long-request.ts).
+    if (path.startsWith(LONG_REQUEST_PATH) && await handleLongRequestPoll(req, res as unknown as ServerResponse, path)) return;
 
     // Apps, dashboards, persona — see apps-api.ts. Returns true if handled.
     if (path.startsWith('/api/apps')

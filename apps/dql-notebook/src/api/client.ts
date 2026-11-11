@@ -4296,8 +4296,36 @@ export class DqlApiError extends Error {
   }
 }
 
+/**
+ * A proxy's own failure page, in plain words. A proxy in front of ZLens (the
+ * Snowflake ingress, a load balancer) answers for it when ZLens is slow,
+ * starting or unreachable, with text such as "upstream request timeout".
+ * New-user test V10 saw that raw text in the App builder. Only replies that
+ * are not ZLens's own JSON are read this way.
+ */
+export function proxyFailureWords(status: number, text: string): string | undefined {
+  const body = text.trim();
+  if (body.startsWith('{') || body.startsWith('[')) {
+    try {
+      JSON.parse(body);
+      return undefined;
+    } catch {
+      // Not JSON after all: read it as the proxy's text.
+    }
+  }
+  const timedOut = status === 504 || /\b(?:upstream request timeout|gateway time-?out|stream timeout)\b/i.test(body);
+  if (timedOut) return 'This took longer than the connection to ZLens allows, so it was cut off. Try again.';
+  if (status === 503 || /\bno healthy upstream\b/i.test(body)) return 'ZLens is starting or restarting. Try again in a minute.';
+  if (status === 502 || /\b(?:upstream connect error|bad gateway)\b/i.test(body)) return 'ZLens could not be reached just now. Try again in a minute.';
+  return undefined;
+}
+
 function formatRequestError(res: Response, text: string): DqlApiError {
   const fallback = text.trim() || res.statusText || `HTTP ${res.status}`;
+  const proxyWords = proxyFailureWords(res.status, text);
+  if (proxyWords) {
+    return new DqlApiError({ message: proxyWords, status: res.status, code: 'PROXY_FAILURE', details: { technicalDetails: fallback } });
+  }
   if (!text.trim()) return new DqlApiError({ message: fallback, status: res.status });
   try {
     const payload = JSON.parse(text);
@@ -4397,6 +4425,74 @@ async function requestUncached<T>(path: string, options?: RequestInit): Promise<
   // 204 No Content
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+/**
+ * How long one long request, and each poll of it, waits for its answer: well
+ * under the 90 s after which the Snowflake ingress ends a request.
+ */
+export const LONG_REQUEST_WAIT_SECONDS = 20;
+/** How long the page follows a long request before it stops waiting. */
+const LONG_REQUEST_DEADLINE_MS = 15 * 60_000;
+
+/** The server's "still working" answer to a long request (apps/cli/src/long-request.ts). */
+export function longRequestRunning(value: unknown): { id: string } | undefined {
+  const marker = value && typeof value === 'object' ? (value as { longRequest?: unknown }).longRequest : undefined;
+  if (!marker || typeof marker !== 'object') return undefined;
+  const { id, state } = marker as { id?: unknown; state?: unknown };
+  return typeof id === 'string' && id && state === 'running' ? { id } : undefined;
+}
+
+/** A failure of the connection, not of the work: the poll is asked again. */
+function transientPollFailure(error: unknown): boolean {
+  if (!(error instanceof DqlApiError)) return true;
+  return error.code === 'PROXY_FAILURE' || [408, 429, 502, 503, 504].includes(error.status);
+}
+
+/**
+ * A request whose work can outlast a proxy's time limit (an AI call on Cortex
+ * can take over a minute; the Snowflake ingress ends requests at 90 s). It asks
+ * for an asynchronous answer (`Prefer: respond-async`). If the work is not done
+ * within LONG_REQUEST_WAIT_SECONDS, the server answers "still working" with an
+ * id, and the page asks again by that id until the work's own answer arrives.
+ * No single request lasts long enough to be cut. The answer, or the error, is
+ * exactly what the one long request would have given.
+ */
+export async function requestLong<T>(
+  path: string,
+  options: RequestInit,
+  timing: { waitSeconds?: number; retryDelayMs?: (failures: number) => number; deadlineMs?: number } = {},
+): Promise<T> {
+  const waitSeconds = timing.waitSeconds ?? LONG_REQUEST_WAIT_SECONDS;
+  const headers = new Headers(options.headers);
+  headers.set('Prefer', `respond-async, wait=${waitSeconds}`);
+  const first = await requestUncached<unknown>(path, { ...options, headers });
+  const running = longRequestRunning(first);
+  if (!running) return first as T;
+  const pollPath = `/api/long-requests/${encodeURIComponent(running.id)}`;
+  const deadline = Date.now() + (timing.deadlineMs ?? LONG_REQUEST_DEADLINE_MS);
+  const retryDelayMs = timing.retryDelayMs ?? ((failures: number) => Math.min(1_000 * 2 ** failures, 10_000));
+  let failures = 0;
+  while (true) {
+    if (options.signal?.aborted) throw options.signal.reason ?? new DOMException('Aborted', 'AbortError');
+    if (Date.now() > deadline) {
+      throw new DqlApiError({ status: 504, code: 'LONG_REQUEST_DEADLINE', message: 'This is taking much longer than usual, so ZLens stopped waiting for it. Try again.' });
+    }
+    try {
+      const next = await requestUncached<unknown>(pollPath, {
+        method: 'GET',
+        headers: { Prefer: `wait=${waitSeconds}` },
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      failures = 0;
+      if (!longRequestRunning(next)) return next as T;
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      failures += 1;
+      if (!transientPollFailure(error) || failures > 5) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs(failures)));
+    }
+  }
 }
 
 /**
@@ -8385,7 +8481,7 @@ export const api = {
       mode?: 'add' | 'replace';
     },
   ): Promise<{ ok: true; proposal: AppStudioAiProposal }> {
-    return request(`/api/app-builds/${encodeURIComponent(id)}/ai-proposals`, {
+    return requestLong(`/api/app-builds/${encodeURIComponent(id)}/ai-proposals`, {
       method: 'POST',
       body: JSON.stringify(input),
     });
@@ -8398,7 +8494,7 @@ export const api = {
     selectedSourceIds?: string[];
     additionalSourceIds?: string[];
   }): Promise<{ ok: true; proposal: AppStudioAiProposal }> {
-    return request(`/api/app-builds/${encodeURIComponent(id)}/ai-proposals/${encodeURIComponent(proposalId)}/revisions`, {
+    return requestLong(`/api/app-builds/${encodeURIComponent(id)}/ai-proposals/${encodeURIComponent(proposalId)}/revisions`, {
       method: 'POST',
       body: JSON.stringify(input),
     });
@@ -8413,7 +8509,7 @@ export const api = {
     /** Optional existing Domain id for the review draft. */
     domain?: string;
   }): Promise<{ ok: true; contextProposal: ContextAuthoringProposalV1; requirementId: string }> {
-    return request(`/api/app-builds/${encodeURIComponent(id)}/ai-proposals/${encodeURIComponent(proposalId)}/gaps`, {
+    return requestLong(`/api/app-builds/${encodeURIComponent(id)}/ai-proposals/${encodeURIComponent(proposalId)}/gaps`, {
       method: 'POST',
       body: JSON.stringify(input),
     });
@@ -8519,7 +8615,7 @@ export const api = {
     | { mode: 'ai'; proposalId: string; selectedSourceIds: string[]; rejectedTileIds?: string[] }
     | { mode: 'manual'; enableReviewRequired?: boolean; selections: Array<{ sourceId: string; pageId?: string; view: 'kpi' | 'chart' | 'table'; query?: TileQuery; title?: string }> }
   )): Promise<{ ok: true; draft: AppStudioBuildDraft; pageIds: string[]; tileIds: string[] }> {
-    return request(`/api/app-builds/${encodeURIComponent(id)}/compose`, {
+    return requestLong(`/api/app-builds/${encodeURIComponent(id)}/compose`, {
       method: 'POST',
       body: JSON.stringify(input),
     });
@@ -9431,7 +9527,7 @@ export const api = {
 
   /** Draft a story for a local App page from its latest complete preview run. */
   async draftAppBuildStory(draftId: string, dashboardId: string, runId: string, instruction?: string): Promise<StoryDraftResponseV1> {
-    return request<StoryDraftResponseV1>(
+    return requestLong<StoryDraftResponseV1>(
       `/api/app-builds/${encodeURIComponent(draftId)}/dashboards/${encodeURIComponent(dashboardId)}/story-draft`,
       { method: 'POST', body: JSON.stringify({ runId, ...(instruction ? { instruction } : {}) }) },
     );
@@ -9439,7 +9535,7 @@ export const api = {
 
   /** Draft a governed HTML page for a local App page from its latest complete preview run. */
   async draftAppBuildCanvas(draftId: string, dashboardId: string, runId: string, instruction?: string): Promise<CanvasDraftResponseV1> {
-    return request<CanvasDraftResponseV1>(
+    return requestLong<CanvasDraftResponseV1>(
       `/api/app-builds/${encodeURIComponent(draftId)}/dashboards/${encodeURIComponent(dashboardId)}/canvas-draft`,
       { method: 'POST', body: JSON.stringify({ runId, ...(instruction ? { instruction } : {}) }) },
     );
