@@ -523,6 +523,24 @@ describe('keyword planner on a saved query with result fields (design D1)', () =
   });
 });
 
+describe('AI plan over averages of a saved query (new-user test V10)', () => {
+  // An average shows as it is where each group holds one result row, and the
+  // run refuses a tile that would combine rows. A planned tile nobody has
+  // seen run must never depend on that check.
+  const ppg = savedQueryResultDescriptor({
+    sourceId: 'app:block:nba:ppg', sourceRevision: 'sha256:ppg', savedQuery: 'warriors_ppg_regular_vs_playoffs_2016', qualifiedId: 'nba::block::warriors_ppg_regular_vs_playoffs_2016',
+    lifecycle: 'certified', certified: true, typesFrom: 'run',
+    columns: [{ name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'POINTS_PER_GAME', type: 'DOUBLE' }],
+    groupBy: ['GAME_TYPE'],
+  })!;
+  const requirement = (question: string, role: AppBuildRequirement['role'], dimensions: string[] = []): AppBuildRequirement => ({ id: question, question, role, required: true, measures: ['POINTS_PER_GAME'], dimensions, filters: [] });
+
+  it('plans the average by its own grouping, and never a KPI that the run would refuse for adding it up', () => {
+    expect(deterministicDatasetQuery(ppg, requirement('Points per game by game type', 'breakdown', ['GAME_TYPE']), 'breakdown')).toEqual({ dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] });
+    expect(deterministicDatasetQuery(ppg, requirement('Points per game', 'kpi'), 'kpi')).toBeUndefined();
+  });
+});
+
 describe('AI plan over a notebook block with result fields (new-user test V9)', () => {
   // A DQL block saved in a notebook cell declares no measures or dimensions
   // of its own; its fields come from its result (design D1). The AI picked

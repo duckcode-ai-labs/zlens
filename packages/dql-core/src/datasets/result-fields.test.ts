@@ -6,6 +6,7 @@ import {
   savedQueryResultDescriptor,
   savedQueryResultFields,
   savedQueryKeepsFirstRows,
+  savedQueryCombinedRowsMessage,
   savedQueryResultRollup,
   sqlReturnsOneRow,
 } from './result-fields.js';
@@ -136,23 +137,22 @@ describe('roll-up rules over a saved query result', () => {
     expect(review.adaptations[0]?.message).toBe('Rolled up from the result of monthly_revenue, which needs review.');
   });
 
-  it('refuses to sum an average and offers Min, Max or the saved query grouping', () => {
+  it('never sums an average: the run shows it only where each group holds one row, and offers Min, Max or the saved query grouping', () => {
     const kpi = validateTileQuery(monthly(), { dimensions: [], measures: [{ measure: 'avg_order_value' }] });
-    expect(kpi.outcome).toBe('rejected');
-    expect(kpi.diagnostics).toEqual([{
-      code: 'NON_ADDITIVE_RESULT_ROLLUP',
-      field: 'avg_order_value',
-      message: "Averages can't be added up: Avg order value is worked out on each row of monthly_revenue, so it can't be summed. Use Min avg order value or Max avg order value, or group by month to show it as it is.",
-    }]);
-    expect(validateTileQuery(monthly(), { dimensions: [], measures: [{ measure: 'max_avg_order_value' }] }).outcome).toBe('adapted');
-    // Totals add rows up as well.
-    expect(validateTileQuery(monthly(), { dimensions: [{ field: 'month', timeGrain: 'month' }], measures: [{ measure: 'avg_order_value' }], rollups: [[]] }).outcome).toBe('rejected');
+    expect(kpi).toEqual({ outcome: 'covered', diagnostics: [], adaptations: [], oneRowPerGroup: { measures: ['avg_order_value'] } });
+    expect(savedQueryCombinedRowsMessage(monthly().result!, 'avg_order_value', 12)).toBe(
+      "Averages can't be added up: Avg order value is worked out on each row of monthly_revenue, and this tile puts 12 of them together. Use Min avg order value or Max avg order value, or group by month to show each row as it is.",
+    );
+    expect(validateTileQuery(monthly(), { dimensions: [], measures: [{ measure: 'max_avg_order_value' }] })).toMatchObject({ outcome: 'adapted' });
+    expect(validateTileQuery(monthly(), { dimensions: [], measures: [{ measure: 'max_avg_order_value' }] }).oneRowPerGroup).toBeUndefined();
+    // Totals add rows up as well, so the run checks their rows too.
+    expect(validateTileQuery(monthly(), { dimensions: [{ field: 'month', timeGrain: 'month' }], measures: [{ measure: 'avg_order_value' }], rollups: [[]] }).oneRowPerGroup).toEqual({ measures: ['avg_order_value'] });
     // A calculation that reads the average is checked the same way.
     expect(validateTileQuery(monthly(), {
       dimensions: [],
       measures: [{ measure: 'gross_revenue' }],
       calculations: [{ id: 'per_order', expr: { op: '/', left: { measure: 'avg_order_value' }, right: { number: 2 } } }],
-    }).outcome).toBe('rejected');
+    }).oneRowPerGroup).toEqual({ measures: ['avg_order_value'] });
   });
 
   it('rolls a plain row query up whenever it groups, and counts its rows', () => {
@@ -303,13 +303,15 @@ describe('per-unit averages and totals that count (new-user test V9)', () => {
     expect(ppg.fields.find((field): field is DatasetMeasureField => field.kind === 'measure' && field.name === 'POINTS_PER_GAME')).toMatchObject({ aggregation: 'max', additivity: { entities: 'non_additive' } });
   });
 
-  it('refuses the first-click KPI instead of adding the two averages up, and shows them by game type as they are', () => {
+  it('never adds the two averages up in a first-click KPI, and shows them by game type as they are', () => {
+    // The KPI's one group holds both rows: the run refuses it with this message.
     const kpi = validateTileQuery(ppg, { dimensions: [], measures: [{ measure: 'POINTS_PER_GAME' }] });
-    expect(kpi.outcome).toBe('rejected');
-    expect(kpi.diagnostics[0]).toMatchObject({ code: 'NON_ADDITIVE_RESULT_ROLLUP' });
-    expect(kpi.diagnostics[0]!.message).toContain("Averages can't be added up: Points per game is worked out on each row");
-    expect(kpi.diagnostics[0]!.message).toContain('or group by game type to show it as it is');
-    expect(validateTileQuery(ppg, { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] }).outcome).toBe('covered');
+    expect(kpi.oneRowPerGroup).toEqual({ measures: ['POINTS_PER_GAME'] });
+    const message = savedQueryCombinedRowsMessage(ppg.result!, 'points_per_game', 2);
+    expect(message).toContain("Averages can't be added up: Points per game is worked out on each row");
+    expect(message).toContain('this tile puts 2 of them together');
+    expect(message).toContain('or group by game type to show each row as it is');
+    expect(validateTileQuery(ppg, { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] })).toEqual({ outcome: 'covered', diagnostics: [], adaptations: [] });
   });
 
   it('reads "total X" as a count of X, not money, unless X names money', () => {
@@ -329,5 +331,37 @@ describe('per-unit averages and totals that count (new-user test V9)', () => {
     expect(format('total_amount')).toBe('currency');
     expect(format('order_total')).toBe('currency');
     expect(format('net_revenue')).toBe('currency');
+  });
+});
+
+describe('averages shown as they are when ZLens cannot read the grouping (new-user test V10)', () => {
+  // The tester's certified Ask saved query makes GAME_TYPE with a CASE
+  // expression and ends in Ask's LIMIT 501, so its SQL names no grouping.
+  // V10 refused every tile of POINTS_PER_GAME, and a published App's bar of
+  // it by game type, certified in V9, showed Blocked.
+  const ppg = savedQueryResultDescriptor({
+    sourceId: 'app:block:nba:ppg',
+    sourceRevision: 'sha256:rev1',
+    savedQuery: 'warriors_ppg_regular_vs_playoffs_2016',
+    qualifiedId: 'nba::block::warriors_ppg_regular_vs_playoffs_2016',
+    domain: 'nba',
+    certified: true,
+    lifecycle: 'certified',
+    columns: [{ name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'POINTS_PER_GAME', type: 'DOUBLE' }, { name: 'TOTAL_POINTS', type: 'BIGINT' }],
+    groupBy: [],
+    typesFrom: 'run',
+    keepsFirstRows: 501,
+  })!;
+
+  it('runs a bar of the average by game type as the rows are, certified, and checks one row per bar when it runs', () => {
+    const bar = validateTileQuery(ppg, { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }, { measure: 'TOTAL_POINTS' }] });
+    expect(bar).toEqual({ outcome: 'covered', diagnostics: [], adaptations: [], oneRowPerGroup: { measures: ['POINTS_PER_GAME'] } });
+    expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: bar } })?.state).toBe('certified');
+    // With no grouping to name, the refusal says what a group needs.
+    expect(savedQueryCombinedRowsMessage(ppg.result!, 'POINTS_PER_GAME', 2)).toBe(
+      "Averages can't be added up: Points per game is worked out on each row of warriors_ppg_regular_vs_playoffs_2016, and this tile puts 2 of them together. Use Min points per game or Max points per game, or group by a column that is different on each row to show each row as it is.",
+    );
+    // A tile of numbers that add up is rolled up as before.
+    expect(validateTileQuery(ppg, { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'TOTAL_POINTS' }] }).adaptations[0]?.kind).toBe('saved_query_rollup');
   });
 });

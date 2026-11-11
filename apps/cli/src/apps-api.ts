@@ -3780,7 +3780,7 @@ async function bindServerResolvedDatasetSourceOperations(
   const authoritativeCandidate = presentationUpdates.length > 0
     ? applyAppBuildDraftOperations(draft, draft.revision, canonicalOperations)
     : candidate;
-  const contractErrors = datasetDraftContractErrors(authoritativeCandidate, records);
+  const contractErrors = datasetDraftContractErrors(authoritativeCandidate, records, draft);
   if (contractErrors.length > 0) throw new Error(contractErrors[0]!);
   const authorityErrors = await datasetDraftCurrentAuthorityErrors(projectRoot, authoritativeCandidate, 'local_preview', resolver);
   if (authorityErrors.length > 0) throw new Error(authorityErrors[0]!);
@@ -3850,8 +3850,26 @@ function canonicalizeDatasetTilePresentation(
 function datasetDraftContractErrors(
   draft: AppBuildDraft,
   records: Map<string, AppSourceCatalogRecord>,
+  /**
+   * The stored draft the edit starts from. A tile the edit leaves exactly as
+   * it was is not checked again (V10 retest): when an upgrade's rule refused
+   * an old tile, every edit failed on it, adding a tile looked like a failed
+   * add, and the App could not be repaired in place. The page run, preflight
+   * and publish still check every tile.
+   */
+  base?: AppBuildDraft,
 ): string[] {
   const errors: string[] = [];
+  const sourceCard = (from: AppBuildDraft | undefined, sourceId: string) => JSON.stringify(from?.sources.find((source) => source.id === sourceId)?.capabilities?.dataset?.contractRef ?? null);
+  const unchanged = (pageId: string, tile: AppBuildDraft['pages'][number]['layout']['items'][number]): boolean => {
+    const before = base?.pages.find((page) => page.id === pageId)?.layout.items.find((item) => item.i === tile.i);
+    if (!before?.query || !tile.sourceId) return false;
+    return before.sourceId === tile.sourceId
+      && before.sourceRevision === tile.sourceRevision
+      && before.viz?.type === tile.viz?.type
+      && JSON.stringify(before.query) === JSON.stringify(tile.query)
+      && sourceCard(base, tile.sourceId) === sourceCard(draft, tile.sourceId);
+  };
   for (const page of draft.pages) {
     const bindingById = new Map((page.datasets ?? []).map((binding) => [binding.id, binding]));
     for (const tile of page.layout.items) {
@@ -3865,6 +3883,7 @@ function datasetDraftContractErrors(
         errors.push(`APP_BUILD_DATASET_BINDING_REQUIRED: ${page.id}/${tile.i} requires an exact current Dataset page binding.`);
         continue;
       }
+      if (unchanged(page.id, tile)) continue;
       const validation = validateTileQuery(descriptor, tile.query);
       if (!tileQueryValidationRuns(validation)) {
         const detail = validation.diagnostics.map((diagnostic) => diagnostic.message).join(' ');

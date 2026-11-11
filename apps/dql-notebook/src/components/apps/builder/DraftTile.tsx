@@ -68,7 +68,12 @@ type PreviewState =
   | { state: 'idle' }
   | { state: 'running' }
   | { state: 'ready'; result: QueryResult; ms: number; reviewJoin?: boolean; key: string }
-  | { state: 'failed'; message: string };
+  | { state: 'failed'; message: string }
+  // Ran, and refused: a group would combine rows of an average (V10 retest).
+  | { state: 'refused'; message: string; key: string };
+
+/** The run refused the tile because a group would combine rows of an average. */
+export const AVERAGES_COMBINED_CODE = 'NON_ADDITIVE_RESULT_ROLLUP';
 
 /**
  * Units for the preview columns, from the Dataset contract: the added tile
@@ -134,6 +139,7 @@ export function DatasetQueryPreview({
   onStatus,
   encoding,
   onResult,
+  onRefusal,
 }: {
   sourceId?: string;
   descriptor?: DatasetDescriptor;
@@ -147,6 +153,8 @@ export function DatasetQueryPreview({
   encoding?: DashboardVizEncoding;
   /** The settled result, or undefined while none matches the query. */
   onResult?: (result: QueryResult | undefined) => void;
+  /** Why the run refused this query (it would combine rows of an average), or undefined. */
+  onRefusal?: (message: string | undefined) => void;
 }): JSX.Element {
   const [preview, setPreview] = useState<PreviewState>({ state: 'idle' });
   const [barShowAll, setBarShowAll] = useState(false);
@@ -169,7 +177,9 @@ export function DatasetQueryPreview({
       void api.previewDatasetTileQuery({ sourceId, query: runQuery }, controller.signal).then((response: DatasetTileQueryPreview) => {
         if (ticket !== latest.current) return;
         if (!response.ok) {
-          setPreview({ state: 'failed', message: response.error || 'This field query did not return a result.' });
+          setPreview(response.diagnostics?.includes(AVERAGES_COMBINED_CODE) && response.error
+            ? { state: 'refused', message: response.error, key }
+            : { state: 'failed', message: response.error || 'This field query did not return a result.' });
           return;
         }
         const rows = response.result?.rows ?? [];
@@ -195,7 +205,7 @@ export function DatasetQueryPreview({
   // A result for an earlier query is never drawn as this one (round 3): a KPI's
   // single total drawn as a line read "1 row" with its total on the x-axis
   // until the new run came back. Until the result matches, it is running.
-  const current: PreviewState = preview.state === 'ready' && preview.key !== key ? { state: 'running' } : preview;
+  const current: PreviewState = (preview.state === 'ready' || preview.state === 'refused') && preview.key !== key ? { state: 'running' } : preview;
   useEffect(() => {
     if (!onStatus) return;
     if (current.state === 'ready') {
@@ -204,11 +214,18 @@ export function DatasetQueryPreview({
       onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${current.ms} ms${current.reviewJoin ? ' · Not certified yet: it uses a join nobody has certified' : ''}`, 'ok');
     } else if (current.state === 'running') onStatus('Running…', 'idle');
     else if (current.state === 'failed') onStatus('Run failed', 'error');
+    else if (current.state === 'refused') onStatus('Not runnable yet', 'error');
   }, [current.state, current.state === 'ready' ? current.key : '', preview]);
   useEffect(() => {
     onResult?.(current.state === 'ready' ? current.result : undefined);
   }, [current.state, current.state === 'ready' ? current.key : '', preview]);
+  const refusal = current.state === 'refused' ? current.message : undefined;
+  useEffect(() => {
+    onRefusal?.(refusal);
+  }, [refusal]);
+  useEffect(() => () => onRefusal?.(undefined), []);
   if (current.state === 'failed') return <div className="draft-empty warn"><strong>This query did not run</strong><span>{current.message}</span></div>;
+  if (current.state === 'refused') return <div className="draft-empty warn"><strong>Not runnable yet</strong><span>{current.message}</span></div>;
   if (current.state !== 'ready') return <div className="draft-empty loading"><span>{sourceId && runnable ? 'Running against live data…' : 'Runs when applied'}</span></div>;
   const shelved = { query, viz: { type: visualization, ...(encoding ? { encoding } : {}) } };
   const shown = encodedTileResult(shelved, current.result);
@@ -232,12 +249,15 @@ export function DraftTileCard({
   draft,
   themeMode,
   onResult,
+  onRefusal,
 }: {
   sourceId?: string;
   descriptor: DatasetDescriptor;
   draft: DraftTileState;
   themeMode: ThemeMode;
   onResult?: (result: QueryResult | undefined) => void;
+  /** Why the run refused the tile (it would combine rows of an average). */
+  onRefusal?: (message: string | undefined) => void;
 }): JSX.Element {
   const [status, setStatus] = useState<{ text: string; tone: 'ok' | 'error' | 'idle' }>({ text: 'Starting…', tone: 'idle' });
   const blocker = draftTileBlocker(descriptor, draft);
@@ -255,7 +275,7 @@ export function DraftTileCard({
         ? <div className="draft-empty"><Plus size={20} /><strong>Pick a measure to start</strong><span>Click a measure in the Data panel. The tile runs as soon as it has one value.</span></div>
         : blocker
           ? <div className="draft-empty warn"><strong>Not runnable yet</strong><span>{blocker}</span></div>
-          : <DatasetQueryPreview sourceId={sourceId} descriptor={descriptor} query={draft.query} visualization={visualization} encoding={draft.encoding} themeMode={themeMode} onStatus={(text, tone) => setStatus({ text, tone })} onResult={onResult} />}
+          : <DatasetQueryPreview sourceId={sourceId} descriptor={descriptor} query={draft.query} visualization={visualization} encoding={draft.encoding} themeMode={themeMode} onStatus={(text, tone) => setStatus({ text, tone })} onResult={onResult} onRefusal={onRefusal} />}
     </div>
   </article>;
 }
@@ -270,6 +290,7 @@ export function DraftTileInspector({
   onCancel,
   onAdd,
   result,
+  refusal,
 }: {
   descriptor: DatasetDescriptor;
   datasetLabel: string;
@@ -280,8 +301,10 @@ export function DraftTileInspector({
   onAdd: () => void;
   /** The draft's live preview result, for Show Me. */
   result?: QueryResult;
+  /** Why its run refused the draft (it would combine rows of an average). */
+  refusal?: string;
 }): JSX.Element {
-  const blocker = draftTileBlocker(descriptor, draft);
+  const blocker = draftTileBlocker(descriptor, draft) ?? refusal;
   const [moreOpen, setMoreOpen] = useState(false);
   const [filterField, setFilterField] = useState<string | undefined>();
   const isTime = descriptorTimeField(descriptor);

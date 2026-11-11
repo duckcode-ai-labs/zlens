@@ -69,7 +69,7 @@ describe('A saved query has fields; Make row-level is under ⋯ (design D1)', ()
     expect(markup).toContain('Gross Revenue');
     expect(markup).toContain('Month');
     expect(markup).toContain('Count Of Rows');
-    expect(markup).toContain('Grouped by its own columns, values show as they are');
+    expect(markup).toContain('Where each bar or row holds one of its rows, values show as they are');
     expect(markup).toContain('aria-label="More for Monthly Revenue"');
     expect(markup).not.toContain('Add as it is');
     expect(markup).not.toContain('Saved queries have no fields');
@@ -80,6 +80,14 @@ describe('A saved query has fields; Make row-level is under ⋯ (design D1)', ()
     const off = renderToStaticMarkup(<DataPanel {...panel} active={appData[2]!} datasetTilesEnabled={false} />);
     expect(off).toContain('Add as it is');
     expect(off).not.toContain('<h3>Measures</h3>');
+  });
+
+  it('labels an average "as is", never "max", next to a note that says averages are never added up (new-user test V10)', () => {
+    const markup = renderToStaticMarkup(<DataPanel {...panel} active={appData[2]!} />);
+    expect(markup).toContain('<span class="name">Avg Order Value</span><span class="meta">as is</span>');
+    expect(markup).toContain('<span class="name">Max Avg Order Value</span><span class="meta">max</span>');
+    expect(markup).toContain('<span class="name">Gross Revenue</span><span class="meta">sum</span>');
+    expect(markup).toContain('Averages and rates are never added up');
   });
 
   it('reads a saved query\'s columns, and adds it as it is only when they can\'t be read', () => {

@@ -3055,7 +3055,13 @@ export type DatasetTileQueryPreview =
     /** A name grouped without a key ZLens knows: it may merge namesakes. */
     nameWarnings?: Array<{ field: string; entity: string; message: string }>;
   }
-  | { ok: false; error?: string; validation?: { outcome: string } };
+  | {
+    ok: false;
+    error?: string;
+    validation?: { outcome: string };
+    /** Why it did not run, as codes: `NON_ADDITIVE_RESULT_ROLLUP` when it would combine rows of an average. */
+    diagnostics?: string[];
+  };
 
 /** Response from the server-owned review-draft save path. SQL and rows never
  * cross this App Studio boundary. */

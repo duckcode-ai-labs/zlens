@@ -55,7 +55,7 @@ import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
 import { ReaderPreviewParts } from './ReaderPreviewParts';
 import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
-import { NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords, studioErrorWords } from './app-studio-words';
+import { NO_UNPUBLISHED_CHANGES, TILE_ADDED_FOLLOW_UP_FAILED, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords, studioErrorWords } from './app-studio-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -425,6 +425,9 @@ export function manualLaunchLabel(template: StudioTemplate): string {
  */
 export const UNTITLED_APP_NAME = 'Untitled Analytics App';
 
+/** The add saved the tile; the save after it (chart, place, story spot) failed. */
+class TileAddedFollowUpError extends Error {}
+
 /** The name a new App starts with: what the author typed, else the manual default. Quick start names it after its Domain later. */
 export function launchAppName(config: Pick<AppStudioLaunchConfig, 'mode' | 'name'>): string {
   if (config.mode === 'ai') return '';
@@ -723,6 +726,8 @@ export function AppStudioV2({
   /** A tile being built from fields; it lives on the canvas until added or cancelled. */
   const [draftTile, setDraftTile] = useState<DraftTileState | null>(null);
   const [draftResult, setDraftResult] = useState<QueryResult | undefined>();
+  // Why the new tile's run refused it (it would combine rows of an average): Add stays off.
+  const [draftRefusal, setDraftRefusal] = useState<string | undefined>();
   /** App data the author picked in the Data panel (a selected tile's Dataset wins). */
   const [chosenDatasetKey, setChosenDatasetKey] = useState<string | null>(null);
   /** Page shown on the canvas while an AI proposal is open (it may be a proposed new page). */
@@ -2098,10 +2103,23 @@ export function AppStudioV2({
               followUp.push({ type: 'set_narrative', pageId: activePage.id, narrative: { ...composedPage.narrative, blocks: [...composedPage.narrative.blocks, { id: `b${n}`, kind: 'tile', tileId: addedTile.i }] } });
             }
           }
+          // The tile is saved: from here on every save starts from this
+          // revision, even if the follow-up below fails (V10 retest: the next
+          // Remove said "This App changed in another tab").
+          latestDraftRef.current = result.draft;
+          setDraft(result.draft);
           if (followUp.length) {
             // Same undo step as the add.
-            const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
-            result = { ...result, draft: patched.draft };
+            try {
+              const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
+              result = { ...result, draft: patched.draft };
+            } catch (cause) {
+              // Added, but its chart, place or story spot was not saved: say
+              // that, and never offer a retry that would add it twice.
+              setUndoStack((items) => [...items.slice(-29), previous]);
+              setRedoStack([]);
+              throw new TileAddedFollowUpError(messageOf(cause));
+            }
           }
           // The new tile is scrolled into view wherever it landed (round 3).
           if (addedTileId) revealTile(addedTileId);
@@ -2135,6 +2153,12 @@ export function AppStudioV2({
         return true;
       } catch (cause) {
         const message = messageOf(cause);
+        if (cause instanceof TileAddedFollowUpError) {
+          setSavedMessage(TILE_ADDED_FOLLOW_UP_FAILED);
+          setError(`${TILE_ADDED_FOLLOW_UP_FAILED}: ${message}`);
+          setSourceFeedback(null);
+          return true;
+        }
         setSavedMessage('Compose failed');
         setSourceFeedback({ sourceId, status: 'error', view, pageTitle: activePage.metadata.title, message });
         setError(message);
@@ -4140,18 +4164,18 @@ export function AppStudioV2({
             </div> : null}
             {projectedPage ? <div className={`proposal-banner ${proposalSummaryText(projectedPage).removed ? 'warn' : ''}`} role="status"><Sparkles size={14} /><span><strong>{planWords.bannerLabel}</strong> · {proposalSummaryText(projectedPage).text}. Nothing is saved until you apply.</span></div> : null}
             {/* A report or custom layout shows the tile being built above it; Add to page puts it at the end. */}
-            {(canvasMode || storyMode) && editing && draftTile && activeDescriptor ? <div className="studio-draft-slot"><DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} /></div> : null}
+            {(canvasMode || storyMode) && editing && draftTile && activeDescriptor ? <div className="studio-draft-slot"><DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} onRefusal={setDraftRefusal} /></div> : null}
             {canvasMode ? canvasArea : storyMode ? storyArea : <>
             {/* On the placed grid the tile being built sits above the page, where
                 it is seen first, instead of taking an automatic cell below it. */}
-            {placedGrid && editing && draftTile && activeDescriptor ? <div className="studio-draft-slot"><DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} /></div> : null}
+            {placedGrid && editing && draftTile && activeDescriptor ? <div className="studio-draft-slot"><DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} onRefusal={setDraftRefusal} /></div> : null}
             <div
               ref={gridRef}
               className={`studio-page-grid ${placedGrid ? 'placed' : ''} ${gesture ? 'arranging' : ''}`}
               style={placedGrid ? { gridAutoRows: `${rowPx}px` } : undefined}
               aria-describedby={canArrange && visibleItems.length ? 'studio-canvas-keys' : undefined}
             >
-              {!placedGrid && editing && draftTile && activeDescriptor ? <DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} /> : null}
+              {!placedGrid && editing && draftTile && activeDescriptor ? <DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} onRefusal={setDraftRefusal} /> : null}
               {projectedPage ? projectedPage.items.map((item) => item.change === 'added' || item.change === 'updated'
                 ? <ProposedTileCard
                   key={item.tile.i}
@@ -4219,7 +4243,7 @@ export function AppStudioV2({
       </aside> : null}
       {rightPane === 'draft' && draftTile && activeDescriptor && activeDatasetItem ? <aside className="studio-right" aria-label="New tile">
         <header><div><small>NEW TILE</small><strong>Built from {humanize(activeDatasetItem.name)}</strong></div><button type="button" className="ghost-icon" onClick={() => setDraftTile(null)} aria-label="Cancel new tile"><X size={16} /></button></header>
-        <DraftTileInspector descriptor={activeDescriptor} datasetLabel={humanize(activeDatasetItem.name)} draft={draftTile} disabled={busy} onChange={(next) => setDraftTile((current) => withDraftSortDefault(activeDescriptor, current, next))} onCancel={() => setDraftTile(null)} onAdd={() => void commitDraftTile()} result={draftResult} />
+        <DraftTileInspector descriptor={activeDescriptor} datasetLabel={humanize(activeDatasetItem.name)} draft={draftTile} disabled={busy} onChange={(next) => setDraftTile((current) => withDraftSortDefault(activeDescriptor, current, next))} onCancel={() => setDraftTile(null)} onAdd={() => void commitDraftTile()} result={draftResult} refusal={draftRefusal} />
       </aside> : null}
       {rightPane === 'inspector' || rightPane === 'settings' ? <aside className={`studio-right ${selectedTile ? 'has-selection' : ''}`} aria-label={selectedTile ? 'Tile settings' : 'App settings'}>
         <header><div><small>{selectedTile ? tileKindLabel(selectedTile) : 'APP'}</small><strong>{selectedTile ? 'Tile settings' : 'App settings'}</strong></div><button type="button" className="ghost-icon" onClick={() => { setSelectedTileId(null); setSettingsOpen(false); }} aria-label={selectedTile ? 'Close tile settings' : 'Close App settings'}><X size={16} /></button></header>

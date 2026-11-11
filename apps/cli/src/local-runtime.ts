@@ -712,7 +712,7 @@ import { editionFingerprint, followsPage, homePersonKey, movedOnPage, pageFigure
 import { addPageMonitor, listPageMonitors, MonitorStoreError, removePageMonitor } from './schedule/app-monitor-store.js';
 import { loadOrCreateSnapshotKey, localSnapshotSigner, readSnapshotPublicKey, signSnapshotWith, snapshotBodyIssues, snapshotFigures, snapshotFileName, verifySnapshot } from './snapshot/app-snapshot.js';
 import { dashboardDriverProbeItem, dashboardExploreProbeItem, expandDashboardDriverItems, foldDashboardDriverTiles, withDriverFilterScopes } from './datasets/dashboard-drivers.js';
-import { compileDatasetTileQuery, sourceColumnReference, type CompiledDatasetTileQuery } from './datasets/tile-query-compiler.js';
+import { compileDatasetTileQuery, datasetTileRowsAsTheyAre, sourceColumnReference, type CompiledDatasetTileQuery } from './datasets/tile-query-compiler.js';
 import { decorateDatasetDescriptor, joinableTables, joinRepeatsKeyMessage, joinUniquenessSql, readDbtArtifacts, relatedTablesContext, type RelatedTablesContext } from './datasets/related-tables.js';
 import { joinCertifyDecision, nextRelationshipId, savedQueryReview, type RowKeyCheck } from './datasets/inline-certify.js';
 import { summarizeDatasetChartFacts } from './datasets/dataset-chart-fact-summary.js';
@@ -23820,7 +23820,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   datasetQueryExecutions.set(queryExecutionKey, queryExecution);
                 }
                 const execution = await queryExecution;
-                const datasetResult = decorateDatasetResult(execution.result, descriptor, effectiveDatasetQuery);
+                // An average shown as it is: refused when a group combined rows (V10 retest).
+                const datasetResult = decorateDatasetResult(datasetTileRowsAsTheyAre(compiled, descriptor, execution.result), descriptor, effectiveDatasetQuery);
                 const tileExecutionFingerprint = fingerprintDashboardRuntimeState({
                   runInput: datasetRunInputFingerprint,
                   snapshotId: runSnapshot.snapshotId,

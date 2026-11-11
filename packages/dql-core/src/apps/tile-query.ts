@@ -195,6 +195,12 @@ export interface TileQueryValidation {
   outcome: TileQueryValidationOutcome;
   diagnostics: TileQueryDiagnostic[];
   adaptations: TileQueryAdaptation[];
+  /**
+   * Averages or ratios of a saved query's result this tile shows as they are
+   * only if each of its groups holds one result row. The run checks it and
+   * refuses the tile when a group holds more (V10 retest).
+   */
+  oneRowPerGroup?: { measures: string[] };
 }
 
 /**
@@ -203,6 +209,15 @@ export interface TileQueryValidation {
  */
 export function tileQueryValidationRuns(validation: Pick<TileQueryValidation, 'outcome'> | undefined): boolean {
   return validation?.outcome === 'covered' || validation?.outcome === 'adapted';
+}
+
+/**
+ * Whether a validated tile runs whatever rows its source returns: it runs,
+ * and no run-time check of one row per group (an average shown as it is)
+ * can refuse it. A planner that proposes tiles nobody has seen run uses this.
+ */
+export function tileQueryRunsWhateverTheRows(validation: Pick<TileQueryValidation, 'outcome' | 'oneRowPerGroup'> | undefined): boolean {
+  return tileQueryValidationRuns(validation) && !validation?.oneRowPerGroup;
 }
 
 export type DatasetHierarchyDrillResult =
@@ -493,6 +508,7 @@ export function validateTileQuery(descriptor: DatasetDescriptor, query: TileQuer
   for (const blocked of savedQueryRollup.blocked) {
     diagnostics.push({ code: 'NON_ADDITIVE_RESULT_ROLLUP', field: blocked.measure, message: blocked.message });
   }
+  const oneRowPerGroup = savedQueryRollup.oneRowPerGroup ? { oneRowPerGroup: savedQueryRollup.oneRowPerGroup } : {};
   if (diagnostics.length > 0) return { outcome: 'rejected', diagnostics, adaptations: [] };
   if (needsReview.length > 0) return { outcome: 'needs_review', diagnostics: needsReview, adaptations: [] };
   // Every rollup check above passed, so re-aggregating an aggregate Dataset is
@@ -523,7 +539,7 @@ export function validateTileQuery(descriptor: DatasetDescriptor, query: TileQuer
       message: `Re-aggregated above the Dataset's ${descriptor.grain.keyFields.join(', ')} grain.`,
     });
   }
-  return { outcome: adaptations.length > 0 ? 'adapted' : 'covered', diagnostics: [], adaptations };
+  return { outcome: adaptations.length > 0 ? 'adapted' : 'covered', diagnostics: [], adaptations, ...oneRowPerGroup };
 }
 
 /**

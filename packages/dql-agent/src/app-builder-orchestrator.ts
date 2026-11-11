@@ -11,7 +11,7 @@ import {
   datasetPhysicalFields,
   normalizeTileQuery,
   tileQueryOutputAliases,
-  tileQueryValidationRuns,
+  tileQueryRunsWhateverTheRows,
   validateTileQuery,
 } from '@zlens/core';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
@@ -1123,7 +1123,9 @@ function normalizedDatasetQuery(
   role: AppBuilderComponentRole,
 ): TileQuery | undefined {
   const supplied = normalizeTileQuery(raw);
-  if (supplied && tileQueryValidationRuns(validateTileQuery(descriptor, supplied))) return supplied;
+  // A proposed tile must run whatever rows come back (V10 retest): an average
+  // the run would refuse for combining rows is never proposed.
+  if (supplied && tileQueryRunsWhateverTheRows(validateTileQuery(descriptor, supplied))) return supplied;
   return deterministicDatasetQuery(descriptor, requirement, role);
 }
 
@@ -1192,7 +1194,7 @@ export function deterministicDatasetQuery(
   for (const measure of measures) {
     for (const dimensions of groupings(measure.name)) {
       const query: TileQuery = { dimensions, measures: [{ measure: measure.name }] };
-      if (tileQueryValidationRuns(validateTileQuery(descriptor, query))) return query;
+      if (tileQueryRunsWhateverTheRows(validateTileQuery(descriptor, query))) return query;
     }
   }
   return undefined;

@@ -41,6 +41,13 @@ export function rowCountWords(rows: number): string {
 export const CHANGED_IN_ANOTHER_TAB = 'This App changed in another tab. Refresh to review the latest version.';
 
 /**
+ * A tile was added, but the save of its chart, place or story spot that
+ * follows did not go through (V10 retest: this read "Compose failed" for a
+ * tile that was on the page).
+ */
+export const TILE_ADDED_FOLLOW_UP_FAILED = 'Tile added, but its chart settings or place were not saved';
+
+/**
  * What App Studio says when the App could not move to a newer version of its
  * data (R03): what did not happen and what to do, by the data's name. The
  * reason, with any ids, goes under Technical details.

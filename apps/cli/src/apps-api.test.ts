@@ -1052,6 +1052,59 @@ describe('Apps command center API helpers', () => {
     }
   });
 
+  it('never refuses an edit because of a tile the edit leaves as it was (new-user test V10)', async () => {
+    // V10 retest: an upgrade's rule refused an old tile. Adding a tile then read
+    // "Compose failed" (its follow-up save checked the old tile), although the
+    // tile was added, and the App could not be repaired in place.
+    const root = createProject();
+    const sourceId = 'app:block:commerce:orders';
+    const revision = 'sha256:orders-current';
+    const contract = 'sha256:orders-contract';
+    const catalog = publishedDatasetCatalogRecord(sourceId, 'block', revision, publishedDatasetDescriptor(sourceId, 'block', revision, contract));
+    const page = publishedDatasetPage({
+      id: 'overview',
+      title: 'Orders',
+      sourceId,
+      sourceRevision: revision,
+      contractFingerprint: contract,
+      tileId: 'old',
+      tileTitle: 'Old tile',
+      // Valid when it was saved; the current rules refuse it.
+      query: { dimensions: [], measures: [{ measure: 'retired_revenue' }], respectsGlobalFilters: true },
+      viz: 'kpi',
+    });
+    const initial = createStoredAppBuildDraft(root, { name: 'Orders', goal: 'Orders', authoringMode: 'manual', sourcePolicy: 'include_review_required', template: 'blank' });
+    const stored: AppBuildDraft = { ...initial, sources: [publishedDatasetDraftSource(catalog)], pages: [page] };
+    const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+    try {
+      storage.saveAppBuildDraft(stored);
+    } finally {
+      storage.close();
+    }
+    const sourceAuthority = async () => [catalog];
+    const patch = (revisionNumber: number, operations: unknown[]) => invokeAppsApi(root, `/api/app-builds/${stored.id}`, 'PATCH', { expectedRevision: revisionNumber, operations }, { resolveDatasetSourceAuthority: sourceAuthority });
+    const newTile = { ...page.layout.items[0]!, i: 'new', y: 4, title: 'Revenue', query: { dimensions: [], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true } };
+
+    const added = await patch(stored.revision, [{ type: 'add_tile', pageId: 'overview', tile: newTile }]);
+    expect(added, JSON.stringify(added.payload)).toMatchObject({ handled: true, status: 200 });
+    let draft = (added.payload as any).draft as AppBuildDraft;
+    expect(draft.pages[0]!.layout.items.map((item) => item.i)).toEqual(['old', 'new']);
+    // Moving the new tile and renaming the old one leave the old query as it was.
+    const moved = await patch(draft.revision, [
+      { type: 'update_tile', pageId: 'overview', tileId: 'new', patch: { x: 6, y: 0 } },
+      { type: 'update_tile', pageId: 'overview', tileId: 'old', patch: { title: 'Old revenue' } },
+    ]);
+    expect(moved, JSON.stringify(moved.payload)).toMatchObject({ handled: true, status: 200 });
+    draft = (moved.payload as any).draft as AppBuildDraft;
+    // A change to the old tile's query is still checked.
+    const edited = await patch(draft.revision, [{ type: 'update_tile', pageId: 'overview', tileId: 'old', patch: { query: { dimensions: [], measures: [{ measure: 'retired_revenue' }], respectsGlobalFilters: false } } }]);
+    expect(edited).toMatchObject({ handled: true, status: 400 });
+    expect((edited.payload as any).error).toContain('APP_BUILD_DATASET_QUERY_REJECTED: overview/old');
+    const removed = await patch(draft.revision, [{ type: 'remove_tile', pageId: 'overview', tileId: 'old' }]);
+    expect(removed, JSON.stringify(removed.payload)).toMatchObject({ handled: true, status: 200 });
+    expect(((removed.payload as any).draft as AppBuildDraft).pages[0]!.layout.items.map((item) => item.i)).toEqual(['new']);
+  });
+
   it('reads apps.requireCertifiedToPublish fresh from dql.config.json for the publish dialog (T3)', async () => {
     const root = createProject();
     expect((await invokeAppsApi(root, '/api/apps/settings', 'GET', {})).payload).toEqual({ ok: true, requireCertifiedToPublish: false });
