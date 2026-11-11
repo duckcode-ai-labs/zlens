@@ -57,6 +57,8 @@ export function AppShell() {
     lineageFullscreen: store.lineageFullscreen,
     mainView: store.mainView,
     askTraceRunId: store.askTraceRunId,
+    agentLogRun: store.agentLogRun,
+    agentLogFromView: store.agentLogFromView,
     newBlockModalOpen: store.newBlockModalOpen,
     newNotebookModalOpen: store.newNotebookModalOpen,
     setupOpen: store.setupOpen,
@@ -336,6 +338,7 @@ export function AppShell() {
             flexDirection: 'column',
             overflow: 'hidden',
             minWidth: 0,
+            position: 'relative',
           }}
         >
           <Suspense fallback={<PageLoading t={t} />}>
@@ -376,13 +379,6 @@ export function AppShell() {
                 ) : null}
                 <AppsView />
               </>
-            ) : state.mainView === 'agent_log' ? (
-              <FullPageSection
-                title="Agent steps"
-                description="What the agent did to answer this question, and where the time went — route, tools, checks, and per-step timing."
-              >
-                <AgentLogPage />
-              </FullPageSection>
             ) : state.mainView === 'host_page' ? (
               <HostPageView />
             ) : state.mainView === 'ask_observability' ? (
@@ -405,6 +401,20 @@ export function AppShell() {
               </>
             )}
           </Suspense>
+          {/* "How it was answered" from an AI chat outside Ask opens OVER the
+              view it came from, so "Back" leaves that view as it was. */}
+          {state.agentLogRun && state.agentLogFromView === state.mainView ? (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 40, display: 'flex', flexDirection: 'column', background: t.appBg }}>
+              <Suspense fallback={<PageLoading t={t} />}>
+                <FullPageSection
+                  title="How it was answered"
+                  description="What ZLens did with this question, why it stopped if it did, and where the time went."
+                >
+                  <AgentLogPage />
+                </FullPageSection>
+              </Suspense>
+            </div>
+          ) : null}
         </div>
 
         {state.appMode === 'studio' && state.lineageDrawerOpen && !state.lineageFullscreen && !state.dashboardMode && (

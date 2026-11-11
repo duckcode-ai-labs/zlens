@@ -108,6 +108,7 @@ function readInitialAskTraceRunId(): string | undefined {
 const initialState: NotebookState = {
   mainView: initialAppLink ? 'apps' : readInitialMainView(),
   agentLogRun: undefined,
+  agentLogFromView: undefined,
   askTraceRunId: readInitialAskTraceRunId(),
   settingsTab: 'overview',
   themeMode: readInitialThemeMode(),
@@ -203,6 +204,25 @@ export function ensureUniqueCellIds(cells: Cell[]): Cell[] {
  * store definition below is tiny.
  */
 function notebookReducer(state: NotebookState, action: NotebookAction): NotebookState {
+  return withoutStaleAgentLog(state, reduceNotebook(state, action));
+}
+
+/**
+ * The steps page belongs to the view and document it was opened over. Moving
+ * to another view, notebook or App closes it, so it never reappears over
+ * something it does not describe.
+ */
+export function withoutStaleAgentLog(previous: NotebookState, next: NotebookState): NotebookState {
+  if (!next.agentLogRun) return next;
+  const moved = next.mainView !== previous.mainView
+    || next.activeFile?.path !== previous.activeFile?.path
+    || next.activeAppId !== previous.activeAppId
+    || next.activeAppDraftId !== previous.activeAppDraftId;
+  const opened = next.agentLogRun !== previous.agentLogRun;
+  return moved && !opened ? { ...next, agentLogRun: undefined, agentLogFromView: undefined } : next;
+}
+
+function reduceNotebook(state: NotebookState, action: NotebookAction): NotebookState {
   switch (action.type) {
     case 'SET_MAIN_VIEW':
       // A user leaving either trace catalog/detail through the normal Ask
@@ -258,7 +278,13 @@ function notebookReducer(state: NotebookState, action: NotebookAction): Notebook
         lineageReturnTarget: null,
       };
     case 'OPEN_AGENT_LOG':
-      return { ...state, agentLogRun: action.run, mainView: 'agent_log' };
+      // The steps open over the current view instead of replacing it: a
+      // notebook's AI chat is part of the notebook view and would close if the
+      // view changed (V11 tester: "Back to Ask AI" left the notebook).
+      return { ...state, agentLogRun: action.run, agentLogFromView: state.mainView };
+
+    case 'CLOSE_AGENT_LOG':
+      return { ...state, agentLogRun: undefined, agentLogFromView: undefined };
 
     case 'OPEN_ASK_TRACE': {
       if (typeof window !== 'undefined') {

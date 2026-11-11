@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REFUSAL_SENTENCES, containsInternalCode, explainAskRun, isAskPipelineReceipt, plainReason, plainRefs, rowCountWords, type RunExplanation } from './ask-run-explanation';
+import { REFUSAL_SENTENCES, containsInternalCode, explainAskRun, isAskPipelineReceipt, plainReason, plainRefs, rowCountWords, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
 
 const base = (overrides: Record<string, unknown>) => ({ version: 1, dispatches: [], tiers: [], candidates: [], refusals: [], story: [], timings: {}, ...overrides });
 
@@ -228,5 +228,46 @@ describe('a trace read by someone other than the asker (values withheld)', () =>
     expect(explanation.steps.find((step) => step.kind === 'warehouse')!.reason).toBe('About 2-10 rows.');
     expect(rowCountWords('none')).toBe('No rows');
     expect(rowCountWords('1')).toBe('1 row');
+  });
+});
+
+describe('config keys never reach a business reader (V11 tester)', () => {
+  // The exact detail the V11 tester saw under "Did not look for "Boston" in stored values".
+  const hostDetail = 'no text column of these tables is allowlisted for value search (agent.runtimeValueGrounding.searchSafeColumns); the AI chooses the field from names and descriptions';
+
+  it('says what the setting means instead of naming it', () => {
+    expect(withoutConfigHints(hostDetail)).toBe('Searching stored values is not turned on for these tables, so the AI chose the field from its name and description.');
+    expect(containsInternalCode(hostDetail)).toBe(true);
+    expect(containsInternalCode(withoutConfigHints(hostDetail))).toBe(false);
+  });
+
+  it('drops an aside or a sentence that names a setting, and keeps the rest', () => {
+    expect(withoutConfigHints('this project lists no tables Ask may read: warehouse modeling is on (modeling.mode in dql.config.json) and no warehouse catalog has been synced yet'))
+      .toBe('this project lists no tables Ask may read: warehouse modeling is on and no warehouse catalog has been synced yet');
+    expect(withoutConfigHints('Value lookup is disabled for this project. Enable agent.runtimeValueGrounding in dql.config.json to let DQL confirm a named value.'))
+      .toBe('Value lookup is disabled for this project.');
+    expect(withoutConfigHints('Set agent.resultReview.mode to on.')).toBe('A project setting that an admin controls is not turned on.');
+  });
+
+  it('leaves text without a config key, and SQL, exactly as they are', () => {
+    expect(withoutConfigHints('Did not look for "Boston" in stored values')).toBe('Did not look for "Boston" in stored values');
+    const sql = "SELECT agent.runtimeValueGrounding FROM t -- dql.config.json";
+    expect(withoutConfigHints(sql)).toBe(sql);
+    expect(plainRefs('the step failed (agent.valueProfile.include is empty)')).toBe('the step failed');
+  });
+
+  it('a stored run keeps its old detail, and "How it was answered" still shows it in words', () => {
+    const explanation = explainAskRun({
+      receipt: base({
+        reading: 'Playoff wins of the Boston Celtics in 2008.',
+        intent: { kind: 'analytics', reading: 'Playoff wins of the Boston Celtics in 2008.', unresolved: [] },
+        story: [{ phase: 'search', title: 'Did not look for "Boston" in stored values', state: 'missed', detail: hostDetail, at: 1 }],
+        failure: { stage: 'resolve', message: 'the reading could not be settled' },
+      }),
+      status: 'blocked',
+    }) as RunExplanation;
+    const read = explanation.steps.find((step) => step.kind === 'read')!;
+    expect(read.story).toEqual([expect.objectContaining({ title: 'Did not look for "Boston" in stored values', detail: 'Searching stored values is not turned on for these tables, so the AI chose the field from its name and description.' })]);
+    expect(JSON.stringify(explanation)).not.toMatch(/runtimeValueGrounding|searchSafeColumns|allowlisted/);
   });
 });
