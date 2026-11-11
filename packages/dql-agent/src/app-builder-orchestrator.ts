@@ -1098,8 +1098,11 @@ function normalizeComponents(
     // A Dataset card must always carry a validated, field-level query. Do not
     // fall back to a legacy block tile when its governed descriptor cannot
     // express the requested component. A saved query's result fields
-    // (design D1) are not a row-level contract: its result shows as it is.
-    if (candidate.capabilities.dataset && !query && !candidate.capabilities.dataset.result) return [];
+    // (design D1) are not a row-level contract: its result shows as it is,
+    // but only for a component that names no fields. One whose fields the
+    // source lacks is refused before Apply (V11: a bar of lifetime_value
+    // over Top Customers blanked App Studio).
+    if (candidate.capabilities.dataset && !query && (!candidate.capabilities.dataset.result || record.query !== undefined)) return [];
     // Style is presentation only: malformed fields are dropped, never fatal.
     const style = readDashboardVizStyle(record.style, `components[${index}].style`, () => undefined);
     return [{

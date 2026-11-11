@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { renderChart } from '../output/ChartOutput';
+import { ChartOutput, renderChart } from '../output/ChartOutput';
 
 describe('App-sized chart rendering (UI-022)', () => {
   it('fits a monthly bar series to the measured tile height with business date labels', () => {
@@ -90,5 +90,25 @@ describe('App-sized chart rendering (UI-022)', () => {
     expect(markup).toContain('O-101');
     expect(markup).toContain('>—</text>');
     expect(markup).toContain('$0');
+  });
+});
+
+describe('a chart on a field its data does not have (V11)', () => {
+  // A bar of lifetime_spend over a result with only customer_name threw
+  // "Cannot read properties of undefined (reading 'replace')" and blanked
+  // App Studio, even after a reload.
+  const names = { columns: ['customer_name'], rows: [{ customer_name: 'Bob' }, { customer_name: 'Alice' }], rowCount: 2, executionTime: 1 };
+
+  it('says the field is not in the data instead of crashing the page', () => {
+    for (const chart of ['bar', 'line', 'area', 'stacked-bar', 'grouped-bar', 'pie', 'donut', 'funnel']) {
+      const markup = renderToStaticMarkup(<ChartOutput result={names} themeMode="light" chartConfig={{ chart, x: 'customer_name', y: 'lifetime_spend' }} />);
+      expect(markup, chart).toContain('data-testid="chart-missing-field"');
+      expect(markup, chart).toContain('This field isn\u2019t in the data: Lifetime Spend. Pick another field, or edit the tile.');
+    }
+    // With no field named, it says what is missing.
+    expect(renderToStaticMarkup(<ChartOutput result={names} themeMode="light" chartConfig={{ chart: 'bar' }} />)).toContain('This chart has no value to show: its data has no number column.');
+    // A chart whose named field is missing but another value can stand in is drawn as before.
+    const withSpend = { columns: ['customer_name', 'lifetime_spend'], rows: [{ customer_name: 'Bob', lifetime_spend: 200 }], rowCount: 1, executionTime: 1 };
+    expect(renderToStaticMarkup(<ChartOutput result={withSpend} themeMode="light" chartConfig={{ chart: 'bar', x: 'customer_name', y: 'lifetime_value' }} />)).not.toContain('chart-missing-field');
   });
 });

@@ -12,6 +12,7 @@ import {
   abbreviate,
   isNumericValue,
   categoryColumns,
+  chartMissingFields,
   chartNumericValue,
   formatCategoryLabel,
   formatDateLabel,
@@ -1159,7 +1160,55 @@ function ChartConfigPopover({
   );
 }
 
-export function ChartOutput({ result, themeMode, chartConfig, availableHeight, availableWidth, onMarkSelect, onConfigChange }: ChartOutputProps & { onConfigChange?: (updates: Partial<CellChartConfig>) => void }) {
+/** "Lifetime Spend" for `lifetime_spend`. */
+function fieldWords(name: string): string {
+  return name.replace(/^.*__/, '').replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/**
+ * What a chart says when a field it needs is not in its data (V11: a bar of a
+ * field the result lacks blanked App Studio, even after a reload).
+ */
+export function missingFieldWords(missing: string[]): string {
+  const named = missing.filter((name) => name !== 'a value');
+  if (!named.length) return 'This chart has no value to show: its data has no number column.';
+  return `${named.length === 1 ? 'This field isn\u2019t' : 'These fields aren\u2019t'} in the data: ${named.map(fieldWords).join(', ')}. Pick another field, or edit the tile.`;
+}
+
+/** A chart that throws while drawing stops at its own box, never the page around it. */
+class ChartErrorBoundary extends React.Component<{ resetKey: unknown; children: React.ReactNode }, { failed: string | null; resetKey: unknown }> {
+  state = { failed: null as string | null, resetKey: this.props.resetKey };
+
+  static getDerivedStateFromError(error: unknown): Partial<{ failed: string | null }> {
+    return { failed: error instanceof Error ? error.message : String(error) };
+  }
+
+  static getDerivedStateFromProps(props: { resetKey: unknown }, state: { failed: string | null; resetKey: unknown }) {
+    // New data or settings: draw again.
+    return props.resetKey === state.resetKey ? null : { failed: null, resetKey: props.resetKey };
+  }
+
+  componentDidCatch(error: Error): void {
+    console.error('[zlens] a chart could not be drawn', error);
+  }
+
+  render(): React.ReactNode {
+    if (this.state.failed === null) return this.props.children;
+    return <div role="status" data-testid="chart-failed" style={{ padding: 16, fontSize: 13, color: 'var(--color-text-secondary)' }}>This chart couldn{'\u2019'}t be drawn from its data. Edit the tile to pick its fields again.</div>;
+  }
+}
+
+export function ChartOutput(props: ChartOutputProps & { onConfigChange?: (updates: Partial<CellChartConfig>) => void }) {
+  const { result, themeMode, chartConfig } = props;
+  const t = themes[themeMode];
+  const missing = chartMissingFields(result, resolveChartType(result, chartConfig), chartConfig);
+  if (missing.length) {
+    return <div role="status" data-testid="chart-missing-field" style={{ padding: 16, fontSize: 13, color: t.textSecondary, fontFamily: t.font }}>{missingFieldWords(missing)}</div>;
+  }
+  return <ChartErrorBoundary resetKey={result}><ChartOutputBody {...props} /></ChartErrorBoundary>;
+}
+
+function ChartOutputBody({ result, themeMode, chartConfig, availableHeight, availableWidth, onMarkSelect, onConfigChange }: ChartOutputProps & { onConfigChange?: (updates: Partial<CellChartConfig>) => void }) {
   const t = themes[themeMode];
   const resolvedType = resolveChartType(result, chartConfig);
   const [showConfig, setShowConfig] = useState(false);

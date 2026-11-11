@@ -158,6 +158,26 @@ export function formatCategoryLabel(value: string, column: string, maxLen = 16):
   return value.length > maxLen ? `${value.slice(0, Math.max(1, maxLen - 1))}…` : value;
 }
 
+/** Charts drawn from one label and one value column. */
+const LABEL_VALUE_CHARTS: ReadonlySet<ChartType> = new Set<ChartType>(['bar', 'line', 'area', 'stacked-bar', 'grouped-bar', 'pie', 'donut', 'funnel']);
+
+/**
+ * The fields a chart needs that its result does not have, by name; empty
+ * when the chart can be drawn. A chart falls back to another column when the
+ * one it names is missing, so this is only non-empty when nothing can stand
+ * in: a bar of `lifetime_spend` over a result with only `customer_name`
+ * crashed App Studio (V11, "prettyName" of undefined). `'a value'` stands
+ * for a value column when the chart names none.
+ */
+export function chartMissingFields(result: QueryResult, chartType: ChartType, chartConfig?: CellChartConfig): string[] {
+  if (!LABEL_VALUE_CHARTS.has(chartType) || result.rows.length === 0) return [];
+  const { labelCol, valueCol } = pickColumns(result, chartConfig);
+  if (labelCol !== undefined && valueCol !== undefined && result.columns.includes(labelCol) && result.columns.includes(valueCol)) return [];
+  const named = [chartConfig?.x, chartConfig?.y, ...(chartConfig?.metrics ?? [])]
+    .filter((name): name is string => typeof name === 'string' && name.length > 0 && !result.columns.includes(name));
+  return named.length ? Array.from(new Set(named)) : ['a value'];
+}
+
 export function pickColumns(result: QueryResult, chartConfig?: CellChartConfig) {
   const categories = categoryColumns(result);
   const measures = measureColumns(result);

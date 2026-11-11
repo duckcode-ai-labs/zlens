@@ -76,6 +76,9 @@ export function buildVizOption({ chartType, result, themeMode, config, animate =
   const tokens = isDarkThemeMode(themeMode) ? DARK : LIGHT;
   const palette = getPalette(style.palette ?? config?.colorPalette, themeMode).slice(0, MAX_SERIES);
   const { labelCol, valueCol } = pickColumns(result, config);
+  // A chart whose label or value field is not in the result is not drawn (V11:
+  // a bar of a field the result lacks threw and blanked App Studio).
+  if ((labelCol === undefined || valueCol === undefined) && chartType !== 'scatter' && chartType !== 'heatmap') return undefined;
   const format = numberFormatter(result, valueCol, style, config);
   const base: EChartsOption = {
     animation: animate,
@@ -646,8 +649,8 @@ function legendOption(position: 'top' | 'right' | 'bottom' | 'none', tokens: Tok
   return { ...common, top: 0, left: 0 };
 }
 
-function prettyName(value: string): string {
-  return value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+function prettyName(value: string | undefined): string {
+  return String(value ?? '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function unique(values: string[]): string[] {
