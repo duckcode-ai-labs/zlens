@@ -137,7 +137,8 @@ test('Orders shows its related tables\' fields; a bar by Location Name reads sto
   // Order Total, then Location Name dragged onto the Columns shelf: a bar by store.
   const previews: PreviewResponse[] = [];
   page.on('response', async (response) => {
-    if (response.url().endsWith('/api/app-datasets/run') && response.request().method() === 'POST') {
+    // The editor's live preview (new-user test V9: it runs under the App's data rule, not Dataset MCP's).
+    if (response.url().endsWith('/api/app-datasets/tile-preview') && response.request().method() === 'POST') {
       try { previews.push(await response.json() as PreviewResponse); } catch { /* a newer edit cancelled it */ }
     }
   });

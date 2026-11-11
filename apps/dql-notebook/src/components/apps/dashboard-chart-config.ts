@@ -1,4 +1,5 @@
 import { encodingChartColumns, type DashboardVizEncoding } from '@zlens/core/apps/viz-encoding';
+import { isNonAdditiveColumnName } from '@zlens/core/datasets/result-fields';
 import type { TileQuery } from '@zlens/core/apps/tile-query';
 import type { CellChartConfig, QueryResult, ResultColumnMeta } from '../../store/types';
 import { CHART_TYPE_OPTIONS } from '../output/ChartOutput';
@@ -108,8 +109,18 @@ export function mergeDashboardTileChartConfig(
   };
 }
 
+/**
+ * A KPI over several rows of an average or a per-unit value (points per
+ * game, a rate): adding the rows up is wrong (115.89 + 119.29 is not points
+ * per game), so the rows are shown as they are instead of one summed number.
+ */
+export function kpiRowsAreAverages(result: QueryResult, valueField?: string): boolean {
+  return Boolean(valueField) && result.rows.length > 1 && result.columns.includes(valueField!) && isNonAdditiveColumnName(valueField!);
+}
+
 export function summarizeDashboardKpiResult(result: QueryResult, valueField?: string): QueryResult {
   if (!valueField || result.rows.length <= 1 || !result.columns.includes(valueField)) return result;
+  if (kpiRowsAreAverages(result, valueField)) return result;
 
   const values = result.rows
     .map((row) => row[valueField])

@@ -260,7 +260,33 @@ export function nativeTimeGrain(field: Pick<TableDatasetField, 'name' | 'type' |
 }
 const ID_NAME = /(^id$|_id$|_key$|_code$|_uuid$|^uuid$|_number$|_no$|^sku$)/i;
 const NOT_A_MEASURE = /(^id$|_id$|_key$|_code$|year|month|day|week|quarter|zip|postal|phone|lat|lon|lng|latitude|longitude|_no$|_number$|rank|version|age$)/i;
-const MONEY = /(amount|revenue|sales|price|cost|spend|fee|total|value|income|profit|margin|budget|premium|payment|paid|balance|salary|charge)/i;
+const MONEY_WORDS = /(amount|revenue|sales|price|cost|spend|fee|value|income|profit|budget|premium|payment|paid|balance|salary|charge)/i;
+/**
+ * True for a column named for money: `amount`, `net_revenue`, `order_total`.
+ * "Total" names money on its own or after what it totals (`order_total`), but
+ * "total X" counts X (`TOTAL_REBOUNDS`, `total_games`): a number, unless X
+ * names money itself (`total_amount`).
+ */
+export function isMoneyColumnName(name: string): boolean {
+  if (MONEY_WORDS.test(name)) return true;
+  const words = wordsFor(name).toLowerCase().split(/\s+/).filter(Boolean);
+  const last = words[words.length - 1];
+  return last === 'total' || last === 'totals' || last === 'subtotal';
+}
+/** A table column named for money; a margin is read as money here (`gross_margin`). */
+function isTableMoneyName(name: string): boolean {
+  return isMoneyColumnName(name) || /margin/i.test(name);
+}
+/** Per-game and other per-unit abbreviations: `ppg` is points per game. */
+const PER_UNIT_ABBREVIATIONS = new Set(['ppg', 'rpg', 'apg', 'spg', 'bpg', 'mpg']);
+/**
+ * True for a per-unit column: `points_per_game`, `pointsPerGame`,
+ * `pts_per36`, `ppg`. It is an average over something else, so a sum of it
+ * across rows is wrong (two seasons' points per game do not add up).
+ */
+export function isPerUnitColumnName(name: string): boolean {
+  return wordsFor(name).toLowerCase().split(/\s+/).some((word) => /^per\d*$/.test(word) || PER_UNIT_ABBREVIATIONS.has(word));
+}
 /** A column named for a year or season ends in one of these words: `SEASON`, `fiscal_year`, `fy`. */
 const YEAR_WORDS = new Set(['season', 'year', 'yr', 'fy']);
 /** A column with one of these words is an identifier, however it is spelled: `TEAM_ID_HOME`, `playerId`. */
@@ -275,10 +301,10 @@ export function isLabelNumberColumnName(name: string): boolean {
   const last = words[words.length - 1];
   return (last !== undefined && YEAR_WORDS.has(last)) || words.some((word) => ID_WORDS.has(word));
 }
-/** A percentage, rate, ratio, share or average: a sum of it across rows is wrong, so none is proposed. */
+/** A percentage, rate, ratio, share, average or per-unit value: a sum of it across rows is wrong, so none is proposed. */
 const NON_SUMMABLE_WORDS = new Set(['pct', 'percent', 'percentage', 'rate', 'ratio', 'share', 'avg', 'average', 'mean', 'median']);
 function isNonSummableName(name: string): boolean {
-  return wordsFor(name).toLowerCase().split(/\s+/).some((word) => NON_SUMMABLE_WORDS.has(word));
+  return wordsFor(name).toLowerCase().split(/\s+/).some((word) => NON_SUMMABLE_WORDS.has(word)) || isPerUnitColumnName(name);
 }
 
 /**
@@ -442,8 +468,8 @@ export function proposeTableDataset(input: {
       label: field.label,
       aggregation: 'sum',
       from: field.name,
-      format: MONEY.test(field.name) ? 'currency' : 'number',
-      ...(MONEY.test(field.name) ? { currency: 'USD' } : {}),
+      format: isTableMoneyName(field.name) ? 'currency' : 'number',
+      ...(isTableMoneyName(field.name) ? { currency: 'USD' } : {}),
       include: true,
       reason: `Adds up ${field.label.toLowerCase()} across rows.`,
     });

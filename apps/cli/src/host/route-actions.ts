@@ -185,6 +185,8 @@ function actionFor(method: string, path: string): DqlAction {
 
   // A published page runs its Dataset tiles and filter lists through these.
   if (!read && (path === '/api/app-datasets/run' || path === '/api/app-datasets/field-values')) return 'app.view';
+  // The App editor's live tile preview runs not-certified data as an App draft does: building an App.
+  if (!read && path === '/api/app-datasets/tile-preview') return 'app.author';
   if (!read && path === '/api/app-datasets/enable') return 'settings.manage';
   if (!read && (path === '/api/app-datasets/tables/draft' || path === '/api/app-datasets/saved-queries/draft')) return 'dataset.author';
   // "Check and use" writes a checked Dataset that still needs certifying: authoring (design Q1).

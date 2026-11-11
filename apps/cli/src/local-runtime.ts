@@ -21804,7 +21804,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       };
     };
 
-    const resolveMcpDatasetRuntimeRequest = async (raw: unknown) => {
+    // `governed_only` for Dataset MCP: certified or checked data only. The App
+    // editor's live tile preview passes the App rule instead (T3): an App runs
+    // certified and not-certified data alike, as its page run does, so a tile
+    // shows the same data in the editor as on the page.
+    const resolveMcpDatasetRuntimeRequest = async (raw: unknown, sourcePolicy: AppBuildSourcePolicy = 'governed_only') => {
+      const appTile = sourcePolicy !== 'governed_only';
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         throw new DashboardRunRequestError('Dataset MCP input must be an object with sourceId, query, and optional parameters.');
       }
@@ -21828,25 +21833,30 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       const snapshot = projectSnapshot();
       await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
-      let resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+      let resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], sourcePolicy);
       // A saved query's result fields (design D1) are read on first use.
       if (resolved.items[0]?.kind === 'block' && !resolved.items[0].capabilities.dataset) {
         const outcome = await readSavedQueryResultFields({ sourceId }).catch(() => undefined);
-        if (outcome?.ok && outcome.read) resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+        if (outcome?.ok && outcome.read) resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], sourcePolicy);
       }
       const source = resolved.items[0];
       const descriptor = source?.capabilities.dataset;
       if (!source || !descriptor || resolved.missingSourceIds.length > 0) {
-        throw new DashboardRunRequestError(`Dataset MCP source ${sourceId} is not a current approved governed Dataset.`);
+        throw new DashboardRunRequestError(appTile
+          ? (source ? `ZLens can't read the fields of ${source.title} right now. Refresh this data in the Data pane, or choose it again from Add data.` : 'This data is no longer in the project. Choose current data from Add data.')
+          : `Dataset MCP source ${sourceId} is not a current approved governed Dataset.`);
       }
       if (!source.eligibility.localPreview) {
-        throw new DashboardRunRequestError(`Dataset MCP source ${source.title} is not eligible for governed local execution.`);
+        throw new DashboardRunRequestError(appTile
+          ? `${source.title} is ${source.lifecycle}, so it can't run in a tile. Choose current data from Add data.`
+          : `Dataset MCP source ${source.title} is not eligible for governed local execution.`);
       }
       const queryValidation = validateTileQuery(descriptor, query);
       if (!tileQueryValidationRuns(queryValidation)) {
-        throw new DashboardRunRequestError(
-          `Dataset MCP query was refused: ${queryValidation.diagnostics.map((diagnostic) => diagnostic.message).join(' ') || 'the selected fields or operation are not approved.'}`,
-        );
+        const refusal = queryValidation.diagnostics.map((diagnostic) => diagnostic.message).join(' ');
+        throw new DashboardRunRequestError(appTile
+          ? refusal || 'These fields can\'t be shown together. Remove one and try again.'
+          : `Dataset MCP query was refused: ${refusal || 'the selected fields or operation are not approved.'}`);
       }
       const declaredParameters = new Set(source.capabilities.parameters.map((parameter) => parameter.name));
       const unknownParameters = Object.keys(parameters).filter((name) => !declaredParameters.has(name));
@@ -22720,7 +22730,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const appDashExport = path.match(/^\/api\/(apps)\/([^/]+)\/dashboards\/([^/]+)\/export$/);
     const appDashRun = path.match(/^\/api\/(apps|app-builds)\/([^/]+)\/dashboards\/([^/]+)\/run$/) ?? appDashExport;
     const datasetFieldValuesRun = req.method === 'POST' && path === '/api/app-datasets/field-values';
-    const mcpDatasetRun = (req.method === 'POST' && path === '/api/app-datasets/run') || datasetFieldValuesRun;
+    // The App editor's live tile preview: the same ephemeral governed run as
+    // Dataset MCP, under the App's data rule (see resolveMcpDatasetRuntimeRequest).
+    const appTilePreviewRun = req.method === 'POST' && path === '/api/app-datasets/tile-preview';
+    const mcpDatasetRun = (req.method === 'POST' && path === '/api/app-datasets/run') || datasetFieldValuesRun || appTilePreviewRun;
     if (req.method === 'POST' && (appDashRun || mcpDatasetRun)) {
       let activeDashboardRunKey: string | undefined;
       let activeDashboardRun: ActiveDashboardRun | undefined;
@@ -22732,7 +22745,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const mcpRequest = mcpDatasetRun
           ? await resolveMcpDatasetRuntimeRequest(datasetFieldValuesRun
             ? datasetFieldValuesQuery(fieldValuesBody)
-            : await readJSON(req))
+            : await readJSON(req), appTilePreviewRun ? APP_SOURCE_POLICY : 'governed_only')
           : undefined;
         const runSurface = mcpRequest ? 'dataset-mcp' as const : appDashRun![1] as 'apps' | 'app-builds';
         const appId = mcpRequest ? mcpRequest.app.id : decodeURIComponent(appDashRun![2]);

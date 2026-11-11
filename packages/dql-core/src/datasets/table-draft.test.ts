@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Parser } from '../parser/parser.js';
-import { applyCompositeTableKey, applyTableDuplicateChoices, applyTableProfile, duplicateColumnWords, isLabelNumberColumnName, duplicateColumnsQuestion, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration, withDuplicateUnitRelations } from './table-draft.js';
+import { applyCompositeTableKey, applyTableDuplicateChoices, applyTableProfile, duplicateColumnWords, isLabelNumberColumnName, isMoneyColumnName, isPerUnitColumnName, duplicateColumnsQuestion, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration, withDuplicateUnitRelations } from './table-draft.js';
 
 const columns = [
   { name: 'order_line_id', type: 'VARCHAR' },
@@ -106,6 +106,30 @@ describe('NBA team-game facts (new-user test V8, item 5)', () => {
     expect(block.datasetGrain?.keys).toEqual(['GAME_ID', 'TEAM_ID']);
     expect(block.datasetMeasures?.[0]).toMatchObject({ name: 'team_game_count', aggregation: 'count' });
     expect(tableDatasetCheckSentences(keyed, 800)[0]).toBe('Row key: each row is one team game (GAME_ID and TEAM_ID together are filled and different on all 800 rows)');
+  });
+
+  it('never proposes adding up points per game, and counts "total rebounds" as a number, not money (new-user test V9)', () => {
+    const proposal = proposeTableDataset({
+      table: 'LOCAL_PLAYER_SEASON_FACTS',
+      relation: 'NBA.LOCAL_PLAYER_SEASON_FACTS',
+      columns: [
+        { name: 'PLAYER_ID', type: 'NUMBER(38,0)' },
+        { name: 'SEASON', type: 'NUMBER(38,0)' },
+        { name: 'POINTS_PER_GAME', type: 'FLOAT' },
+        { name: 'reboundsPerGame', type: 'FLOAT' },
+        { name: 'PPG', type: 'FLOAT' },
+        { name: 'TOTAL_REBOUNDS', type: 'NUMBER(38,0)' },
+        { name: 'SALARY_TOTAL', type: 'NUMBER(38,2)' },
+      ],
+    });
+    const sums = proposal.measures.filter((measure) => measure.aggregation === 'sum');
+    expect(sums.map((measure) => measure.from)).toEqual(['TOTAL_REBOUNDS', 'SALARY_TOTAL']);
+    expect(sums.map((measure) => measure.format)).toEqual(['number', 'currency']);
+    expect(proposal.fields.find((field) => field.name === 'POINTS_PER_GAME')?.role).toBe('attribute');
+    expect(['POINTS_PER_GAME', 'reboundsPerGame', 'ppg', 'pts_per36'].every(isPerUnitColumnName)).toBe(true);
+    expect(['SEASON_WINS', 'PTS', 'percent_done', 'person_count'].some(isPerUnitColumnName)).toBe(false);
+    expect(['TOTAL_REBOUNDS', 'total_games', 'totalPoints'].some(isMoneyColumnName)).toBe(false);
+    expect(['order_total', 'total', 'subtotal', 'total_amount', 'net_revenue'].every(isMoneyColumnName)).toBe(true);
   });
 
   it('takes no composite key the check does not prove, or one that names a column the table does not have', () => {

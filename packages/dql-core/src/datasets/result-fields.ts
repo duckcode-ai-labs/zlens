@@ -13,8 +13,8 @@
  *   - A tile that groups by every grouping column of the saved query reads one
  *     result row per output row: values show as they are.
  *   - Any other tile rolls rows up. Numbers default to Sum. A column named
- *     like an average or a ratio (`avg_`, `pct`, `rate`, `ratio`, `_share`,
- *     `margin`…) can't be summed: it shows as it is only at the saved query's
+ *     like an average or a ratio (`avg_`, `_per_game`, `ppg`, `pct`, `rate`,
+ *     `ratio`, `_share`, `margin`…) can't be summed: it shows as it is only at the saved query's
  *     own grouping, and offers Min and Max otherwise. Count of rows is always
  *     available.
  *   - Trust is the saved query's own; a rolled-up tile's receipt says it was
@@ -33,7 +33,7 @@ import type {
   DatasetPhysicalField,
   DatasetResultOrigin,
 } from './descriptor.js';
-import { isLabelNumberColumnName, minorUnitOf, nativeTimeGrain, tableColumnKind, wordsFor, type TableColumnKind } from './table-draft.js';
+import { isLabelNumberColumnName, isMoneyColumnName, isPerUnitColumnName, minorUnitOf, nativeTimeGrain, tableColumnKind, wordsFor, type TableColumnKind } from './table-draft.js';
 import { sha256Hex } from '../apps/sha256-sync.js';
 
 export interface SavedQueryResultColumn {
@@ -52,18 +52,18 @@ const TIME_GRAINS = ['day', 'week', 'month', 'quarter', 'year'] as const;
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ID_NAME = /(^id$|_id$|_key$|_code$|_uuid$|^uuid$|_number$|_no$|^sku$)/i;
 const NOT_A_MEASURE = /(^id$|_id$|_key$|_code$|^year$|^month$|^day$|^week$|^quarter$|_year$|_month$|_week$|_quarter$|zip|postal|phone|^lat$|^lon$|^lng$|latitude|longitude|_no$|_number$|^rank$|_rank$|^version$|age$)/i;
-const MONEY = /(amount|revenue|sales|price|cost|spend|fee|total|value|income|profit|budget|premium|payment|paid|balance|salary|charge)/i;
 const NON_ADDITIVE_WORDS = new Set(['avg', 'average', 'mean', 'median', 'pct', 'percent', 'percentage', 'rate', 'ratio', 'share', 'margin']);
 
 /**
  * True for a column whose values can't be added up across rows: an average,
- * a percentage, a rate, a ratio, a share or a margin, by its name. The names
- * catch common cases, not all of them; the receipt always says a value was
- * rolled up, and "Make row-level" stays available for row-safe measures.
+ * a per-unit value (`points_per_game`, `ppg`), a percentage, a rate, a ratio,
+ * a share or a margin, by its name. The names catch common cases, not all of
+ * them; the receipt always says a value was rolled up, and "Make row-level"
+ * stays available for row-safe measures.
  */
 export function isNonAdditiveColumnName(name: string): boolean {
   const words = wordsFor(name).toLowerCase().split(/\s+/).filter(Boolean);
-  return words.some((word) => NON_ADDITIVE_WORDS.has(word));
+  return words.some((word) => NON_ADDITIVE_WORDS.has(word)) || isPerUnitColumnName(name);
 }
 
 /** A column's kind, from a warehouse type or an already-normalised kind. */
@@ -164,7 +164,7 @@ export function savedQueryResultFields(input: {
     }
     // A number: kept as a physical column (filters, row detail) and offered as a measure.
     physical.push({ kind: 'physical', name: column.name, qualifiedId: fieldId(column.name), type: 'number', role: 'attribute', status: 'approved' });
-    const format: DatasetMeasureField['format'] = MONEY.test(column.name) && !minorUnitOf(column.name)
+    const format: DatasetMeasureField['format'] = isMoneyColumnName(column.name) && !minorUnitOf(column.name)
       ? { kind: 'currency', currency: 'USD' }
       : { kind: 'number' };
     if (!isNonAdditiveColumnName(column.name)) {

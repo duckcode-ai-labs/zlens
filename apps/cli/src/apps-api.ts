@@ -82,6 +82,8 @@ import {
   tileQueryValidationRuns,
   validateTileQuery,
   resolveBlockReplacement,
+  notebookBlockPath,
+  readBlockSource,
 } from '@zlens/core';
 import {
   defaultPersonaRegistry,
@@ -8519,7 +8521,7 @@ export function preflightStoredAppBuildDraft(
   // no tile uses is not published, so it cannot block publishing (design D4).
   for (const source of appBuildSourcesUsedByTiles(draft)) {
     if (source.kind === 'block' || source.kind === 'certified_block') {
-      const block = blocks.find((candidate) => candidate.id === source.sourceRef || candidate.name === source.sourceRef || candidate.path === source.sourceRef);
+      const block = appSourceBlock(projectRoot, blocks, [source.sourceRef]);
       const lifecycle = source.lifecycle ?? (source.kind === 'certified_block' ? 'certified' : block?.status);
       const boundRevision = source.sourceRevision ?? source.sourceFingerprint;
       if (!block) errors.push(`Source ${source.id} no longer resolves at ${source.sourceRef}.`);
@@ -8587,7 +8589,8 @@ export function preflightStoredAppBuildDraft(
         errors.push(`${page.id}/${tile.i} has an incompatible Dataset visualization: ${visualization.message}`);
       }
       if (source.kind === 'block' || source.kind === 'certified_block') {
-        const block = blocks.find((candidate) => candidate.path === source.executionRef || candidate.path === source.sourceRef);
+        const block = blocks.find((candidate) => candidate.path === source.executionRef || candidate.path === source.sourceRef)
+          ?? appSourceBlock(projectRoot, [], [source.executionRef, source.sourceRef]);
         if (!block || block.fingerprint !== source.sourceRevision) {
           errors.push(`${page.id}/${tile.i} does not resolve to its current saved query.`);
         }
@@ -10243,31 +10246,12 @@ function collectBlockCandidates(projectRoot: string, options: { preserveDuplicat
           seen.add(filePath);
           const source = readFileSync(filePath, 'utf-8');
           const stat = statSyncSafe(filePath);
-          const name = matchString(source, /block\s+"([^"]+)"/);
           // The App source picker is an executable-block catalog. Domain terms,
           // skills, and other .dql context remain available to planning, but they
           // must not appear as addable dashboard data sources.
-          if (!name) continue;
-          const tags = matchArray(source, /tags\s*=\s*\[([^\]]*)\]/);
-          blocks.push({
-            id: name,
-            name,
-            domain: matchString(source, /domain\s*=\s*"([^"]+)"/) ?? 'uncategorized',
-            status: matchString(source, /status\s*=\s*"([^"]+)"/) ?? 'draft',
-            owner: matchString(source, /owner\s*=\s*"([^"]+)"/),
-            tags,
-            path: relative(projectRoot, filePath).replaceAll('\\', '/'),
-            fingerprint: `sha256:${createHash('sha256').update(source).digest('hex')}`,
-            lastModified: stat?.mtime.toISOString() ?? new Date(0).toISOString(),
-            description: matchString(source, /description\s*=\s*"((?:[^"\\]|\\.)*)"/) ?? '',
-            llmContext: matchString(source, /llmContext\s*=\s*"((?:[^"\\]|\\.)*)"/),
-            ...(matchString(source, /^\s*replacedBy\s*=\s*"([^"]+)"/m) ? { replacedBy: matchString(source, /^\s*replacedBy\s*=\s*"([^"]+)"/m)! } : {}),
-            chartType: matchString(source, /chart\s*=\s*"([^"]+)"/) ?? matchString(source, /chart\.(\w+)\s*\(/) ?? undefined,
-            filterIds: declaredAppFilterIds(source),
-            dimensionIds: declaredAppDimensionIds(source),
-            score: 0,
-            reasons: [],
-          });
+          const block = blockCandidateFromSource(source, relative(projectRoot, filePath).replaceAll('\\', '/'), stat?.mtime.toISOString() ?? new Date(0).toISOString());
+          if (!block) continue;
+          blocks.push(block);
         } catch {
           // skip unreadable block
         }
@@ -10289,6 +10273,52 @@ function collectBlockCandidates(projectRoot: string, options: { preserveDuplicat
     if (blockRank > currentRank || (blockRank === currentRank && block.lastModified > current.lastModified)) byId.set(block.id, block);
   }
   return Array.from(byId.values());
+}
+
+/** A block's App source facts from its DQL text, or undefined when the text declares no block. */
+function blockCandidateFromSource(source: string, path: string, lastModified: string): BlockCandidate | undefined {
+  const name = matchString(source, /block\s+"([^"]+)"/);
+  if (!name) return undefined;
+  return {
+    id: name,
+    name,
+    domain: matchString(source, /domain\s*=\s*"([^"]+)"/) ?? 'uncategorized',
+    status: matchString(source, /status\s*=\s*"([^"]+)"/) ?? 'draft',
+    owner: matchString(source, /owner\s*=\s*"([^"]+)"/),
+    tags: matchArray(source, /tags\s*=\s*\[([^\]]*)\]/),
+    path,
+    fingerprint: `sha256:${createHash('sha256').update(source).digest('hex')}`,
+    lastModified,
+    description: matchString(source, /description\s*=\s*"((?:[^"\\]|\\.)*)"/) ?? '',
+    llmContext: matchString(source, /llmContext\s*=\s*"((?:[^"\\]|\\.)*)"/),
+    ...(matchString(source, /^\s*replacedBy\s*=\s*"([^"]+)"/m) ? { replacedBy: matchString(source, /^\s*replacedBy\s*=\s*"([^"]+)"/m)! } : {}),
+    chartType: matchString(source, /chart\s*=\s*"([^"]+)"/) ?? matchString(source, /chart\.(\w+)\s*\(/) ?? undefined,
+    filterIds: declaredAppFilterIds(source),
+    dimensionIds: declaredAppDimensionIds(source),
+    score: 0,
+    reasons: [],
+  };
+}
+
+/**
+ * The saved query an App source points at: a block file, or a DQL block saved
+ * in a notebook cell (`notebooks/x.dqlnb#cell-3`), read from its cell like the
+ * catalog reads it. A notebook block failed publishing with "no longer
+ * resolves" although its tiles ran (new-user test V9).
+ */
+function appSourceBlock(projectRoot: string, blocks: BlockCandidate[], refs: Array<string | undefined>): BlockCandidate | undefined {
+  const wanted = refs.filter((ref): ref is string => Boolean(ref));
+  const found = blocks.find((candidate) => wanted.some((ref) => candidate.id === ref || candidate.name === ref || candidate.path === ref));
+  if (found) return found;
+  const notebookRef = wanted.find((ref) => notebookBlockPath(ref));
+  if (!notebookRef) return undefined;
+  try {
+    const notebook = notebookBlockPath(notebookRef)!.notebookPath;
+    const lastModified = statSyncSafe(join(projectRoot, notebook))?.mtime.toISOString() ?? new Date(0).toISOString();
+    return blockCandidateFromSource(readBlockSource(projectRoot, notebookRef), notebookRef, lastModified);
+  } catch {
+    return undefined;
+  }
 }
 
 function canonicalAppBlockSourceId(block: Pick<BlockCandidate, 'domain' | 'path' | 'name'>): string {

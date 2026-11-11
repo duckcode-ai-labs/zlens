@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { mergeDashboardTileChartConfig, normalizeDashboardChartType, summarizeDashboardKpiResult } from './dashboard-chart-config';
+import { kpiRowsAreAverages, mergeDashboardTileChartConfig, normalizeDashboardChartType, summarizeDashboardKpiResult } from './dashboard-chart-config';
 import { autoLayoutDashboardItems } from './dashboard-layout';
 import { formatDashboardValue } from './dashboard-format';
 import { prepareStakeholderItems } from './dashboard-presentation';
@@ -45,6 +45,22 @@ describe('Dashboard KPI display contract (UI-004)', () => {
       rowCount: 1,
       executionTime: 4,
     });
+  });
+
+  it('never adds up rows of an average or a per-game value into one KPI (new-user test V9)', () => {
+    // Warriors points per game, 2016 regular season and playoffs: 235.18 is no one's points per game.
+    const ppg = {
+      columns: ['GAME_TYPE', 'POINTS_PER_GAME'],
+      rows: [{ GAME_TYPE: 'Regular season', POINTS_PER_GAME: 115.89 }, { GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.29 }],
+      rowCount: 2,
+      executionTime: 4,
+    };
+    expect(kpiRowsAreAverages(ppg, 'POINTS_PER_GAME')).toBe(true);
+    expect(summarizeDashboardKpiResult(ppg, 'POINTS_PER_GAME')).toBe(ppg);
+    expect(kpiRowsAreAverages({ ...ppg, columns: ['GAME_TYPE', 'avg_margin'], rows: [{ GAME_TYPE: 'Regular season', avg_margin: 10.8 }, { GAME_TYPE: 'Playoffs', avg_margin: 7.9 }] }, 'avg_margin')).toBe(true);
+    // One row is its own value; a count still adds up.
+    expect(kpiRowsAreAverages({ ...ppg, rows: [ppg.rows[0]!], rowCount: 1 }, 'POINTS_PER_GAME')).toBe(false);
+    expect(kpiRowsAreAverages({ ...ppg, columns: ['GAME_TYPE', 'WINS'], rows: [{ GAME_TYPE: 'Regular season', WINS: 73 }, { GAME_TYPE: 'Playoffs', WINS: 15 }] }, 'WINS')).toBe(false);
   });
 });
 
