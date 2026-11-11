@@ -3289,15 +3289,39 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
         return fixed;
       };
+      // A YEAR READ THROUGH THE MODEL'S OWN RULE. "The 2008 playoffs" written as SEASON = 2007, because a rule
+      // says those rows fall in the calendar year after their SEASON, applies 2008: the answer says how it read it
+      // instead of refusing it as "does not apply 2008" (V12 gate, K4).
+      const shiftedYears = (sql: string): Array<{ year: string; column: string; value: string; kinds: string }> => {
+        const found: Array<{ year: string; column: string; value: string; kinds: string }> = [];
+        const rules = Object.values(deps.getManifest().manifest?.modeling?.rules ?? {}).filter((rule) => rule.status !== 'deprecated').map((rule) => rule.expression ?? '');
+        for (const item of stated.filter((value) => value.kind === 'year')) {
+          if (new RegExp(`(?<![0-9])${item.value}(?![0-9])`).test(sql)) continue;
+          for (const rule of rules) {
+            const match = /Rows whose ([A-Za-z0-9_$"]+) starts with ([0-9A-Za-z, ]+?) all fall in the calendar year after their ([A-Za-z_]+)/.exec(rule);
+            if (!match) continue;
+            const column = match[3]!;
+            const value = String(Number(item.value) - 1);
+            if (!new RegExp(`(^|[^A-Za-z0-9_])"?${column}"?\\s*=\\s*'?${value}'?(?![0-9])`, 'i').test(sql)) continue;
+            const firsts = match[2]!.split(/,|\bor\b|\band\b/).map((part) => part.trim()).filter(Boolean);
+            const kinds = codeKinds.find((item) => item.code.toLowerCase() === match[1]!.replace(/"/g, '').toLowerCase());
+            const names = firsts.map((first) => kinds?.names?.[first]);
+            found.push({ year: item.value, column, value, kinds: names.every(Boolean) ? joinKindNames(names as string[]) : `rows whose ${match[1]!.replace(/"/g, '')} starts with ${orList(firsts)}` });
+            break;
+          }
+        }
+        return found;
+      };
       const failedChecks = async (sql: string): Promise<string[]> => {
         const failures: string[] = [];
+        const shifted = new Set(shiftedYears(sql).map((item) => item.year));
         // A stated kind ("Playoffs") is applied by a statement that keeps that kind by its code (V10 retest).
         const keepsStatedKind = (value: string) => codeKinds.some((kinds) => {
           const firsts = statedKindFirsts(value, kinds);
           const filter = firsts.length ? kindFilterOf(sql, kinds.code) : undefined;
           return Boolean(filter?.filtered && firsts.some((first) => filter.kinds.includes(first)));
         });
-        const missing = missingStatedValues(sql, stated).filter((item) => item.kind !== 'text' || !keepsStatedKind(item.name ?? item.value));
+        const missing = missingStatedValues(sql, stated).filter((item) => (item.kind !== 'text' || !keepsStatedKind(item.name ?? item.value)) && !(item.kind === 'year' && shifted.has(item.value)));
         if (missing.length) failures.push(`it does not apply ${missing.map((item) => item.kind === 'fiscal_year' ? `"${item.value}" (fiscal year ${item.value.replace(/^FY/i, '').length === 2 ? `20${item.value.replace(/^FY/i, '')}` : item.value.replace(/^FY/i, '')}: restrict a fiscal-year field, or the dates that fiscal year spans)` : `"${item.value}"`).join(', ')} from the question`);
         // A KIND THE QUESTION NAMES IS KEPT. A statement that counts every kind together (an unfiltered key, or a
         // summary table that adds them all up) does not answer a question about one kind; a follow-up's reading
@@ -3556,6 +3580,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(required.length ? [`required filters present: ${required.map((item) => item.text).join(', ')}`] : []),
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
             ...kindCaveats,
+            ...shiftedYears(chosen.sql).map((item) => `caveat: it reads ${item.year} as ${item.column} ${item.value}: ${item.kinds} are played in the calendar year after their ${item.column}, so those of ${item.year} are ${item.column} ${item.value}; to count ${item.column} ${item.year} instead, say "the ${item.year} ${item.column.toLowerCase()}"`),
             ...(correctedReading !== undefined ? [`reading: ${correctedReading}`] : []),
             ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),

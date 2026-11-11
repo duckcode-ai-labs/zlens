@@ -1419,6 +1419,23 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       void both;
     });
 
+    it('a year read through the model rule on calendar years is applied, and the answer says how it was read (V12 gate, K4)', async () => {
+      const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
+      const manifest = { ...nba, modeling: { rules: {
+        ...nba.modeling.rules,
+        'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule },
+        'nba.playoff_calendar_year': { localId: 'playoff_calendar_year', domain: 'nba', status: 'draft', expression: 'Rows whose GAME_ID starts with 4, 5 all fall in the calendar year after their SEASON: for those rows, calendar year Y is SEASON Y − 1.' },
+      } } };
+      const shifted = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const { result } = await askNba('Which team won the most playoff games in 2016?', shifted, shifted, manifest);
+      expect(result.status).toBe('completed');
+      expect(result.answer).not.toContain('does not apply "2016"');
+      expect(result.answer).toContain('it reads 2016 as SEASON 2015: playoff and play-in games are played in the calendar year after their SEASON, so those of 2016 are SEASON 2015; to count SEASON 2016 instead, say "the 2016 season"');
+      // Another year is still not applied.
+      const wrong = await askNba('Which team won the most playoff games in 2016?', shifted.replace('2015', '2013'), shifted.replace('2015', '2013'), manifest);
+      expect(wrong.result.answer).toContain('does not apply "2016"');
+    });
+
     it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {
       const every = 'SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY team_name ORDER BY wins DESC LIMIT 1';
       const { prompts, statements, result } = await askNba('Which team won the most games in 2015?', every, every);
