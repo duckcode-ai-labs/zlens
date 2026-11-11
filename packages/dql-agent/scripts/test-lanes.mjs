@@ -198,10 +198,14 @@ const EXPECTED_TEST_FILES = 197;
 // 2865 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1; new-user test V9).
 // 2866 with a saved query's result fields counted as what the App Builder planner can answer
 // (app-builder-orchestrator.test.ts +1; new-user test V9).
-const EXPECTED_TESTS = 2866;
+// 2867 with the App Builder planner never planning a KPI that adds an average up
+// (app-builder-orchestrator.test.ts +1; new-user test V10).
+// 2868 with a planned tile on a field its source lacks refused before Apply
+// (app-builder-orchestrator.test.ts +1; V11).
+const EXPECTED_TESTS = 2868;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2785.
+// The ordinary lane's share is the difference: 2787.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

@@ -210,3 +210,13 @@ describe('the chosen "Y / value" field', () => {
     expect(series(stacked.option)).toHaveLength(2);
   });
 });
+
+describe('a chart whose value field is not in its result (V11)', () => {
+  it('builds no option instead of throwing', () => {
+    const names: QueryResult = { columns: ['customer_name'], rows: [{ customer_name: 'Bob' }, { customer_name: 'Alice' }], rowCount: 2, executionTime: 1 };
+    for (const chartType of ['bar', 'line', 'area', 'stacked-bar', 'grouped-bar'] as const) {
+      expect(() => buildVizOption({ chartType, result: names, themeMode: 'light', config: { chart: chartType, x: 'customer_name', y: 'lifetime_spend' } }), chartType).not.toThrow();
+      expect(buildVizOption({ chartType, result: names, themeMode: 'light', config: { chart: chartType, x: 'customer_name', y: 'lifetime_spend' } }), chartType).toBeUndefined();
+    }
+  });
+});

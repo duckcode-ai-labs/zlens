@@ -81,6 +81,7 @@ export {
   tileQueryIsTopNIntent,
   tileQueryOutputAliases,
   tileQueryValidationRuns,
+  tileQueryRunsWhateverTheRows,
   tileQueryHash,
   tileQueryMeasure,
   tileQueryMeasureScope,

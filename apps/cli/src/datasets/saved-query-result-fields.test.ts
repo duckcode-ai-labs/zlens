@@ -195,10 +195,13 @@ describe('fields from a saved query result', () => {
       expect(reviewTile.certification).toBeUndefined();
       expect(reviewTile.dataset.validation.adaptations[0].message).toBe('Rolled up from the result of Region draft, which needs review.');
 
-      // An average is never summed.
+      // An average is never summed: the KPI's one group would combine the three months.
       const averaged = await call(base, '/api/app-datasets/run', { sourceId: monthly.sourceId, query: { dimensions: [], measures: [{ measure: 'avg_line_value' }] } });
-      expect(averaged.status, averaged.text).toBe(400);
+      expect(averaged.body.ok, averaged.text).toBe(false);
+      expect(averaged.body.diagnostics).toEqual(['NON_ADDITIVE_RESULT_ROLLUP']);
       expect(averaged.text).toContain("Averages can't be added up");
+      expect(averaged.text).toContain('this tile puts 3 of them together');
+      expect(averaged.body.result).toBeUndefined();
       const asIs = await call(base, '/api/app-datasets/run', { sourceId: monthly.sourceId, query: { dimensions: [{ field: 'month', timeGrain: 'month' }], measures: [{ measure: 'avg_line_value' }] } });
       expect(asIs.status, asIs.text).toBe(200);
       expect(asIs.body.result.rows.map((row: any) => Number(row.avg_line_value))).toEqual([30, 15, 40 / 3]);

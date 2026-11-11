@@ -14,9 +14,13 @@
  *     result row per output row: values show as they are.
  *   - Any other tile rolls rows up. Numbers default to Sum. A column named
  *     like an average or a ratio (`avg_`, `_per_game`, `ppg`, `pct`, `rate`,
- *     `ratio`, `_share`, `margin`…) can't be summed: it shows as it is only at the saved query's
- *     own grouping, and offers Min and Max otherwise. Count of rows is always
- *     available.
+ *     `ratio`, `_share`, `margin`…) can't be summed: it shows as it is
+ *     wherever each of the tile's groups holds one row of the saved query, and
+ *     offers Min and Max otherwise. When the saved query's own grouping does
+ *     not prove that (its SQL can't be read, or the tile groups by other
+ *     columns), the run checks it and refuses a tile that would combine rows
+ *     (V10 retest: one bar per game type of a two-row result). Count of rows
+ *     is always available.
  *   - Trust is the saved query's own; a rolled-up tile's receipt says it was
  *     rolled up from the saved query's result.
  *
@@ -271,10 +275,32 @@ export function savedQueryResultDescriptor(input: {
 export interface SavedQueryRollupCheck {
   /** The tile rolls the saved query's rows up (it does not group by all of its grouping columns). */
   rollsUp: boolean;
-  /** Average or ratio measures the tile would have to sum. */
+  /**
+   * Average or ratio measures the tile would have to sum. Always empty now:
+   * the run refuses a tile that combines their rows (`oneRowPerGroup`).
+   */
   blocked: Array<{ measure: string; message: string }>;
   /** What the receipt says when the tile rolls rows up. */
   adaptation?: { kind: 'saved_query_rollup'; message: string; topRowsOnly?: number };
+  /**
+   * Average or ratio measures the tile shows as they are only if each of its
+   * groups holds exactly one row of the saved query. The saved query's own
+   * grouping does not prove it, so the run checks it: a tile that would
+   * combine rows is refused with {@link savedQueryCombinedRowsMessage}.
+   */
+  oneRowPerGroup?: { measures: string[] };
+}
+
+/**
+ * Why a tile that would combine rows of an average is refused, with how many
+ * rows its largest group holds: "Averages can't be added up: Points per game
+ * is worked out on each row of q, and this tile puts 2 of them together. …".
+ */
+export function savedQueryCombinedRowsMessage(result: Pick<DatasetResultOrigin, 'savedQuery' | 'groupBy' | 'asIs'>, measure: string, rows: number): string {
+  const label = wordsFor(result.asIs.find((candidate) => candidate.toLowerCase() === measure.toLowerCase()) ?? measure);
+  const grouping = result.groupBy.map((name) => wordsFor(name).toLowerCase());
+  const together = rows > 1 ? `puts ${rows.toLocaleString('en-US')} of them together` : 'puts several of them together';
+  return `${NON_ADDITIVE_REASON}: ${label} is worked out on each row of ${result.savedQuery}, and this tile ${together}. Use Min ${label.toLowerCase()} or Max ${label.toLowerCase()}, or group by ${grouping.length ? grouping.join(' and ') : 'a column that is different on each row'} to show each row as it is.`;
 }
 
 /**
@@ -283,6 +309,14 @@ export interface SavedQueryRollupCheck {
  * the ones its calculations use. As is: the tile groups by every grouping
  * column of the saved query, each at its own period (a `month` column by
  * month), and asks for no totals.
+ *
+ * An average or a ratio is never summed, and never refused before it runs:
+ * whether a tile combines its rows depends on the rows (a saved query
+ * grouped by a CASE expression, a filter to one season, a one-row result).
+ * Unless the grouping proves one row per group, the tile carries
+ * `oneRowPerGroup` and the run refuses it only when a group holds more than
+ * one row (V10 retest: a certified bar of points per game by game type was
+ * refused, and broke a published App).
  */
 export function savedQueryResultRollup(
   descriptor: Pick<DatasetDescriptor, 'result' | 'fields' | 'trust'>,
@@ -302,16 +336,12 @@ export function savedQueryResultRollup(
     }));
   if (asItIs) return { rollsUp: false, blocked: [] };
   const asIs = new Set(result.asIs.map((name) => name.toLowerCase()));
-  const grouping = result.groupBy.map((name) => wordsFor(name).toLowerCase());
-  const blocked = Array.from(new Set(measureNames.map((name) => name.toLowerCase())))
+  const averaged = Array.from(new Set(measureNames.map((name) => name.toLowerCase())))
     .filter((name) => asIs.has(name))
-    .map((name) => {
-      const label = wordsFor(result.asIs.find((candidate) => candidate.toLowerCase() === name) ?? name);
-      return {
-        measure: name,
-        message: `${NON_ADDITIVE_REASON}: ${label} is worked out on each row of ${result.savedQuery}, so it can't be summed. Use Min ${label.toLowerCase()} or Max ${label.toLowerCase()}${grouping.length ? `, or group by ${grouping.join(' and ')} to show it as it is` : ''}.`,
-      };
-    });
+    .map((name) => result.asIs.find((candidate) => candidate.toLowerCase() === name) ?? name);
+  // Shown as it is, once the run finds one row in each group: the tile's
+  // other numbers are then the rows as they are too, nothing is rolled up.
+  if (averaged.length) return { rollsUp: false, blocked: [], oneRowPerGroup: { measures: averaged } };
   // A Top N keeps its first N rows: a total over them is not a total of
   // everything, and nobody certified it as one. Without declared grouping
   // columns only a grand total is known to add rows up (a bar per row of a
@@ -321,7 +351,7 @@ export function savedQueryResultRollup(
   if (result.keepsFirstRows && totalsTopRows) {
     return {
       rollsUp: true,
-      blocked,
+      blocked: [],
       adaptation: {
         kind: 'saved_query_rollup',
         message: topRowsOnlyMessage(result.savedQuery, result.keepsFirstRows),
@@ -331,7 +361,7 @@ export function savedQueryResultRollup(
   }
   return {
     rollsUp: true,
-    blocked,
+    blocked: [],
     adaptation: {
       kind: 'saved_query_rollup',
       message: descriptor.trust === 'certified'

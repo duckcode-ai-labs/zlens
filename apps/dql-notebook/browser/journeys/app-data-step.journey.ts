@@ -184,7 +184,7 @@ test('a saved query has fields: Month + Gross Revenue is one line, Customer Name
   await expect(monthly.getByRole('heading', { name: 'Measures' })).toBeVisible({ timeout: 30_000 });
   await expect(monthly.getByRole('heading', { name: 'Time' })).toBeVisible();
   await expect(monthly).toContainText('Gross Revenue');
-  await expect(monthly).toContainText('Grouped by its own columns, values show as they are');
+  await expect(monthly).toContainText('Where each bar or row holds one of its rows, values show as they are');
   await monthly.getByRole('button', { name: 'More for Monthly Revenue' }).click();
   await expect(monthly.getByRole('menuitem', { name: /Make row-level/ })).toContainText('Only needed for row-safe measures');
   if (shotsDir) {

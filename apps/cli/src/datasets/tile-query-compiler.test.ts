@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { DatasetAggregateComponentProofV1, DatasetDescriptor, TileQuery } from '@zlens/core';
-import { DATASET_TILE_DIALECTS, TileQueryCompilationError, compileDatasetTileQuery } from './tile-query-compiler.js';
+import { savedQueryResultDescriptor, type DatasetAggregateComponentProofV1, type DatasetDescriptor, type TileQuery } from '@zlens/core';
+import { DATASET_TILE_DIALECTS, TileQueryCompilationError, compileDatasetTileQuery, datasetTileRowsAsTheyAre } from './tile-query-compiler.js';
 
 /**
  * Golden SQL for every dialect Dataset tiles accept. A change to any of these
@@ -469,5 +469,46 @@ describe('names grouped by their key (new-user round 3, problem 4)', () => {
     expect(compiled.variables).toMatchObject({ __dataset_tile_customer_name_1: 'Maria Lopez', __dataset_tile_customer_name_2: 'C1', __dataset_tile_customer_name_3: 'Bob' });
     const excluded = compileDatasetTileQuery({ descriptor: customers(), query: top, filters: [{ field: 'customer_name', op: 'neq', values: ['Maria Lopez (#C1)'] }], driver: 'duckdb', sourceSql: 'SELECT * FROM customers' });
     expect(excluded.sql).toContain('WHERE NOT (');
+  });
+});
+
+describe('an average shown as it is, checked when it runs (new-user test V10)', () => {
+  // GAME_TYPE is a CASE expression in the tester's saved query, so its
+  // grouping can't be read from the SQL: each tile's run checks it.
+  const ppg = savedQueryResultDescriptor({
+    sourceId: 'app:block:nba:ppg', sourceRevision: 'sha256:ppg', savedQuery: 'warriors_ppg_regular_vs_playoffs_2016', qualifiedId: 'nba::block::warriors_ppg_regular_vs_playoffs_2016',
+    lifecycle: 'certified', certified: true, typesFrom: 'run',
+    columns: [{ name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'POINTS_PER_GAME', type: 'DOUBLE' }],
+    groupBy: [],
+  })!;
+  const compile = (query: TileQuery) => compileDatasetTileQuery({ descriptor: ppg, query, driver: 'duckdb', sourceSql: 'SELECT * FROM ppg' });
+
+  it('returns the largest group\'s row count, shows the rows when each group holds one, and refuses a tile that combines them', () => {
+    const bar = compile({ dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] });
+    expect(bar.sql).toBe([
+      'WITH ds AS (SELECT * FROM ppg)',
+      'SELECT ds."GAME_TYPE" AS "GAME_TYPE", CASE WHEN COUNT(*) = 1 THEN MAX(ds."POINTS_PER_GAME") END AS "POINTS_PER_GAME", MAX(COUNT(*)) OVER () AS "__zlens_rows_per_group"',
+      'FROM ds',
+      'GROUP BY ds."GAME_TYPE"',
+    ].join('\n'));
+    expect(bar.oneRowPerGroup).toEqual({ measures: ['POINTS_PER_GAME'], column: '__zlens_rows_per_group' });
+    const shown = datasetTileRowsAsTheyAre(bar, ppg, {
+      columns: [{ name: 'GAME_TYPE' }, { name: 'POINTS_PER_GAME' }, { name: '__zlens_rows_per_group' }],
+      rows: [{ GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.29, __zlens_rows_per_group: 1 }, { GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 115.89, __zlens_rows_per_group: 1 }],
+    });
+    expect(shown).toEqual({
+      columns: [{ name: 'GAME_TYPE' }, { name: 'POINTS_PER_GAME' }],
+      rows: [{ GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.29 }, { GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 115.89 }],
+    });
+    const kpi = compile({ dimensions: [], measures: [{ measure: 'POINTS_PER_GAME' }] });
+    expect(() => datasetTileRowsAsTheyAre(kpi, ppg, { rows: [{ POINTS_PER_GAME: null, __zlens_rows_per_group: 2 }] })).toThrow(
+      "Averages can't be added up: Points per game is worked out on each row of warriors_ppg_regular_vs_playoffs_2016, and this tile puts 2 of them together.",
+    );
+    // Max needs no check; neither does any other tile.
+    const max = compile({ dimensions: [], measures: [{ measure: 'max_POINTS_PER_GAME' }] });
+    expect(max.oneRowPerGroup).toBeUndefined();
+    expect(max.sql).not.toContain('__zlens_rows_per_group');
+    const untouched = { rows: [{ max_POINTS_PER_GAME: 119.29 }] };
+    expect(datasetTileRowsAsTheyAre(max, ppg, untouched)).toBe(untouched);
   });
 });

@@ -9,6 +9,7 @@ import {
   getDialect,
   isTileTimeGrain,
   renderDatasetAggregateExpression,
+  savedQueryCombinedRowsMessage,
   tileQueryIsTopNIntent,
   tileQueryHash,
   tileQueryMeasureScope,
@@ -76,6 +77,53 @@ export interface CompiledDatasetTileQuery {
   nameKeys: Array<{ field: string; key: string; alias: string }>;
   /** A name the tile groups by whose key ZLens does not know: it may merge namesakes. */
   nameWarnings: Array<{ field: string; entity: string; message: string }>;
+  /**
+   * Averages of a saved query's result shown as they are only if each group
+   * holds one of its rows (V10 retest). The SQL returns the largest group's
+   * row count in `column`; {@link datasetTileRowsAsTheyAre} refuses the tile
+   * when it is above one and drops the column before anyone sees the result.
+   */
+  oneRowPerGroup?: { measures: string[]; column: string };
+}
+
+/** The column that carries the largest group's row count; never shown. */
+export const ROWS_PER_GROUP_COLUMN = '__zlens_rows_per_group';
+
+/**
+ * The executed result of a tile that shows averages as they are: refused
+ * when one of its groups combined several rows of the saved query, otherwise
+ * the result without the row-count column. Any other tile's result is
+ * returned unchanged.
+ */
+export function datasetTileRowsAsTheyAre<T extends { columns?: unknown[]; rows?: Array<Record<string, unknown>> }>(
+  compiled: Pick<CompiledDatasetTileQuery, 'oneRowPerGroup'>,
+  descriptor: Pick<DatasetDescriptor, 'result'>,
+  result: T,
+): T {
+  const check = compiled.oneRowPerGroup;
+  if (!check) return result;
+  const rows = result.rows ?? [];
+  const columnKey = (row: Record<string, unknown>) => Object.keys(row).find((key) => key.toLowerCase() === check.column);
+  const largest = rows.reduce((most, row) => {
+    const key = columnKey(row);
+    const value = key === undefined ? NaN : Number(row[key]);
+    return Number.isFinite(value) ? Math.max(most, value) : most;
+  }, 0);
+  if (largest > 1) {
+    const saved = descriptor.result ?? { savedQuery: 'the saved query', groupBy: [], asIs: check.measures };
+    throw new TileQueryCompilationError('NON_ADDITIVE_RESULT_ROLLUP', savedQueryCombinedRowsMessage(saved, check.measures[0] ?? '', largest));
+  }
+  const columnName = (column: unknown) => (typeof column === 'string' ? column : String((column as { name?: unknown } | null)?.name ?? ''));
+  return {
+    ...result,
+    ...(result.columns ? { columns: result.columns.filter((column) => columnName(column).toLowerCase() !== check.column) } : {}),
+    rows: rows.map((row) => {
+      const key = columnKey(row);
+      if (key === undefined) return row;
+      const { [key]: _count, ...rest } = row;
+      return rest;
+    }),
+  };
 }
 
 /**
@@ -304,11 +352,16 @@ export function compileDatasetTileQuery(input: {
     const select = `CASE WHEN ${shared} THEN ${text(expression)} || ' (#' || ${text(keyExpression)} || ')' ELSE ${expression} END`;
     return { alias, expression, groupBy: [expression, keyExpression], select, field, timeGrain: selection.timeGrain };
   });
+  // Averages shown as they are (V10 retest): a group holding one row shows its
+  // value; a group that combined rows shows none, and the run refuses the tile.
+  const oneRowPerGroup = validation.oneRowPerGroup;
+  const shownAsItIs = new Set((oneRowPerGroup?.measures ?? []).map((name) => name.toLowerCase()));
   const measures = input.query.measures.map((selection) => {
     const measure = datasetMeasureField(input.descriptor, selection.measure);
     if (!measure) throw new TileQueryCompilationError('DATASET_MEASURE_DRIFT', `Dataset measure ${selection.measure} no longer resolves.`);
     const alias = safeAlias(selection.alias ?? measure.name);
-    const expression = compileMeasure(measure, physicalExpression);
+    const aggregate = compileMeasure(measure, physicalExpression);
+    const expression = shownAsItIs.has(measure.name.toLowerCase()) ? `CASE WHEN COUNT(*) = 1 THEN ${aggregate} END` : aggregate;
     return { alias, expression, format: measure.format, logicalMeasure: measure };
   });
   // Calculations (RFC 0009 step 3). Calculated measures are aggregates at the
@@ -367,6 +420,8 @@ export function compileDatasetTileQuery(input: {
     ...measures.map((measure) => `${measure.expression} AS ${quote(measure.alias)}`),
     ...calculatedMeasures.map((entry) => `${entry.expression} AS ${quote(entry.alias)}`),
     ...(rollups ? dimensions.map((dimension) => `GROUPING(${dimension.expression}) AS ${quote(`__total_${dimension.alias}`)}`) : []),
+    // The largest group's row count, over every group (before any row limit).
+    ...(oneRowPerGroup ? [quickCalculations.length === 0 ? `MAX(COUNT(*)) OVER () AS ${quote(ROWS_PER_GROUP_COLUMN)}` : `COUNT(*) AS ${quote(ROWS_PER_GROUP_COLUMN)}`] : []),
   ];
   const orderBy = (input.query.orderBy ?? []).map((order) => {
     const alias = safeAlias(order.alias);
@@ -423,6 +478,7 @@ export function compileDatasetTileQuery(input: {
       ...measures.map((measure) => measure.alias),
       ...calculatedMeasures.map((entry) => entry.alias),
     ].map((alias) => `b.${quote(alias)} AS ${quote(alias)}`);
+    if (oneRowPerGroup) outputs.push(`MAX(b.${quote(ROWS_PER_GROUP_COLUMN)}) OVER () AS ${quote(ROWS_PER_GROUP_COLUMN)}`);
     sql = [
       `WITH ds AS (${sourceSql}),`,
       `__base AS (SELECT ${selectColumns.join(', ')}`,
@@ -462,7 +518,7 @@ export function compileDatasetTileQuery(input: {
       ref: `total:${dimension.alias}`,
       type: 'number' as const,
     })) : []),
-  ], input.query, appliedFilters, validation, joins, { nameKeys, nameWarnings });
+  ], input.query, appliedFilters, validation, joins, { nameKeys, nameWarnings }, oneRowPerGroup ? { measures: oneRowPerGroup.measures, column: ROWS_PER_GROUP_COLUMN } : undefined);
 }
 
 /** "Customer Name may not be unique: …" — a name grouped without a key. */
@@ -680,8 +736,10 @@ function compiledResult(
   validation: TileQueryValidation,
   joins: DatasetJoin[] = [],
   names: Pick<CompiledDatasetTileQuery, 'nameKeys' | 'nameWarnings'> = { nameKeys: [], nameWarnings: [] },
+  oneRowPerGroup?: CompiledDatasetTileQuery['oneRowPerGroup'],
 ): CompiledDatasetTileQuery {
   return {
+    ...(oneRowPerGroup ? { oneRowPerGroup } : {}),
     validation: { outcome: validation.outcome, adaptations: validation.adaptations },
     joins,
     nameKeys: names.nameKeys,

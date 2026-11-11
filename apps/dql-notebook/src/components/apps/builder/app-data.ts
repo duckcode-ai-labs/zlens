@@ -38,7 +38,7 @@ export const CHECKED_NEEDS_CERTIFYING = NOT_CERTIFIED_YET;
 export const MAKE_ROW_LEVEL_HINT = 'Only needed for row-safe measures, like distinct counts or averages over rows. ZLens checks what one row is; the saved query is not certified again until someone certifies it.';
 
 /** How a saved query's result fields add up, under its fields (design D1). */
-export const SAVED_QUERY_FIELDS_NOTE = 'Fields from its result. Grouped by its own columns, values show as they are; rolled up, numbers add up (Sum). Averages and rates are never added up.';
+export const SAVED_QUERY_FIELDS_NOTE = 'Fields from its result. Where each bar or row holds one of its rows, values show as they are; combined, numbers add up (Sum). Averages and rates are never added up.';
 
 // ── One glossary (docs/apps/index.md "Words used in App Studio") ─────────────
 

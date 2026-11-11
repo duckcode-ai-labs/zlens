@@ -11,7 +11,7 @@ import {
   datasetPhysicalFields,
   normalizeTileQuery,
   tileQueryOutputAliases,
-  tileQueryValidationRuns,
+  tileQueryRunsWhateverTheRows,
   validateTileQuery,
 } from '@zlens/core';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
@@ -1098,8 +1098,11 @@ function normalizeComponents(
     // A Dataset card must always carry a validated, field-level query. Do not
     // fall back to a legacy block tile when its governed descriptor cannot
     // express the requested component. A saved query's result fields
-    // (design D1) are not a row-level contract: its result shows as it is.
-    if (candidate.capabilities.dataset && !query && !candidate.capabilities.dataset.result) return [];
+    // (design D1) are not a row-level contract: its result shows as it is,
+    // but only for a component that names no fields. One whose fields the
+    // source lacks is refused before Apply (V11: a bar of lifetime_value
+    // over Top Customers blanked App Studio).
+    if (candidate.capabilities.dataset && !query && (!candidate.capabilities.dataset.result || record.query !== undefined)) return [];
     // Style is presentation only: malformed fields are dropped, never fatal.
     const style = readDashboardVizStyle(record.style, `components[${index}].style`, () => undefined);
     return [{
@@ -1123,7 +1126,9 @@ function normalizedDatasetQuery(
   role: AppBuilderComponentRole,
 ): TileQuery | undefined {
   const supplied = normalizeTileQuery(raw);
-  if (supplied && tileQueryValidationRuns(validateTileQuery(descriptor, supplied))) return supplied;
+  // A proposed tile must run whatever rows come back (V10 retest): an average
+  // the run would refuse for combining rows is never proposed.
+  if (supplied && tileQueryRunsWhateverTheRows(validateTileQuery(descriptor, supplied))) return supplied;
   return deterministicDatasetQuery(descriptor, requirement, role);
 }
 
@@ -1192,7 +1197,7 @@ export function deterministicDatasetQuery(
   for (const measure of measures) {
     for (const dimensions of groupings(measure.name)) {
       const query: TileQuery = { dimensions, measures: [{ measure: measure.name }] };
-      if (tileQueryValidationRuns(validateTileQuery(descriptor, query))) return query;
+      if (tileQueryRunsWhateverTheRows(validateTileQuery(descriptor, query))) return query;
     }
   }
   return undefined;

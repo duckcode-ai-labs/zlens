@@ -178,7 +178,7 @@ export function DataPanel({
           : <>Click a field to start a new tile.</>}</p>
 
       <div className="field-groups">
-        {groups.measures.length ? <section><h3>Measures</h3>{groups.measures.map((field) => fieldRow(field, field.kind === 'measure' ? aggregationLabel(field.aggregation) : '', measureGlyph))}</section> : null}
+        {groups.measures.length ? <section><h3>Measures</h3>{groups.measures.map((field) => fieldRow(field, field.kind === 'measure' ? measureMeta(descriptor, field) : '', measureGlyph))}</section> : null}
         {groups.time.length ? <section><h3>Time</h3>{groups.time.map((field) => fieldRow(field, field.time?.grains?.slice(0, 3).join(' · ') ?? field.type, <CalendarDays size={14} />))}</section> : null}
         {groups.dimensions.length ? <section><h3>Dimensions</h3>{groups.dimensions.map((field) => fieldRow(field, field.kind === 'physical' && field.role === 'key' ? 'key' : '', field.kind === 'physical' && field.role === 'key' ? <Hash size={13} /> : <span className="aa">Aa</span>))}</section> : null}
         {groups.review.length ? <section><h3>Suggested, not certified yet</h3>{groups.review.map((field) => fieldRow(field, '', field.kind === 'measure' ? measureGlyph : <span className="aa">Aa</span>, true))}</section> : null}
@@ -228,6 +228,16 @@ export function DataPanel({
       {onToggleSummary ? <button type="button" disabled={disabled} aria-pressed={summaryAdded} title={SUMMARY_OPTION.hint} onClick={onToggleSummary}><Sparkles size={14} /><span><strong>{summaryAdded ? 'Remove Summary' : SUMMARY_OPTION.label}</strong></span></button> : null}
     </div>
   </div>;
+}
+
+/**
+ * The roll-up a measure shows next to its name. An average or a ratio of a
+ * saved query's result is shown as it is, never added up (V10 retest: it
+ * read "max" next to a message saying it can't be added up).
+ */
+export function measureMeta(descriptor: Pick<DatasetDescriptor, 'result'> | undefined, field: { name: string; aggregation: string }): string {
+  if (descriptor?.result?.asIs.some((name) => name.toLowerCase() === field.name.toLowerCase())) return 'as is';
+  return aggregationLabel(field.aggregation);
 }
 
 function aggregationLabel(aggregation: string): string {

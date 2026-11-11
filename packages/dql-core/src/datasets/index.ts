@@ -133,6 +133,7 @@ export {
   savedQueryResultDescriptor,
   savedQueryResultFields,
   savedQueryResultRollup,
+  savedQueryCombinedRowsMessage,
   sqlReturnsOneRow,
   topRowsOnlyMessage,
 } from './result-fields.js';
