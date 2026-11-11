@@ -203,11 +203,24 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
   let reply = readPlannerReply(completion);
   // A reply that can't be read as a grounded brief gets one more try, asking
   // for one compact JSON object (a long brief can be cut off at the token limit).
-  if (!reply.parsed || reply.requirements.length === 0) {
+  // So does one cut off before any tile (V11 try 2: "AI picked 0 sources" after 64 s,
+  // with the reply's requirements read but its components lost at the cut).
+  const candidatesById = new Map(candidates.map((candidate) => [candidate.sourceId, candidate]));
+  const usableComponents = (read: ReturnType<typeof readPlannerReply>) => read.parsed ? normalizeComponents(
+    read.parsed.components,
+    candidatesById,
+    new Set(read.requirements.map((requirement) => requirement.id)),
+    new Map(read.requirements.map((requirement) => [requirement.id, requirement])),
+  ).length : 0;
+  if (!reply.parsed || reply.requirements.length === 0 || (reply.truncated && usableComponents(reply) === 0)) {
     const second = await ask(true);
     if (second !== undefined) {
-      completion = second;
-      reply = readPlannerReply(second);
+      const retried = readPlannerReply(second);
+      // The second reply is kept unless it reads worse than the first.
+      if ((retried.parsed && retried.requirements.length > 0) || !reply.parsed || reply.requirements.length === 0) {
+        completion = second;
+        reply = retried;
+      }
     }
   }
   const { parsed, requirements, truncated } = reply;
@@ -222,13 +235,32 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     : appBuilderPlannerProviderId(completion?.providerId);
   const allowedIds = new Set(candidates.map((candidate) => candidate.sourceId));
   const requirementIds = new Set(requirements.map((requirement) => requirement.id));
-  const components = normalizeComponents(
+  const plannedComponents = normalizeComponents(
     parsed.components,
-    new Map(candidates.map((candidate) => [candidate.sourceId, candidate])),
+    candidatesById,
     requirementIds,
     new Map(requirements.map((requirement) => [requirement.id, requirement])),
   );
+  // A plan cut short with no tile still has its questions: each gets the candidate whose fields answer it.
+  const components = plannedComponents.length === 0 && truncated
+    ? componentsForRequirements(requirements, candidates)
+    : plannedComponents;
   const frame = normalizeFrame(parsed.frame, prompt, input.audience);
+  // A part of the request the plan never mentions is a gap, not silently dropped (V11: "wins and losses"; losses never appeared).
+  const unplanned = unplannedRequestParts(prompt, [
+    ...requirements.flatMap((requirement) => [requirement.question, ...requirement.measures, ...requirement.dimensions, ...requirement.filters]),
+    ...frame.metrics, ...frame.dimensions, ...frame.filters,
+    ...components.map((component) => component.title),
+  ]);
+  const unplannedRequirements = unplanned.map((part, index): AppBuildRequirement => ({
+    id: uniqueRequirementId(`asked-${index + 1}`, requirementIds),
+    question: part.charAt(0).toUpperCase() + part.slice(1),
+    role: 'evidence',
+    required: true,
+    measures: [],
+    dimensions: [],
+    filters: [],
+  }));
   return ensureAppBuildStructure(ensureRequiredSources({
     version: 1,
     planningMode: 'ai',
@@ -239,7 +271,7 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
       ...(providerId ? { providerId } : {}),
     },
     frame,
-    requirements,
+    requirements: [...requirements, ...unplannedRequirements],
     components,
     pages: normalizePlannedPages(parsed.pages, components),
     filters: [],
@@ -248,8 +280,75 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     detailDrills: [],
     selectedSourceIds: Array.from(new Set(components.map((component) => component.sourceId))),
     candidateSourceIds: candidates.map((candidate) => candidate.sourceId),
-    warnings: truncated ? [APP_BUILDER_TRUNCATED_NOTE] : [],
+    warnings: truncated ? [plannedComponents.length === 0 && components.length > 0 ? APP_BUILDER_TRUNCATED_PICKED_NOTE : APP_BUILDER_TRUNCATED_NOTE] : [],
   }, candidates, requiredSourceIds), candidates, parsed);
+}
+
+function uniqueRequirementId(preferred: string, taken: Set<string>): string {
+  let id = preferred;
+  for (let suffix = 2; taken.has(id); suffix += 1) id = `${preferred}-${suffix}`;
+  taken.add(id);
+  return id;
+}
+
+/**
+ * Tiles for a plan cut short before its components: for each question, the first candidate whose approved
+ * fields answer it, with the field query that answers it. Questions no candidate answers stay gaps.
+ */
+function componentsForRequirements(requirements: AppBuildRequirement[], candidates: AppSourceCatalogRecord[]): AppBuilderPlannedComponent[] {
+  const components: AppBuilderPlannedComponent[] = [];
+  for (const [index, requirement] of requirements.entries()) {
+    for (const candidate of candidates) {
+      const descriptor = candidate.capabilities.dataset;
+      if (!descriptor || !candidateSatisfiesStructuredRequirement(requirement, candidate)) continue;
+      const planned = deterministicDatasetQuery(descriptor, requirement, requirement.role);
+      if (!planned) continue;
+      const { query, role } = withAskedSplits(planned, descriptor, requirement.role, [requirement.question], [requirement]);
+      if (!datasetPlannedQueryCoversRequirement(query, requirement, descriptor)) continue;
+      components.push({
+        id: `component-${index + 1}`,
+        title: requirement.question.replace(/[?.!]+$/, ''),
+        sourceId: candidate.sourceId,
+        query,
+        requirementIds: [requirement.id],
+        role,
+        view: role === 'kpi' ? 'kpi' : role === 'trend' ? 'line' : role === 'detail' || role === 'evidence' ? 'table' : 'bar',
+        rationale: `Its fields answer “${requirement.question}” · ${sourceKindAndTrust(candidate)}`,
+      });
+      break;
+    }
+  }
+  return components;
+}
+
+/** Words that say how to show something, never what: a request part made only of them is not a question. */
+const UNPLANNED_IGNORED_WORDS = new Set([
+  'also', 'chart', 'compare', 'comparison', 'each', 'every', 'how', 'list', 'number', 'page', 'separate', 'separately',
+  'show', 'shown', 'side', 'split', 'together', 'total', 'trend', 'what', 'which', 'who', 'see', 'help', 'did', 'does',
+]);
+
+/**
+ * Parts of a request the plan never mentions. Only an item the request pairs with "and" or "or" with an
+ * item the plan does cover counts ("regular-season wins and losses" when only wins are planned): a lone
+ * phrasing like "shown separately" is never a question of its own.
+ */
+export function unplannedRequestParts(request: string, planned: string[]): string[] {
+  const plannedWords = deterministicWords(planned.join(' '));
+  const contentWords = (part: string) => Array.from(deterministicWords(part)).filter((word) => !/^\d+$/.test(word) && !UNPLANNED_IGNORED_WORDS.has(word) && !RATIONALE_IGNORED_WORDS.has(word));
+  const out: string[] = [];
+  for (const segment of request.split(/[.;:\n,!?]+/)) {
+    const items = segment.split(/\s+(?:and|or|&)\s+/i).map((item) => item.trim()).filter(Boolean);
+    if (items.length < 2) continue;
+    const covered = items.filter((item) => contentWords(item).some((word) => plannedWords.has(word)));
+    if (covered.length === 0) continue;
+    for (const item of items) {
+      const words = contentWords(item);
+      if (words.length === 0 || words.length > 3 || words.some((word) => plannedWords.has(word))) continue;
+      const part = item.replace(/^(?:the|a|an|their|its|and|or)\s+/i, '').trim();
+      if (part && !out.some((existing) => existing.toLowerCase() === part.toLowerCase())) out.push(part);
+    }
+  }
+  return out.slice(0, 3);
 }
 
 function ensureRequiredSources(
@@ -289,15 +388,18 @@ function ensureRequiredSources(
       componentId = `${componentId.replace(/-\d+$/, '')}-${suffix}`;
     }
     componentIds.add(componentId);
-    const role = match?.role ?? inferRole(candidate, components.length);
-    const query = candidate.capabilities.dataset
-      ? deterministicDatasetQuery(candidate.capabilities.dataset, match, role)
+    const plannedRole = match?.role ?? inferRole(candidate, components.length);
+    const plannedQuery = candidate.capabilities.dataset
+      ? deterministicDatasetQuery(candidate.capabilities.dataset, match, plannedRole)
       : undefined;
     // A saved query's result fields (design D1) that can't express this still show its result as it is.
-    if (candidate.capabilities.dataset && !query && !candidate.capabilities.dataset.result) {
-      warnings.push(`You added ${plannerSourceName(candidate.title)}, but it can't answer this with its approved fields yet.`);
+    if (candidate.capabilities.dataset && !plannedQuery && !candidate.capabilities.dataset.result) {
+      warnings.push(`You added ${plannerSourceName(candidate.title)}, but none of its fields answer what you asked. Add data that does.`);
       continue;
     }
+    const { query, role } = plannedQuery && candidate.capabilities.dataset
+      ? withAskedSplits(plannedQuery, candidate.capabilities.dataset, plannedRole, [candidate.title, ...(match ? [match.question] : [])], match ? [match] : [])
+      : { query: plannedQuery, role: plannedRole };
     components.push({
       id: componentId,
       title: datasetComponentTitle(candidate.title, candidate.capabilities.dataset, query, role),
@@ -600,9 +702,11 @@ function candidateSatisfiesStructuredRequirement(
   // requirement question names them. This prevents an internally inconsistent
   // requirement such as "Profit margin" + measure "revenue" from laundering a
   // revenue source into false margin coverage.
+  // A question that asks for a split by values ("regular season vs playoffs")
+  // names no field for it: the requirement's declared grouping stands (V11).
   if (!capabilityValuesMatch([
     ...requirement.measures,
-    ...requirement.dimensions,
+    ...(asksForValueSplit(requirement.question) ? [] : requirement.dimensions),
     ...requirement.filters,
   ], [requirement.question])) return false;
 
@@ -767,7 +871,7 @@ function deterministicBrief(
       ? deterministicDatasetQuery(candidate.capabilities.dataset, primaryRequirement, role)
       : undefined;
     if (candidate.capabilities.dataset && !query && !candidate.capabilities.dataset.result) {
-      deterministicWarnings.push(`${plannerSourceName(candidate.title)} can't answer this with its approved fields yet.`);
+      deterministicWarnings.push(`${plannerSourceName(candidate.title)} doesn't answer this. Add data that does.`);
       return [];
     }
     const coveredRequirementIds = candidate.capabilities.dataset && query
@@ -853,8 +957,8 @@ function partialCoverageNote(title: string, questions: string[], keptCount: numb
   const quotable = requirementCount > 1 && question && question.length <= 120;
   if (keptCount === 0) {
     return quotable && questions.length === 1
-      ? `${name} can't answer “${question}” with its approved fields yet.`
-      : `${name} can't answer what you asked with its approved fields yet.`;
+      ? `${name} doesn't answer “${question}”. Add data that does, or remove that question.`
+      : `${name} doesn't answer what you asked. Add data that does.`;
   }
   return quotable
     ? `${name} covers only part of what you asked. It doesn't answer “${question}”${questions.length > 1 ? ` and ${questions.length - 1} more` : ''}.`
@@ -1007,6 +1111,8 @@ export const APP_BUILDER_RETRY_NOTE = 'Your previous reply could not be read as 
 
 /** Said on the plan when the reply was cut off and closed after its last complete part. */
 export const APP_BUILDER_TRUNCATED_NOTE = 'The AI plan was cut short, so it may cover less than you asked. Add more data or tiles yourself.';
+/** Said when the reply was cut off before its tiles, and ZLens picked data for its questions by their fields. */
+export const APP_BUILDER_TRUNCATED_PICKED_NOTE = 'The AI plan was cut short before it picked any data, so ZLens picked data whose fields answer its questions. Check the picks, or try again.';
 
 /** A planner reply read as a brief (see `readPlannerJson`), with its grounded requirements. */
 function readPlannerReply(completion: string | AppBuilderPlannerCompletionResult): {
@@ -1053,7 +1159,8 @@ function normalizeRequirements(value: unknown): AppBuildRequirement[] {
     const record = objectValue(raw);
     if (!record) return [];
     const id = stringValue(record.id) ?? `requirement-${index + 1}`;
-    const question = stringValue(record.question);
+    const asked = stringValue(record.question);
+    const question = asked ? plainPlannerText(asked) : undefined;
     const role = appRole(record.role);
     if (!question || !role || seen.has(id)) return [];
     seen.add(id);
@@ -1105,18 +1212,42 @@ function normalizeComponents(
     if (candidate.capabilities.dataset && !query && (!candidate.capabilities.dataset.result || record.query !== undefined)) return [];
     // Style is presentation only: malformed fields are dropped, never fatal.
     const style = readDashboardVizStyle(record.style, `components[${index}].style`, () => undefined);
+    const title = plainPlannerText(stringValue(record.title) ?? id);
+    // A split the title or its questions ask for is applied (V11: "Wins by Season and Game Type" added up every game type).
+    const split = query && candidate.capabilities.dataset
+      ? withAskedSplits(query, candidate.capabilities.dataset, role, [title, ...selectedRequirementIds.flatMap((requirementId) => {
+        const requirement = requirementsById.get(requirementId);
+        return requirement ? [requirement.question] : [];
+      })], selectedRequirementIds.flatMap((requirementId) => requirementsById.get(requirementId) ?? []))
+      : { query, role };
     return [{
       id,
-      title: datasetComponentTitle(stringValue(record.title) ?? id, candidate.capabilities.dataset, query, role),
+      title: datasetComponentTitle(title, candidate.capabilities.dataset, split.query, split.role),
       sourceId,
-      ...(query ? { query } : {}),
+      ...(split.query ? { query: split.query } : {}),
       requirementIds: selectedRequirementIds,
-      role,
+      role: split.role,
       view,
       ...(style ? { style } : {}),
-      rationale: stringValue(record.rationale) ?? 'Selected from the bounded App source candidate set.',
+      rationale: plainPlannerText(stringValue(record.rationale) ?? 'Selected from the bounded App source candidate set.'),
     }];
   });
+}
+
+/**
+ * Planner text a business reader sees, in their words (V11: a reason read "trust remains review_required as
+ * supplied"). The trust and data-rule codes the candidate cards carry read as App Studio says them.
+ */
+export function plainPlannerText(text: string): string {
+  return text
+    .replace(/\binclude_review_required\b/gi, 'certified and not-certified data')
+    .replace(/\bgoverned_only\b/gi, 'certified data only')
+    .replace(/\breview[_-]required\b/gi, 'not certified yet')
+    .replace(/\breview_status\b/gi, 'review')
+    .replace(/\bnot_required\b/gi, 'not needed')
+    .replace(/\bsourceId\b/g, 'data')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function normalizedDatasetQuery(
@@ -1261,18 +1392,130 @@ function datasetComponentTitle(
   const selected = datasetMeasures(descriptor).filter((measure) => (
     query.measures.some((selection) => sameDatasetName(selection.measure, measure.name, measure.qualifiedId))
   ));
-  if (selected.length === 0) return title;
+  if (selected.length === 0) return titleNamingOnlyAppliedSplits(title, descriptor, query);
   const titleWords = deterministicWords(title);
   const namesUnselected = datasetMeasures(descriptor).filter((measure) => (
     !selected.some((selectedMeasure) => selectedMeasure.qualifiedId === measure.qualifiedId)
     && Array.from(deterministicWords(measure.name)).some((word) => titleWords.has(word))
   ));
-  if (namesUnselected.length === 0) return title;
+  if (namesUnselected.length === 0) return titleNamingOnlyAppliedSplits(title, descriptor, query);
   const measureLabel = selected[0]!.name;
-  const dimension = query.dimensions[0]?.field;
-  if (role === 'trend' && dimension) return `${measureLabel} over time`;
-  if ((role === 'breakdown' || role === 'detail' || role === 'evidence') && dimension) return `${measureLabel} by ${dimension}`;
+  const dimensions = query.dimensions.map((dimension) => dimension.field);
+  if (role === 'trend' && dimensions.length) return `${measureLabel} over time`;
+  if ((role === 'breakdown' || role === 'detail' || role === 'evidence') && dimensions.length) return `${measureLabel} by ${dimensions.join(' and ')}`;
   return measureLabel;
+}
+
+/** Fields a tile can group by: categories, keys and dates, never a number column. */
+function splitFields(descriptor: DatasetDescriptor): ReturnType<typeof datasetPhysicalFields> {
+  return datasetPhysicalFields(descriptor).filter((field) => field.status === 'approved' && (field.role === 'dimension' || field.role === 'key' || field.role === 'time'));
+}
+
+/** "regular season vs playoffs", "split by …", "broken down by …": a split asked for by its values, or by words naming no field. */
+const VALUE_SPLIT = /\b(?:vs\.?|versus)\s|\bsplit\s+(?:by|between|into)\b|\bbroken\s+(?:down|out)\s+by\b/i;
+/** The words after "by", "per", "for each" or "across": the groupings a title or question names. */
+const NAMED_SPLIT = /\b(?:split\s+by|broken\s+(?:down|out)\s+by|by|per|for\s+each|across)\s+([^.;:?()]+)/gi;
+
+function asksForValueSplit(text: string): boolean {
+  return VALUE_SPLIT.test(text);
+}
+
+/** The phrases naming groupings by field; a phrase of values ("regular season vs playoffs") names none. */
+function namedSplitPhrases(text: string): string[] {
+  return Array.from(text.matchAll(NAMED_SPLIT), (match) => match[1] ?? '').filter((phrase) => phrase.trim() && !/\b(?:vs\.?|versus)\s/i.test(`${phrase} `));
+}
+
+/** Whether every word of a field's name is in the phrase ("Game Type" names GAME_TYPE). */
+function phraseNamesField(phraseWords: Set<string>, fieldName: string): boolean {
+  const words = deterministicWords(fieldName);
+  return words.size > 0 && Array.from(words).every((word) => phraseWords.has(word));
+}
+
+/**
+ * The query with the splits its title or questions ask for (V11: "Warriors Wins by Season and Game Type"
+ * grouped by season alone, so 2015 read 91: 3 preseason, 73 regular season and 15 playoff wins added up).
+ * A split is a grouping the requirement declares, a field a "by …" phrase names, or, for a split by values
+ * ("regular season vs playoffs"), the one text grouping of the source the tile does not use yet. Each is added
+ * only where the tile still runs whatever the rows; a KPI given a split becomes a breakdown.
+ */
+export function withAskedSplits(
+  query: TileQuery,
+  descriptor: DatasetDescriptor,
+  role: AppBuilderComponentRole,
+  texts: string[],
+  requirements: AppBuildRequirement[],
+): { query: TileQuery; role: AppBuilderComponentRole } {
+  const fields = splitFields(descriptor);
+  const measureWords = new Set(query.measures.flatMap((selection) => Array.from(deterministicWords(selection.measure))));
+  const grouped = (current: TileQuery, field: (typeof fields)[number]) => current.dimensions.some((dimension) => sameDatasetName(dimension.field, field.name, field.qualifiedId));
+  const asked: typeof fields = [];
+  const ask = (field: (typeof fields)[number] | undefined) => {
+    if (!field || grouped(query, field) || asked.includes(field)) return;
+    if (Array.from(deterministicWords(field.name)).every((word) => measureWords.has(word))) return;
+    asked.push(field);
+  };
+  for (const requirement of requirements) {
+    for (const dimension of requirement.dimensions) ask(fields.find((field) => sameDatasetName(dimension, field.name, field.qualifiedId)));
+  }
+  for (const text of texts) {
+    for (const phrase of namedSplitPhrases(text)) {
+      const words = deterministicWords(phrase);
+      for (const field of fields) if (phraseNamesField(words, field.name)) ask(field);
+    }
+  }
+  if (texts.some(asksForValueSplit)) {
+    const ungrouped = fields.filter((field) => field.role === 'dimension' && field.type === 'string' && !grouped(query, field) && !asked.includes(field));
+    if (ungrouped.length === 1) ask(ungrouped[0]);
+  }
+  const limit = role === 'detail' || role === 'evidence' ? 3 : 2;
+  let next = query;
+  for (const field of asked) {
+    if (next.dimensions.length >= limit) break;
+    const grain = field.role === 'time' ? (field.time?.grains.includes('month') ? 'month' : field.time?.grains[0]) : undefined;
+    const candidate: TileQuery = { ...next, dimensions: [...next.dimensions, { field: field.name, ...(grain ? { timeGrain: grain } : {}) }] };
+    if (tileQueryRunsWhateverTheRows(validateTileQuery(descriptor, candidate))) next = candidate;
+  }
+  return { query: next, role: next !== query && role === 'kpi' ? 'breakdown' : role };
+}
+
+/**
+ * A title never names a split its query does not apply (V11). In "Wins by Season and Game Type (2014–2018)"
+ * each grouping after "by" must be one the query groups by: one naming another field of the source is taken
+ * out ("Wins by Season (2014–2018)"), and so is one naming nothing, unless a grouping of the query is still
+ * unnamed (a "Year" for SEASON). A grouping that names a selected measure ("by revenue") is a ranking, kept.
+ */
+export function titleNamingOnlyAppliedSplits(title: string, descriptor: DatasetDescriptor, query: TileQuery): string {
+  const match = /^(.*?\S)\s+(by|per)\s+(.+?)(\s*\([^)]*\))?\s*$/i.exec(title);
+  if (!match) return title;
+  const [, head, joiner, list, parenthetical = ''] = match;
+  const items = list!.split(/\s*(?:,|\band\b|&|\/)\s*/i).map((item) => item.trim()).filter(Boolean);
+  if (items.length === 0) return title;
+  const fields = splitFields(descriptor);
+  const grains = new Set(['day', 'daily', 'week', 'weekly', 'month', 'monthly', 'quarter', 'quarterly', 'year', 'yearly']);
+  const timeGrouped = query.dimensions.some((dimension) => Boolean(dimension.timeGrain) || fields.some((field) => field.role === 'time' && sameDatasetName(dimension.field, field.name, field.qualifiedId)));
+  const groupedNamedBy = (words: Set<string>) => query.dimensions.find((dimension) => {
+    const fieldWords = deterministicWords(dimension.field);
+    return fieldWords.size > 0 && (Array.from(fieldWords).every((word) => words.has(word)) || Array.from(words).every((word) => fieldWords.has(word)));
+  });
+  const named = new Set<string>();
+  const unknown: string[] = [];
+  const kept = items.filter((item) => {
+    const words = deterministicWords(item);
+    const dimension = groupedNamedBy(words);
+    if (dimension) { named.add(dimension.field); return true; }
+    if (Array.from(words).some((word) => grains.has(word)) && timeGrouped) return true;
+    if (query.measures.some((selection) => phraseNamesField(words, selection.measure))) return true;
+    if (fields.some((field) => phraseNamesField(words, field.name))) return false;
+    unknown.push(item);
+    return true;
+  });
+  // A word that names no field may still be what a grouping of the query is called ("Year" for SEASON).
+  const unnamedGroupings = query.dimensions.filter((dimension) => !named.has(dimension.field)).length;
+  const keptItems = kept.filter((item) => !unknown.includes(item) || unknown.indexOf(item) < unnamedGroupings);
+  if (keptItems.length === items.length) return title;
+  return keptItems.length
+    ? `${head} ${joiner} ${keptItems.join(' and ')}${parenthetical}`
+    : `${head}${parenthetical}`;
 }
 
 function plannerCapabilities(candidate: AppSourceCatalogRecord): Record<string, unknown> {
@@ -1322,14 +1565,14 @@ function normalizeClarifications(value: unknown): Pick<AppBuildFrame, 'clarifica
       if (!choice || !label) return [];
       return [{
         id: stringValue(choice.id) ?? `choice-${choiceIndex + 1}`,
-        label,
-        ...(stringValue(choice.description) ? { description: stringValue(choice.description) } : {}),
+        label: plainPlannerText(label),
+        ...(stringValue(choice.description) ? { description: plainPlannerText(stringValue(choice.description)!) } : {}),
       }];
     });
     if (choices.length < 2) return [];
     return [{
       id: stringValue(record.id) ?? `clarification-${index + 1}`,
-      question,
+      question: plainPlannerText(question),
       choices,
       required: record.required !== false,
       ...(stringValue(record.answerId) ? { answerId: stringValue(record.answerId) } : {}),

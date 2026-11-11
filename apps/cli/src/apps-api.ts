@@ -36,6 +36,8 @@ import {
   parseDashboardDocument,
   normalizeDqlArtifactReference,
   suggestAppId,
+  projectAppIdentities,
+  uniqueNewAppIdentity,
   appNameFromGoal,
   createAppBuildDraft,
   createBlankAppBuildPage,
@@ -508,12 +510,14 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
           resolveBlocks = undefined;
         }
       }
-      const drafts = listed.map((draft) => {
+      const rebound = listed.map((draft) => {
         const rebound = resolveBlocks && hasPublishedBlockPlaceholders(draft) ? rebindPublishedBlockPlaceholders(draft, resolveBlocks) : null;
         if (!rebound) return draft;
         storage.saveAppBuildDraft(rebound);
         return rebound;
       });
+      // A new App's draft that took another App's id before V12 hid that App's own draft: it becomes its own App.
+      const drafts = separateNewAppDrafts(projectRoot, rebound, (draft, expectedRevision) => storage.saveAppBuildDraft(draft, { expectedRevision }));
       sendJson(res, 200, { ok: true, drafts });
     } finally {
       storage.close();
@@ -5024,9 +5028,16 @@ export async function openAppAiBuildInStudio(
   }));
   let draft: AppBuildDraft;
   try {
+    const goal = session.prompt || proposal.buildFrame.goal;
+    // A new App: never another App's or draft's name or id (V11).
+    const identity = uniqueNewAppIdentity(
+      (cleanString(input.appName) || cleanString(plan.name) || appNameFromGoal(goal)).slice(0, 120),
+      takenAppIdentities(projectRoot),
+    );
     draft = createAppBuildHandoffDraft({
-      goal: session.prompt || proposal.buildFrame.goal,
-      name: cleanString(input.appName) || cleanString(plan.name) || undefined,
+      goal,
+      name: identity.name,
+      appId: identity.appId,
       domain: session.inputs.domain || cleanString(plan.domain) || undefined,
       audience: cleanString(input.audience) || session.inputs.audience || proposal.buildFrame.audience,
       sources: matched.items,
@@ -7820,8 +7831,19 @@ export function createStoredAppBuildDraft(
   const base = baseAppId ? loadAppById(projectRoot, baseAppId) : null;
   if (baseAppId && !base) throw new Error(`App "${baseAppId}" not found.`);
   // A described App is named from the first line of its description.
-  const name = cleanString(input.name) || base?.app.name || appNameFromGoal(cleanString(input.goal)) || 'Untitled App';
-  const appId = base?.app.id || cleanString(input.appId) || suggestAppId(name);
+  const requestedName = cleanString(input.name) || base?.app.name || appNameFromGoal(cleanString(input.goal)) || 'Untitled App';
+  const requestedAppId = cleanString(input.appId);
+  const taken = base ? null : takenAppIdentities(projectRoot);
+  if (taken && requestedAppId && new Set(Array.from(taken.appIds, (appId) => appId.toLowerCase())).has(requestedAppId.toLowerCase())) {
+    throw new Error(`App already exists: ${requestedAppId} is another App's id, or a draft's. Open that App to change it, or choose another id.`);
+  }
+  // A new App never takes another App's (or another new App's) name or id: its draft would hide that App's own
+  // draft and could not be published (V11). It is "… (2)" instead.
+  const { name, appId } = base
+    ? { name: requestedName, appId: base.app.id }
+    : requestedAppId
+      ? { name: requestedName, appId: requestedAppId }
+      : uniqueNewAppIdentity(requestedName, taken!);
   const id = newAppBuildDraftId();
   const blankPage = createBlankAppBuildPage({
     name,
@@ -8236,6 +8258,71 @@ export function loadStoredAppBuildDraft(projectRoot: string, id: string): AppBui
   } finally {
     storage.close();
   }
+}
+
+/**
+ * The names and ids a new App must not repeat: the project's Apps, and the drafts nobody has published yet
+ * (a published draft's App is in the first list). `exceptDraftId` leaves one draft out.
+ */
+export function takenAppIdentities(projectRoot: string, exceptDraftId?: string): { appIds: string[]; names: string[] } {
+  const project = projectAppIdentities(projectRoot);
+  const appIds = Array.from(project.appIds);
+  const names = Array.from(project.names);
+  const storage = openAppStorage(projectRoot);
+  try {
+    for (const draft of storage.listAppBuildDrafts()) {
+      if (draft.id === exceptDraftId || draft.state === 'project_published') continue;
+      if (draft.appId) appIds.push(draft.appId);
+      if (draft.name) names.push(draft.name);
+    }
+  } finally {
+    storage.close();
+  }
+  return { appIds, names };
+}
+
+/**
+ * Drafts of new Apps that share an id with another App, or with an older draft of a new App, get their own
+ * name and id ("… (2)"). Before V12 a new App took its id from its name, so Describe with AI could give a
+ * new App the id of an App already in the project: the library then showed the new draft as that App's
+ * "Continue editing", in place of that App's own draft, and the new App could never be published. Only the
+ * new draft changes; the other App, its drafts and its published pages stay as they are.
+ */
+export function separateNewAppDrafts(
+  projectRoot: string,
+  drafts: AppBuildDraft[],
+  save: (draft: AppBuildDraft, expectedRevision: number) => void,
+): AppBuildDraft[] {
+  const project = projectAppIdentities(projectRoot);
+  const appIds = new Set(Array.from(project.appIds, (appId) => appId.toLowerCase()));
+  const unpublished = drafts.filter((draft) => draft.state !== 'project_published');
+  const newApps = unpublished
+    .filter((draft) => !draft.baseApp)
+    .sort((left, right) => Date.parse(left.createdAt ?? '') - Date.parse(right.createdAt ?? '') || left.id.localeCompare(right.id));
+  const claimed = new Set(unpublished.filter((draft) => draft.baseApp).map((draft) => draft.appId.toLowerCase()));
+  const renamed = new Map<string, AppBuildDraft>();
+  for (const draft of newApps) {
+    const key = draft.appId.toLowerCase();
+    if (!appIds.has(key) && !claimed.has(key)) {
+      claimed.add(key);
+      continue;
+    }
+    const others = unpublished.filter((other) => other.id !== draft.id).map((other) => renamed.get(other.id) ?? other);
+    const identity = uniqueNewAppIdentity(draft.name || draft.appId, {
+      appIds: [...project.appIds, ...others.map((other) => other.appId)],
+      names: [...project.names, ...others.map((other) => other.name)],
+    });
+    const moved = { ...draft, appId: identity.appId, name: identity.name, revision: draft.revision + 1, updatedAt: new Date().toISOString() };
+    const next = { ...moved, proposalHash: appBuildDraftHash({ ...moved, proposalHash: undefined }) };
+    try {
+      save(next, draft.revision);
+    } catch {
+      continue;
+    }
+    claimed.add(identity.appId.toLowerCase());
+    renamed.set(draft.id, next);
+  }
+  return drafts.map((draft) => renamed.get(draft.id) ?? draft);
 }
 
 export function writeStoredAppBuildDraft(
@@ -9711,14 +9798,19 @@ function createAppPackageViaBuildDraft(
   const uncertified = selectedBlocks.filter((block) => block.status !== 'certified');
   if (uncertified.length) return { ok: false, error: `Manual App creation accepts certified saved queries only: ${uncertified.map((block) => block.name).join(', ')}` };
 
-  const draft = createStoredAppBuildDraft(projectRoot, {
-    appId,
-    name,
-    goal: name,
-    audience: cleanString(input.audience),
-    domain,
-    authoringMode: 'manual',
-  });
+  let draft: AppBuildDraft;
+  try {
+    draft = createStoredAppBuildDraft(projectRoot, {
+      appId,
+      name,
+      goal: name,
+      audience: cleanString(input.audience),
+      domain,
+      authoringMode: 'manual',
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
   const items = buildDashboardItems(projectRoot, selectedBlocks);
   const page = {
     ...draft.pages[0],

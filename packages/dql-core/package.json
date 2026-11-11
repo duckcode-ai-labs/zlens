@@ -39,6 +39,10 @@
       "types": "./dist/apps/tile-query.d.ts",
       "import": "./dist/apps/tile-query.js"
     },
+    "./apps/year-values": {
+      "types": "./dist/apps/year-values.d.ts",
+      "import": "./dist/apps/year-values.js"
+    },
     "./apps/viz-style": {
       "types": "./dist/apps/viz-style.d.ts",
       "import": "./dist/apps/viz-style.js"

@@ -17,6 +17,22 @@ describe('semantic value formatting', () => {
     expect(formatDisplayValue('margin_pct', 86.3)).toBe('86.3%');
   });
 
+  // V11: seasons read "2,014" in App tiles and tables, and in the Ask and notebook grids.
+  it('shows a season or year column as years, whatever number format the column carries', () => {
+    expect(inferDisplayValueKind('SEASON', [2014, 2015])).toBe('year');
+    expect(formatDisplayValue('SEASON', 2014, [2014, 2018])).toBe('2014');
+    expect(formatDisplayValue('season', '2018')).toBe('2018');
+    expect(formatDisplayValue('FISCAL_YEAR', 2018, [], { compact: true })).toBe('2018');
+    expect(formatChartValue('SEASON', 2016)).toBe('2016');
+    // A Dataset field's number contract does not make a year "2,014".
+    expect(formatDisplayValue('SEASON', 2014, [], { meta: { kind: 'number' } })).toBe('2014');
+    expect(formatDisplayValue('SEASON', 2014, [], { meta: { kind: 'count' } })).toBe('2014');
+    // Money, shares and other numbers are unchanged.
+    expect(formatDisplayValue('SEASON', 2014, [], { meta: { kind: 'currency' } })).toBe('$2,014.00');
+    expect(formatDisplayValue('WINS', 2014)).toBe('2,014');
+    expect(formatDisplayValue('POINTS_PER_SEASON', 2014)).toBe('2,014');
+  });
+
   it('formats years, months, dates, and timestamps by their semantic role', () => {
     expect(formatDisplayValue('fiscal_year', 2006)).toBe('2006');
     expect(formatDisplayValue('fiscal_year', '2006')).toBe('2006');

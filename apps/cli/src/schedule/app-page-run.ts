@@ -1,4 +1,5 @@
 import type { QueryRunResult } from './types.js';
+import { formatYearValue } from '@zlens/core';
 
 /** One tile as the App runtime settled it for a full page run. */
 export interface AppPageRunTile {
@@ -124,6 +125,9 @@ function singleValue(tile: AppPageRunTile): string | undefined {
   const column = tile.columns.find((name) => typeof row[name] === 'number') ?? tile.columns[0];
   if (!column) return undefined;
   const value = row[column];
+  // A season or year reads 2014, never 2,014 (V11).
+  const year = formatYearValue(column, value);
+  if (year !== undefined) return year;
   if (typeof value === 'number') return Number.isInteger(value) ? value.toLocaleString('en-US') : value.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return value === null || value === undefined ? undefined : String(value);
 }

@@ -7,6 +7,8 @@ import {
   resolveRlsContext,
   findAppDocuments,
   suggestAppId,
+  uniqueNewAppIdentity,
+  projectAppIdentities,
   type AppDocument,
 } from './app-document.js';
 
@@ -274,5 +276,33 @@ describe('suggestAppId', () => {
   });
   it('returns "app" for an empty input', () => {
     expect(suggestAppId('   ')).toBe('app');
+  });
+});
+
+// V11: a new App named after an existing App took that App's id, and its draft hid that App's own draft.
+describe('uniqueNewAppIdentity', () => {
+  it('numbers a new App whose name or id is taken, in its name and its id alike', () => {
+    const taken = { appIds: ['warriors-seasons', 'warriors-seasons-2', 'other'], names: ['Warriors seasons', 'Warriors Seasons (2)', 'Sales'] };
+    expect(uniqueNewAppIdentity('Fresh', taken)).toEqual({ name: 'Fresh', appId: 'fresh' });
+    expect(uniqueNewAppIdentity('Warriors seasons', taken)).toEqual({ name: 'Warriors seasons (3)', appId: 'warriors-seasons-3' });
+    // Names match whatever their case and spacing; a taken id alone is enough.
+    expect(uniqueNewAppIdentity('SALES', taken)).toEqual({ name: 'SALES (2)', appId: 'sales-2' });
+    expect(uniqueNewAppIdentity('Other!', taken)).toEqual({ name: 'Other! (2)', appId: 'other-2' });
+    // "… (2)" taken goes on to "… (3)", not "… (2) (2)".
+    expect(uniqueNewAppIdentity('Warriors seasons (2)', taken)).toEqual({ name: 'Warriors seasons (3)', appId: 'warriors-seasons-3' });
+  });
+
+  it('reads the project\'s Apps: their ids, folder names and names', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-app-identities-'));
+    try {
+      mkdirSync(join(root, 'apps', 'folder-name'), { recursive: true });
+      writeFileSync(join(root, 'apps', 'folder-name', 'dql.app.json'), JSON.stringify({ ...minimalApp, id: 'growth-cxo', name: 'Growth CXO' }));
+      const identities = projectAppIdentities(root);
+      expect(Array.from(identities.appIds).sort()).toEqual(['folder-name', 'growth-cxo']);
+      expect(Array.from(identities.names)).toEqual(['Growth CXO']);
+      expect(uniqueNewAppIdentity('Folder name', identities)).toEqual({ name: 'Folder name (2)', appId: 'folder-name-2' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -108,6 +108,17 @@ describe('build_dql_app (design D9: AI builds open in App Studio)', () => {
     expect(JSON.stringify(out)).not.toMatch(/data AI picked|Certified Dataset/);
   });
 
+  // V11: the same description gave the new App another App's id, and its draft hid that App's own draft.
+  it('makes a new App each time, never taking another App\'s or draft\'s name or id', async () => {
+    const ctx = project();
+    const first = await buildDqlApp(ctx, { prompt: 'Revenue performance for leadership', name: 'Revenue Performance' });
+    const second = await buildDqlApp(ctx, { prompt: 'Revenue performance for leadership', name: 'Revenue Performance' });
+    if (!first.ok || !second.ok || !('draftId' in first) || !('draftId' in second)) throw new Error(JSON.stringify([first, second]));
+    expect([first.appId, first.name]).toEqual(['revenue-performance', 'Revenue Performance']);
+    expect([second.appId, second.name]).toEqual(['revenue-performance-2', 'Revenue Performance (2)']);
+    expect(storedDraft(ctx.projectRoot, first.draftId)).toMatchObject({ appId: 'revenue-performance', name: 'Revenue Performance' });
+  });
+
   it('returns the picks only when saveDraft is false, and refuses blocks that are not certified', async () => {
     const ctx = project();
     const planOnly = await buildDqlApp(ctx, { prompt: 'revenue', blocks: ['Total Revenue'], saveDraft: false });

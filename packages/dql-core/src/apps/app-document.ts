@@ -758,3 +758,53 @@ function readHomepage(raw: unknown, err: (m: string) => void): AppHomepage | und
 export function suggestAppId(name: string): string {
   return basename(name).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
 }
+
+/** The names and ids a new App must not repeat: the project's Apps and the drafts of Apps not published yet. */
+export interface TakenAppIdentities {
+  appIds: Iterable<string>;
+  names: Iterable<string>;
+}
+
+/** The project's Apps' ids and names, and the ids of their folders (`apps/<id>`). */
+export function projectAppIdentities(projectRoot: string): TakenAppIdentities {
+  const appIds: string[] = [];
+  const names: string[] = [];
+  for (const path of findAppDocuments(projectRoot)) {
+    appIds.push(basename(path.slice(0, -'/dql.app.json'.length)));
+    const { document } = loadAppDocument(path);
+    if (!document) continue;
+    appIds.push(document.id);
+    if (document.name) names.push(document.name);
+  }
+  return { appIds, names };
+}
+
+function appNameKey(name: string): string {
+  return name.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * A new App's name and id, never another App's or another draft's (V11: Describe with AI named a new App after
+ * the description, which an existing App already had; its draft took that App's id and hid that App's own
+ * draft). When the name or the id is taken, both get the same number: "Sales (2)" and `sales-2`.
+ */
+export function uniqueNewAppIdentity(
+  name: string,
+  taken: TakenAppIdentities,
+  appId: string = suggestAppId(name),
+): { name: string; appId: string } {
+  const ids = new Set(Array.from(taken.appIds, (id) => id.toLowerCase()));
+  const names = new Set(Array.from(taken.names, appNameKey));
+  const free = (candidateName: string, candidateId: string) => !ids.has(candidateId.toLowerCase()) && !names.has(appNameKey(candidateName));
+  if (free(name, appId)) return { name, appId };
+  // "Sales (2)" taken goes on to "Sales (3)", not "Sales (2) (2)".
+  const numbered = /^(.*\S)\s+\((\d+)\)$/.exec(name);
+  const baseName = numbered && appId.endsWith(`-${numbered[2]}`) ? numbered[1] : name;
+  const baseId = numbered && appId.endsWith(`-${numbered[2]}`) ? appId.slice(0, -`-${numbered[2]}`.length) : appId;
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = { name: `${baseName} (${n})`, appId: `${baseId}-${n}` };
+    if (free(candidate.name, candidate.appId)) return candidate;
+  }
+  const stamp = Date.now().toString(36);
+  return { name: `${baseName} (${stamp})`, appId: `${baseId}-${stamp}` };
+}

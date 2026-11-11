@@ -429,6 +429,17 @@ export const UNTITLED_APP_NAME = 'Untitled Analytics App';
 class TileAddedFollowUpError extends Error {}
 
 /** The name a new App starts with: what the author typed, else the manual default. Quick start names it after its Domain later. */
+/**
+ * The example in the "Describe with AI" box: in the chosen domain's words, never another business's
+ * (V11: an NBA project still read "weekly revenue health App for finance leaders").
+ */
+export function describeWithAiPlaceholder(domainLabel?: string): string {
+  const domain = domainLabel?.trim();
+  return domain
+    ? `For example: the ${domain} numbers your team checks most, how they changed over time, and the detail behind them.`
+    : 'For example: the numbers your team checks most, how they changed over time, and the detail behind them.';
+}
+
 export function launchAppName(config: Pick<AppStudioLaunchConfig, 'mode' | 'name'>): string {
   if (config.mode === 'ai') return '';
   return config.name.trim() || (config.mode === 'manual' ? UNTITLED_APP_NAME : '');
@@ -482,7 +493,7 @@ export function AppStudioLaunchSurface({
       <label className="primary-field">
         <span>{mode === 'ai' ? 'What decision should this App support?' : 'What should this App be called?'}</span>
         {mode === 'ai'
-          ? <textarea value={config.prompt} onChange={(event) => onChange({ prompt: event.target.value })} placeholder="Build a weekly revenue health App for finance leaders with trends, drivers, and customer detail." rows={4} />
+          ? <textarea value={config.prompt} onChange={(event) => onChange({ prompt: event.target.value })} placeholder={describeWithAiPlaceholder(domainLabel)} rows={4} />
           : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={mode === 'quick' ? (domainLabel ? quickStartAppName({ domainLabel }) : 'Sales overview') : UNTITLED_APP_NAME} />}
       </label>
       <label className="launch-domain-field">

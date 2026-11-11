@@ -7,8 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppPlan, AppSourceCatalogRecord } from '@zlens/agent';
-import type { AppBuildDraft, AppBuildDraftSource, DashboardDocument, DatasetDescriptor } from '@zlens/core';
-import { appBuildPreviewIntentFingerprint, appTrustAnswer, blockCompanionRelativePath, certifiedSourceSha256, loadDashboardDocument, publishedTileTrustText } from '@zlens/core';
+import type { AppBuildDraft, AppBuildDraftOperation, AppBuildDraftSource, DashboardDocument, DatasetDescriptor } from '@zlens/core';
+import { appBuildDraftHash, applyAppBuildDraftOperations, appBuildPreviewIntentFingerprint, appTrustAnswer, blockCompanionRelativePath, certifiedSourceSha256, loadDashboardDocument, publishedTileTrustText } from '@zlens/core';
 import { defaultLocalAppsDbPath, defaultPersonaRegistry, LocalAppStorage } from '@zlens/project';
 import {
   __test__,
@@ -45,6 +45,7 @@ import {
   appReadme,
   appReadmeSourceData,
   rebindPublishedBlockPlaceholders,
+  writeStoredAppBuildDraft,
 } from './apps-api.js';
 
 const tempDirs: string[] = [];
@@ -432,6 +433,73 @@ describe('Apps command center API helpers', () => {
     expect(draft.name).toBe('A weekly revenue dashboard: revenue by month, the top');
     expect(draft.name.length).toBeLessThanOrEqual(60);
     expect(draft.frame.goal).toContain('A page for a sales manager.');
+  });
+
+  // V11 report, Part 2 step 6: Describe with AI named the new App after the description, which was also the
+  // tester's V8 App's name. Its draft took that App's id: the V8 App's "Continue editing" opened the AI's tiles,
+  // and no new App appeared.
+  it('makes a new App every time the same description is described, and leaves the first App as it was (V11)', async () => {
+    const root = createProject();
+    const goal = 'Help a Warriors fan see how the Golden State Warriors did in each season, with wins and losses';
+    const described = async () => {
+      const created = await invokeAppsApi(root, '/api/app-builds', 'POST', { goal, domain: 'nba', authoringMode: 'ai', template: 'blank' });
+      expect(created.status).toBe(201);
+      return (created.payload as { draft: AppBuildDraft }).draft;
+    };
+    const first = await described();
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, first));
+    const appDir = join(root, 'apps', first.appId);
+    // Its unpublished changes: a page renamed in the editor.
+    const edit = createStoredAppBuildDraft(root, { baseAppId: first.appId, authoringMode: 'manual' });
+    const renamePage: AppBuildDraftOperation[] = [{ type: 'upsert_page', page: { ...edit.pages[0], metadata: { ...edit.pages[0].metadata, title: 'Regular season wins' } } }];
+    const edited = applyAppBuildDraftOperations(edit, edit.revision, renamePage);
+    writeStoredAppBuildDraft(root, edited, { expectedRevision: edit.revision, operations: renamePage });
+    const publishedFiles = () => [join(appDir, 'dql.app.json'), join(appDir, 'dashboards', 'overview.dqld')].map((path) => readFileSync(path, 'utf-8'));
+    const publishedBefore = publishedFiles();
+
+    const second = await described();
+    expect(second.name).toBe(`${first.name} (2)`);
+    expect(second.appId).toBe(`${first.appId}-2`);
+    expect(second.baseApp).toBeUndefined();
+    const third = await described();
+    expect([third.name, third.appId]).toEqual([`${first.name} (3)`, `${first.appId}-3`]);
+
+    // The first App's draft is still the one its "Continue editing" opens, unchanged.
+    const listed = await invokeAppsApi(root, '/api/app-builds', 'GET', {});
+    const drafts = (listed.payload as { drafts: AppBuildDraft[] }).drafts.filter((draft) => draft.state !== 'project_published');
+    expect(drafts.filter((draft) => draft.appId === first.appId)).toEqual([expect.objectContaining({ id: edited.id, revision: edited.revision, proposalHash: edited.proposalHash })]);
+    expect(drafts.find((draft) => draft.id === edited.id)?.pages[0].metadata.title).toBe('Regular season wins');
+
+    // The second publishes as an App of its own; the first App's published files are as they were.
+    const published = publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, second));
+    expect(published.app).toMatchObject({ id: `${first.appId}-2`, name: `${first.name} (2)` });
+    expect(publishedFiles()).toEqual(publishedBefore);
+    // Named by hand, a taken name is numbered too.
+    expect(createStoredAppBuildDraft(root, { name: first.name, authoringMode: 'manual' })).toMatchObject({ name: `${first.name} (4)`, appId: `${first.appId}-4` });
+    // An App asked for by its id is refused when that id is taken, never written into.
+    expect(() => createStoredAppBuildDraft(root, { appId: first.appId, name: 'Other', authoringMode: 'manual' })).toThrow(/App already exists/);
+  });
+
+  it('gives a new App\'s draft that took another App\'s id before V12 its own name and id, and leaves that App\'s draft alone', async () => {
+    const root = createProject();
+    const v8 = createStoredAppBuildDraft(root, { name: 'Warriors seasons', goal: 'Warriors seasons', authoringMode: 'ai' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, v8));
+    const v8Edit = createStoredAppBuildDraft(root, { baseAppId: v8.appId, authoringMode: 'manual' });
+    // What V11 wrote: a new App's draft with the published App's id and name.
+    const collided = { ...createStoredAppBuildDraft(root, { name: 'Something else', authoringMode: 'ai' }), appId: v8.appId, name: 'Warriors seasons' };
+    const collidedStored = { ...collided, proposalHash: appBuildDraftHash({ ...collided, proposalHash: undefined }) };
+    const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+    try { storage.saveAppBuildDraft(collidedStored); } finally { storage.close(); }
+
+    const listed = await invokeAppsApi(root, '/api/app-builds', 'GET', {});
+    const drafts = (listed.payload as { drafts: AppBuildDraft[] }).drafts;
+    expect(drafts.find((draft) => draft.id === collided.id)).toMatchObject({ appId: `${v8.appId}-2`, name: 'Warriors seasons (2)', revision: collided.revision + 1 });
+    expect(drafts.find((draft) => draft.id === v8Edit.id)).toMatchObject({ appId: v8.appId, revision: v8Edit.revision, proposalHash: v8Edit.proposalHash });
+    // Saved: the next list reads the same, and the moved draft can be published as its own App.
+    const again = (await invokeAppsApi(root, '/api/app-builds', 'GET', {})).payload as { drafts: AppBuildDraft[] };
+    const moved = again.drafts.find((draft) => draft.id === collided.id)!;
+    expect(moved).toMatchObject({ appId: `${v8.appId}-2`, revision: collided.revision + 1 });
+    expect(publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, moved)).app.id).toBe(`${v8.appId}-2`);
   });
 
   it('keeps the unified manual draft local until atomic Publish to Project', () => {

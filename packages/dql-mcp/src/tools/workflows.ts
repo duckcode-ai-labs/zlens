@@ -25,7 +25,7 @@ import {
   type MetadataObject,
   type ReindexProjectResult,
 } from '@zlens/agent';
-import { resolveTrustLabel, trustLabelIdForRoute } from '@zlens/core';
+import { projectAppIdentities, resolveTrustLabel, trustLabelIdForRoute, uniqueNewAppIdentity } from '@zlens/core';
 import { LocalAppStorage, defaultLocalAppsDbPath } from '@zlens/project';
 import { suggestBlock } from './suggest-block.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
@@ -227,13 +227,15 @@ async function buildDqlAppOnce(
       .map((requirement) => ({ question: requirement.question, reason: 'No certified data covers this question yet.' }));
   }
   picks = picks.slice(0, APP_BUILD_HANDOFF_SOURCE_LIMIT);
-  const name = cleanOptional(args.name) ?? appNameFromPrompt(prompt);
+  // A new App: never another App's or draft's name or id (V11), so its draft cannot hide another App's.
+  const identity = uniqueNewAppIdentity((cleanOptional(args.name) ?? appNameFromPrompt(prompt)).slice(0, 120), takenAppIdentities(ctx.projectRoot));
   const sources = picks.map((pick) => appBuildHandoffSourceSummary(pick.source, pick.reason));
   // The gaps are reported, not stored: App Studio plans again from the same
   // goal and lists them under "Not covered yet" itself.
   const draft = createAppBuildHandoffDraft({
     goal: prompt,
-    name,
+    name: identity.name,
+    appId: identity.appId,
     ...(domain ? { domain } : {}),
     sources: picks.map((pick) => pick.source),
   });
@@ -283,6 +285,24 @@ async function buildDqlAppOnce(
       `${args.blocks?.length ? 'Check the data you named' : 'Check the suggested data'}, build the pages, then publish. Nothing is written to the project until you publish.`,
     ],
   };
+}
+
+/** The project's Apps and the drafts nobody has published yet: their names and ids. */
+function takenAppIdentities(projectRoot: string): { appIds: string[]; names: string[] } {
+  const project = projectAppIdentities(projectRoot);
+  const appIds = Array.from(project.appIds);
+  const names = Array.from(project.names);
+  const storage = new LocalAppStorage(defaultLocalAppsDbPath(projectRoot));
+  try {
+    for (const draft of storage.listAppBuildDrafts()) {
+      if (draft.state === 'project_published') continue;
+      if (draft.appId) appIds.push(draft.appId);
+      if (draft.name) names.push(draft.name);
+    }
+  } finally {
+    storage.close();
+  }
+  return { appIds, names };
 }
 
 /** A short App name from the request when the caller gives none. */
