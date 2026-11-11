@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { withoutDrafterCap, aggregatesRows, appliedConditions, groupedColumns, joinKeyGroups, joinKeyPairs, questionProper, mentionsColumn, missingRequiredFilters, missingStatedValues, requiredFilterFromText, statedValues, withRowGuard, aggregatesColumnOf } from './sql-checks.js';
+import { withoutDrafterCap, aggregatesRows, appliedConditions, groupedColumns, joinKeyGroups, joinKeyPairs, questionProper, mentionsColumn, missingRequiredFilters, missingStatedValues, namePartsMatchedByOr, requiredFilterFromText, statedValues, withRowGuard, aggregatesColumnOf } from './sql-checks.js';
 
 describe('the checks an AI-drafted statement passes before it runs', () => {
   const office = 'Lost opportunities count ,Lost Amount by month for fiscal year FY26 and competitor involved is Splunk';
@@ -53,6 +53,17 @@ describe('the checks an AI-drafted statement passes before it runs', () => {
     expect(missingStatedValues("SELECT COUNT(*) FROM opp oe WHERE oe.FISCAL_YEAR = 26 AND LOWER(tags) LIKE '%splunk%'", stated)).toEqual([]);
     expect(missingStatedValues("SELECT COUNT(*) FROM opp WHERE amount = 26 AND LOWER(tags) LIKE '%splunk%'", stated)).toEqual([{ value: 'FY26', kind: 'fiscal_year' }]);
     expect(missingStatedValues("SELECT COUNT(*) FROM opp WHERE close_date >= '2025-02-01' AND competitor_c = 'Splunk'", stated)).toEqual([]);
+  });
+
+  it('finds a stated name matched by either of its parts, on one table (V12 gate, G3)', () => {
+    const stated = statedValues('How many preseason games did the Los Angeles Lakers play in 2019?');
+    const either = "SELECT COUNT(*) FROM nba.games t JOIN nba.dim_teams d ON t.team_id = d.team_id WHERE t.season = 2019 AND (d.TEAM_NICKNAME ILIKE '%Lakers%' OR d.CITY ILIKE '%Los Angeles%')";
+    expect(namePartsMatchedByOr(either, stated)).toEqual([{ name: 'Los Angeles Lakers', parts: ['Lakers', 'Los Angeles'], conditions: ["TEAM_NICKNAME ILIKE '%Lakers%'", "CITY ILIKE '%Los Angeles%'"], relation: 'nba.dim_teams' }]);
+    expect(namePartsMatchedByOr("SELECT COUNT(*) FROM nba.teams WHERE nickname LIKE '%Lakers%' OR city LIKE '%Los Angeles%'", stated)[0]?.relation).toBe('nba.teams');
+    // Both parts required, two different names, or two tables: nothing to ask.
+    expect(namePartsMatchedByOr(either.replace(' OR ', ' AND '), stated)).toEqual([]);
+    expect(namePartsMatchedByOr("SELECT 1 FROM t WHERE name ILIKE '%Lakers%' OR name ILIKE '%Celtics%'", stated)).toEqual([]);
+    expect(namePartsMatchedByOr("SELECT 1 FROM a JOIN b ON a.id = b.id WHERE a.nick ILIKE '%Lakers%' OR b.city ILIKE '%Los Angeles%'", stated)).toEqual([]);
   });
 
   it('reads a required filter and catches a statement that does not apply it', () => {

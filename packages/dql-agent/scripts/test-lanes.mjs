@@ -206,12 +206,13 @@ const EXPECTED_TEST_FILES = 198;
 // 2873 with the App Builder planner applying the split a tile's title or question asks for, answering a split
 // by values with the split, listing a dropped part of the request as a gap, keeping trust codes out of its
 // reasons, and asking again when its reply is cut off before any tile (app-builder-orchestrator.test.ts +5; V12).
-// 2877 with a slow reading keeping time for the SQL and saying when it ran out of time, and a clause written as a
-// question asked as written (ask-pipeline/slow-reading.test.ts +4; V12).
-const EXPECTED_TESTS = 2877;
+// 2878 with a slow reading keeping time for the SQL and saying when it ran out of time, a clause written as a
+// question asked as written (ask-pipeline/slow-reading.test.ts +4), and a stated name matched by either of its
+// parts (prepare/sql-checks.test.ts +1; V12).
+const EXPECTED_TESTS = 2878;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2796.
+// The ordinary lane's share is the difference: 2797.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

@@ -1233,7 +1233,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
           if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) { readings.push(messages[0]!.content); return prior?.reading ? unreadable.replace('Lost deals to a competitor.', prior.reading) : unreadable; }
           const prompt = messages.map((message) => message.content).join('\n');
           prompts.push(prompt);
-          return /Read the question again|A first draft found no field for this|but the question asks about/.test(prompt) ? second : first;
+          return /Read the question again|A first draft found no field for this|but the question asks about|by either of its parts/.test(prompt) ? second : first;
         },
       };
       const statements: string[] = [];
@@ -1397,6 +1397,16 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const second = await ask('Which team won the most postseason games in 2015?');
       expect(calls).not.toContain('name');
       expect(second.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+    });
+
+    it('a name matched by either of its parts is matched by both when one part alone picks other rows (V12 gate, G3)', async () => {
+      const either = "SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND (team_name ILIKE '%Lakers%' OR team_name ILIKE '%Los Angeles%')";
+      const both = "SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND team_name ILIKE '%Lakers%' AND team_name ILIKE '%Los Angeles%'";
+      const { prompts, statements, result } = await askNba('How many games did the Los Angeles Lakers win in 2015?', both, either);
+      expect(prompts[1]).toContain('it matches "Los Angeles Lakers" by either of its parts ("Lakers" OR "Los Angeles"), and in local_team_game_facts each part alone also matches other rows; match both parts (AND)');
+      expect(statements).toContain(`SELECT 1 FROM nba.local_team_game_facts WHERE (team_name ILIKE '%Los Angeles%') AND NOT (team_name ILIKE '%Lakers%')`);
+      expect(statements.some((sql) => sql.includes("team_name ILIKE '%Lakers%' AND team_name ILIKE '%Los Angeles%'"))).toBe(true);
+      expect(result.status).toBe('completed');
     });
 
     it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {

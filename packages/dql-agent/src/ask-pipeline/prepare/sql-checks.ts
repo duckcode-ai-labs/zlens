@@ -167,6 +167,50 @@ export function missingStatedValues(sql: string, stated: StatedValue[]): StatedV
   });
 }
 
+export interface NamePartsByOr {
+  /** The name the question states ("Los Angeles Lakers"). */
+  name: string;
+  /** The parts the statement matches, each alone ("Lakers", "Los Angeles"). */
+  parts: [string, string];
+  /** Each part's condition as written, without its table qualifier (`CITY ILIKE '%Los Angeles%'`). */
+  conditions: [string, string];
+  /** The table both conditions read, when the statement says which. */
+  relation?: string;
+}
+
+/**
+ * A name the question states, matched by EITHER of its parts: "Los Angeles Lakers" as
+ * `NICKNAME ILIKE '%Lakers%' OR CITY ILIKE '%Los Angeles%'`. Each part alone may pick other rows (the Clippers
+ * play in Los Angeles too), so the host asks the warehouse whether the parts pick the same rows (new-user test,
+ * V12 gate: G3 counted 15 preseason games for the Lakers, 9 of them theirs). Only two parts of one table.
+ */
+export function namePartsMatchedByOr(sql: string, stated: StatedValue[]): NamePartsByOr[] {
+  const names = [...new Set(stated.flatMap((item) => (item.kind === 'text' && item.name ? [item.name] : [])))];
+  if (names.length === 0) return [];
+  const aliases = relationAliases(sql);
+  const relations = [...new Set(aliases.values())];
+  const operand = String.raw`((?:"?[\w$]+"?\.)?"?[\w$]+"?)\s+((?:not\s+)?i?like)\s+'%([^%']+)%'`;
+  const found: NamePartsByOr[] = [];
+  for (const match of sql.matchAll(new RegExp(`${operand}\\s+or\\s+${operand}`, 'gi'))) {
+    const [, leftColumn, leftOp, leftPart, rightColumn, rightOp, rightPart] = match as unknown as string[];
+    if (/not/i.test(leftOp!) || /not/i.test(rightOp!) || leftPart!.toLowerCase() === rightPart!.toLowerCase()) continue;
+    const name = names.find((candidate) => candidate.toLowerCase().includes(leftPart!.toLowerCase()) && candidate.toLowerCase().includes(rightPart!.toLowerCase()));
+    if (!name) continue;
+    const qualifier = (column: string) => (column.includes('.') ? column.split('.')[0]!.replace(/"/g, '').toLowerCase() : undefined);
+    if (qualifier(leftColumn!) !== qualifier(rightColumn!)) continue;
+    const bare = (column: string) => column.replace(/^"?[\w$]+"?\./, '');
+    const owner = qualifier(leftColumn!);
+    const relation = owner ? aliases.get(owner) : relations.length === 1 ? relations[0] : undefined;
+    found.push({
+      name,
+      parts: [leftPart!, rightPart!],
+      conditions: [`${bare(leftColumn!)} ${leftOp} '%${leftPart}%'`, `${bare(rightColumn!)} ${rightOp} '%${rightPart}%'`],
+      ...(relation ? { relation } : {}),
+    });
+  }
+  return found;
+}
+
 export interface RequiredFilterCheck { text: string; column: string; values: Array<string | number | boolean> }
 
 const REQUIRED_FILTER_TEXT = /^\s*([A-Za-z_][\w:.]*)\s*(==|=|!=|<>|>=|<=|>|<|not in|in)\s*(.+?)\s*$/i;
@@ -247,8 +291,8 @@ function onClauses(sql: string): string[] {
  * all its columns (`ON s.match_id = b.match_id AND s.ball_id = b.ball_id …`)
  * reads as that key, not as its first column. CTE references are left out.
  */
-export function joinKeyPairs(sql: string): JoinKeyPair[] {
-  const ctes = new Set([...sql.matchAll(/(?:\bwith\b(?:\s+recursive\b)?|,)\s*([A-Za-z_][\w$]*)(?:\s*\([^)]*\))?\s+as\s*\(/gi)].map((match) => match[1]!.toLowerCase()));
+/** The relations a statement reads, by lower-cased alias and by table name. */
+function relationAliases(sql: string): Map<string, string> {
   const aliases = new Map<string, string>();
   for (const match of sql.matchAll(new RegExp(String.raw`\b(?:from|join)\s+${RELATION_TOKEN}(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?`, 'gi'))) {
     const relation = match[1]!;
@@ -257,6 +301,12 @@ export function joinKeyPairs(sql: string): JoinKeyPair[] {
     aliases.set(tail.toLowerCase(), relation);
     if (alias) aliases.set(alias.toLowerCase(), relation);
   }
+  return aliases;
+}
+
+export function joinKeyPairs(sql: string): JoinKeyPair[] {
+  const ctes = new Set([...sql.matchAll(/(?:\bwith\b(?:\s+recursive\b)?|,)\s*([A-Za-z_][\w$]*)(?:\s*\([^)]*\))?\s+as\s*\(/gi)].map((match) => match[1]!.toLowerCase()));
+  const aliases = relationAliases(sql);
   const pairs: JoinKeyPair[] = [];
   for (const clause of onClauses(sql)) {
     for (const match of clause.matchAll(/("?[\w$]+"?)\.("?[\w$]+"?)\s*=\s*("?[\w$]+"?)\.("?[\w$]+"?)/g)) {

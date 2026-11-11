@@ -64,6 +64,7 @@ import {
   aggregatesColumnOf,
   missingRequiredFilters,
   missingStatedValues,
+  namePartsMatchedByOr,
   withoutDrafterCap,
   requiredFilterFromText,
   statedValues,
@@ -3280,6 +3281,16 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         });
         const missing = missingStatedValues(sql, stated).filter((item) => item.kind !== 'text' || !keepsStatedKind(item.name ?? item.value));
         if (missing.length) failures.push(`it does not apply ${missing.map((item) => item.kind === 'fiscal_year' ? `"${item.value}" (fiscal year ${item.value.replace(/^FY/i, '').length === 2 ? `20${item.value.replace(/^FY/i, '')}` : item.value.replace(/^FY/i, '')}: restrict a fiscal-year field, or the dates that fiscal year spans)` : `"${item.value}"`).join(', ')} from the question`);
+        // A NAME IS MATCHED BY ALL OF ITS PARTS when either part alone picks other rows: "Los Angeles Lakers" as
+        // NICKNAME ILIKE '%Lakers%' OR CITY ILIKE '%Los Angeles%' counts the Clippers too (V12 gate, G3). The
+        // warehouse says whether the parts pick the same rows; "Golden State" OR "Warriors" is one team either way.
+        for (const split of namePartsMatchedByOr(sql, stated)) {
+          if (!split.relation) continue;
+          const [first, second] = split.conditions;
+          let wider = false;
+          try { wider = await probeOne(`SELECT 1 FROM ${split.relation} WHERE (${second}) AND NOT (${first})`) || await probeOne(`SELECT 1 FROM ${split.relation} WHERE (${first}) AND NOT (${second})`); } catch { wider = false; }
+          if (wider) failures.push(`it matches "${split.name}" by either of its parts ("${split.parts[0]}" OR "${split.parts[1]}"), and in ${tableName(split.relation)!.replace(/"/g, '')} each part alone also matches other rows; match both parts (AND)`);
+        }
         // A KIND THE QUESTION NAMES IS KEPT. A statement that counts every kind together (an unfiltered key, or a
         // summary table that adds them all up) does not answer a question about one kind; a follow-up's reading
         // carries the kind its question kept (new-user test V11 retest, N4: "Which of those had a winning record?"
@@ -3373,7 +3384,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         // The same verdicts, recorded as checks for the run views.
         const attempt = ++state.checkRound;
         const joinFailure = failures.find((message) => /repeats the key on both sides|across its join to|which both only reference|uses none of its columns/.test(message));
-        const statedFailure = failures.find((message) => /from the question$|^it counts every kind of |^it reads .*, which adds up every kind of /.test(message));
+        const statedFailure = failures.find((message) => /from the question$|^it counts every kind of |^it reads .*, which adds up every kind of |^it matches ".*" by either of its parts/.test(message));
         state.hostChecks.push(
           { id: 'catalog_columns', label: 'Uses only tables and columns the project lists', passed: true, message: 'every table and column it reads was inspected', attempt },
           { id: 'stated_values', label: 'Applies every value the question states', passed: !statedFailure, message: statedFailure ?? (stated.length ? `applies ${stated.map((item) => item.value).join(', ')}` : 'the question states no specific values'), attempt },
