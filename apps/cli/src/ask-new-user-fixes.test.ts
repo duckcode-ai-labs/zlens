@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { codeKindsFrom, droppedQuestionWords, holdsCode, joinKindNames, kindFilterOf, kindNamesFrom, kindNamesMessages, kindNoun, kindDatesFrom, kindDatesSql, kindsAnswerLine, kindsContextLine, kindsDeclineNote, kindsLookNote, readingWithoutKindClaims, summaryKindsRead } from './ask-pipeline-host/host.js';
+import { codeKindsFrom, droppedQuestionWords, holdsCode, joinKindNames, kindFilterOf, kindNamesFrom, kindNamesMessages, kindNoun, kindDatesFrom, kindDatesSql, kindsAnswerLine, kindsContextLine, kindsDeclineNote, kindsLookNote, readingWithoutKindClaims, statedKindFirsts, summaryKindsRead } from './ask-pipeline-host/host.js';
 import { activeProviderForDeadline, askTraceReason, deadlineScaleForProvider } from './local-runtime.js';
 
 /**
@@ -172,11 +172,23 @@ describe('game types in plain words, and a reading that agrees with its answer (
     const messages = kindNamesMessages({ ...kinds, dates });
     expect(messages[1]!.content).toContain('KEY: the first character of GAME_ID says what kind of game a row is: 1 (49,628 rows), 2 (577,985 rows)');
     expect(messages[1]!.content).toContain('WHEN EACH KIND FALLS: in SEASON 2021, 1 from 2021-10-03 to 2021-10-15, 4 from 2022-04-16 to 2022-06-16.');
-    expect(messages[1]!.content).toContain('Reply as {"1": "…", "2": "…", "4": "…", "5": "…"}');
-    expect(kindNamesFrom('Here: {"1": "Preseason games", "2": "regular-season games", "4": "playoff games", "5": "play-in games"}', kinds)).toEqual(names);
-    expect(kindNamesFrom('{"1": "preseason games", "2": null, "4": "games; DROP TABLE x", "5": "a very long name of five words"}', kinds)).toEqual({ '1': 'preseason games' });
+    expect(messages[1]!.content).toContain('Reply as {"1": ["…", "…"], "2": ["…", "…"], "4": ["…", "…"], "5": ["…", "…"]}');
+    expect(kindNamesFrom('Here: {"1": ["Preseason games", "exhibition games"], "2": "regular-season games", "4": ["playoff games", "postseason", "the playoffs"], "5": ["play-in games"]}', kinds)).toEqual({ names, words: { '1': ['exhibition games'], '4': ['postseason', 'the playoffs'] } });
+    expect(kindNamesFrom('{"1": "preseason games", "2": null, "4": "games; DROP TABLE x", "5": "a very long name of five words"}', kinds)).toEqual({ names: { '1': 'preseason games' } });
     expect(kindNamesFrom('{"1": "games", "2": "games"}', kinds)).toBeUndefined();
     expect(kindNamesFrom('no json', kinds)).toBeUndefined();
+  });
+
+  it('finds the kind a stated value names, by its name or its other words (V10 retest)', () => {
+    const withWords = { ...named, words: { '4': ['postseason', 'the playoffs'] } };
+    expect(statedKindFirsts('Playoffs', withWords)).toEqual(['4']);
+    expect(statedKindFirsts('Postseason', withWords)).toEqual(['4']);
+    expect(statedKindFirsts('Preseason', withWords)).toEqual(['1']);
+    expect(statedKindFirsts('Regular Season', withWords)).toEqual(['2']);
+    expect(statedKindFirsts('NBA Playoffs', withWords)).toEqual(['4']);
+    expect(statedKindFirsts('Celtics', withWords)).toEqual([]);
+    expect(statedKindFirsts('Games', withWords)).toEqual([]);
+    expect(statedKindFirsts('Playoffs', kinds)).toEqual([]);
   });
 
   it('says which games an answer counts in the names a reader uses, with the code beside them', () => {
@@ -202,6 +214,7 @@ describe('game types in plain words, and a reading that agrees with its answer (
     ['G1', 'Postseason games the Miami Heat won in 2012 — this project has no column or dimension distinguishing postseason/playoff games from regular-season games — SEASON and DIM_SEASONS only identify the year, not the game type.', 'Postseason games the Miami Heat won in 2012'],
     ['G3', 'Preseason games the Los Angeles Lakers played and won in 2019; this project has no column or dimension that distinguishes preseason games from regular-season or playoff games.', 'Preseason games the Los Angeles Lakers played and won in 2019'],
     ['G4', "Golden State Warriors points per game in the 2016 regular season and playoffs, but only the regular-season side can be computed because the project does not expose a game-type (regular season vs playoffs) distinction for team game facts.", 'Golden State Warriors points per game in the 2016 regular season and playoffs'],
+    ['K2 (V11 check)', 'The question asks which team had the most wins among preseason games played in 2018, but this project has no column or metric distinguishing preseason games (only SEASON as a year, and GAME_TYPE distinguishing regular season vs. playoffs in one certified block) from regular-season or playoff games.', 'The question asks which team had the most wins among preseason games played in 2018'],
   ])('leaves out the claim that game types cannot be told apart (%s)', (_name, reading, expected) => {
     expect(readingWithoutKindClaims(reading, terms)).toBe(expected);
   });
