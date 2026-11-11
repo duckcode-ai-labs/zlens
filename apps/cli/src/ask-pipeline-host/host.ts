@@ -3298,10 +3298,13 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         const sqlRelations = relationsInSql(sql);
         // A question that asks for every row ("Counting every game together, preseason, regular season and
         // playoffs, …", "over all games") is not held to the kinds it lists or carried.
-        const carried = prior ? intent?.reading || prior.intent.reading || '' : '';
-        const kindText = /\b(every|all)\b/i.test(question) ? '' : `${question} ${carried}`;
-        for (const kinds of kindText ? codeKinds : []) {
-          const named = kindsNamedIn(kindText, kinds, kinds.dates?.period);
+        // A follow-up whose own words and reading name no kind keeps the kind its previous question named (V12
+        // gate: N4's reading said "the 2019 season", dropping "regular").
+        const everyRow = /\b(every|all)\b/i.test(question);
+        const ownText = `${question} ${prior ? intent?.reading ?? '' : ''}`;
+        for (const kinds of everyRow ? [] : codeKinds) {
+          const own = kindsNamedIn(ownText, kinds, kinds.dates?.period);
+          const named = own.length || !prior ? own : kindsNamedIn(prior.intent.reading ?? '', kinds, kinds.dates?.period);
           if (!named.length || named.length >= kinds.values.length) continue;
           const asked = joinKindNames(named.map((first) => kinds.names![first]!));
           // A total of every kind read beside a filtered part still counts every kind (V12 gate: points per game

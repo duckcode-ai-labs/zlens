@@ -1348,6 +1348,13 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(both.prompts[1]).toContain('it reads LOCAL_TEAM_SEASON_FACTS, which adds up every kind of game together, but the question asks about regular-season games only');
       expect(both.statements.some((sql) => sql.includes('local_team_season_facts') && !/HAVING COUNT/.test(sql))).toBe(false);
       expect(both.statements.some((sql) => sql.includes("FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%'"))).toBe(true);
+      // A follow-up reading that drops the kind ("the 2015 season") keeps the one its previous question named (V12 gate).
+      const dropped = await askNba('Which of those had the most wins?', oneKind, totals, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 season had the most wins.' });
+      expect(dropped.prompts[1]).toContain('but the question asks about regular-season games only');
+      // A follow-up that names another kind is held to that kind alone.
+      const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const other = await askNba('Which of those had the most playoff wins?', playoffs, totals, manifest, { ...prior, reading: 'Which of the 5 teams had the most playoff wins in 2015.' });
+      expect(other.prompts[1]).toContain('but the question asks about playoff games only');
       // Asked for every game, the follow-up is not held to the kind it carried.
       const every = await askNba('Which of those had the most wins over all games?', oneKind, totals, manifest, { ...prior, reading: 'Which of the 5 teams in the 2015 regular season had the most wins over all games.' });
       expect(every.prompts.some((prompt) => prompt.includes('but the question asks about'))).toBe(false);
