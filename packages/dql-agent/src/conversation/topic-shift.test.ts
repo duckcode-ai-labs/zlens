@@ -181,6 +181,9 @@ describe('a whole new question in a chat is read on its own (new-user test B2, 2
       'Which teams did Kevin Durant play for, and in which seasons?',
       'How many home games did the Boston Celtics win in the 2008 regular season?',
       'Which teams that won more than 60 games made the finals?',
+      // A pronoun the question itself gives a referent to (V11 retest, N5).
+      'What was the biggest winning margin in a single game, and who won it?',
+      'Which player scored the most points in 2016, and what team was he on?',
     ]) expect(readsAsNewQuestion(question), question).toBe(true);
   });
 
@@ -198,6 +201,10 @@ describe('a whole new question in a chat is read on its own (new-user test B2, 2
       'Show only calendar year 2017, and expand that to the top ten players.',
       'List the top ten players by points per game this season',
       'Which players should we build around, and what would expand that list?',
+      // A pronoun before the question names anything, or after too short a start, still points back.
+      'How many points did he score, and in which season?',
+      'Who won it, and by how much?',
+      'What did it cost and who paid?',
     ]) expect(readsAsNewQuestion(question), question).toBe(false);
   });
 });

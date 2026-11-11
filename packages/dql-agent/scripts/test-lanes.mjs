@@ -76,7 +76,8 @@ const REQUIRED_TEST_FILES = [
 // 195 with meaning search through Snowflake Cortex (embeddings/cortex.test.ts, +1 file, +8 tests).
 // 196 with the App Builder planner reply read whatever its shape (app-builder-planner-json.test.ts, +1 file, +5 tests).
 // 197 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1 file, +1 test).
-const EXPECTED_TEST_FILES = 197;
+// 198 with a slow reading keeping time for the SQL (ask-pipeline/slow-reading.test.ts, +1 file, +4 tests).
+const EXPECTED_TEST_FILES = 198;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -205,10 +206,13 @@ const EXPECTED_TEST_FILES = 197;
 // 2873 with the App Builder planner applying the split a tile's title or question asks for, answering a split
 // by values with the split, listing a dropped part of the request as a gap, keeping trust codes out of its
 // reasons, and asking again when its reply is cut off before any tile (app-builder-orchestrator.test.ts +5; V12).
-const EXPECTED_TESTS = 2873;
+// 2878 with a slow reading keeping time for the SQL and saying when it ran out of time, a clause written as a
+// question asked as written (ask-pipeline/slow-reading.test.ts +4), and a stated name matched by either of its
+// parts (prepare/sql-checks.test.ts +1; V12).
+const EXPECTED_TESTS = 2878;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2792.
+// The ordinary lane's share is the difference: 2797.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

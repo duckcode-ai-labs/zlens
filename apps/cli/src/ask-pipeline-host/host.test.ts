@@ -1224,16 +1224,16 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     };
     const totals = 'SELECT team_name, wins FROM nba.local_team_season_facts WHERE season = 2015 ORDER BY wins DESC LIMIT 1';
     const oneKind = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
-    const askNba = async (question: string, second: string, first: string = totals, manifest: unknown = nba) => {
+    const askNba = async (question: string, second: string, first: string = totals, manifest: unknown = nba, prior?: { intent: unknown; reading?: string }) => {
       const prompts: string[] = [];
       const readings: string[] = [];
       const provider: AgentProvider = {
         name: 'ollama', available: async () => true,
         generate: async (messages) => {
-          if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) { readings.push(messages[0]!.content); return unreadable; }
+          if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) { readings.push(messages[0]!.content); return prior?.reading ? unreadable.replace('Lost deals to a competitor.', prior.reading) : unreadable; }
           const prompt = messages.map((message) => message.content).join('\n');
           prompts.push(prompt);
-          return /Read the question again|A first draft found no field for this/.test(prompt) ? second : first;
+          return /Read the question again|A first draft found no field for this|but the question asks about|by either of its parts/.test(prompt) ? second : first;
         },
       };
       const statements: string[] = [];
@@ -1254,11 +1254,11 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
         getManifest: () => ({ snapshotId: 'snapshot:schema-lane-kinds', manifest: manifest as never }),
         selectProvider: async () => provider,
         compileSemantic: async () => { throw new Error('no semantic layer'); },
-        priorIntent: () => undefined,
+        priorIntent: () => prior as never,
       });
       const result = await route({
         runId: 'run:schema-lane-kinds',
-        request: { question, requestedMode: 'ask' } as AgentRunRequest,
+        request: { question, requestedMode: 'ask', ...(prior ? { threadId: 'thr:schema-lane-kinds' } : {}) } as AgentRunRequest,
         route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
       });
       return { prompts, readings, statements: statements.filter((sql) => !sql.includes('information_schema')), result };
@@ -1329,6 +1329,111 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const regular = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
       const wrong = await askNba('Which team won the most games in the 2015 Playoffs?', regular, regular, manifest);
       expect(wrong.result.answer).toContain('does not apply "Playoffs"');
+    });
+
+    it('a follow-up keeps the kind its previous question named: a total of every kind is drafted again (V11 retest, N4)', async () => {
+      const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
+      const manifest = { ...nba, modeling: { rules: { ...nba.modeling.rules, 'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule } } } };
+      const prior = { intent: { version: 1, kind: 'analytics', reading: 'The 5 teams with the most points per game in the 2015 regular season', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' } };
+      // The follow-up's reading carries the previous question's kind.
+      const { prompts, statements, result } = await askNba('Which of those had the most wins?', oneKind, totals, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 regular season had the most wins.' });
+      expect(prompts[1]).toContain('it reads LOCAL_TEAM_SEASON_FACTS, which adds up every kind of game together, but the question asks about regular-season games only: compute that part from LOCAL_TEAM_GAME_FACTS, keeping the rows whose GAME_ID starts with 2');
+      expect(statements).toHaveLength(1);
+      expect(statements[0]).toContain("CAST(game_id AS VARCHAR) LIKE '2%'");
+      expect(result.status).toBe('completed');
+      expect(result.answer).toContain('it counts only regular-season games (GAME_ID starting with 2)');
+      // A statement that keeps the kind on one table and reads a total of every kind beside it is drafted again too (V12 gate, N4).
+      const mixed = "SELECT g.team_name, SUM(g.win) AS wins, MAX(s.wins) AS season_wins FROM nba.local_team_game_facts g JOIN nba.local_team_season_facts s ON s.team_name = g.team_name WHERE g.season = 2015 AND CAST(g.game_id AS VARCHAR) LIKE '2%' GROUP BY g.team_name";
+      const both = await askNba('Which of those had the most wins?', oneKind, mixed, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 regular season had the most wins.' });
+      expect(both.prompts[1]).toContain('it reads LOCAL_TEAM_SEASON_FACTS, which adds up every kind of game together, but the question asks about regular-season games only');
+      expect(both.statements.some((sql) => sql.includes('local_team_season_facts') && !/HAVING COUNT/.test(sql))).toBe(false);
+      expect(both.statements.some((sql) => sql.includes("FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%'"))).toBe(true);
+      // A follow-up reading that drops the kind ("the 2015 season") keeps the one its previous question named (V12 gate).
+      const dropped = await askNba('Which of those had the most wins?', oneKind, totals, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 season had the most wins.' });
+      expect(dropped.prompts[1]).toContain('but the question asks about regular-season games only');
+      // A follow-up that names another kind is held to that kind alone.
+      const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const other = await askNba('Which of those had the most playoff wins?', playoffs, totals, manifest, { ...prior, reading: 'Which of the 5 teams had the most playoff wins in 2015.' });
+      expect(other.prompts[1]).toContain('but the question asks about playoff games only');
+      // Asked for every game, the follow-up is not held to the kind it carried.
+      const every = await askNba('Which of those had the most wins over all games?', oneKind, totals, manifest, { ...prior, reading: 'Which of the 5 teams in the 2015 regular season had the most wins over all games.' });
+      expect(every.prompts.some((prompt) => prompt.includes('but the question asks about'))).toBe(false);
+    });
+
+    it('names the game types beside the reading, once per connection, and the answer says them (V11 retest)', async () => {
+      const gameTable = ['game_id', 'team_name', 'season', 'game_date', 'win'];
+      const unnamed = { sources: { local_team_game_facts: { name: 'local_team_game_facts', origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: 'model.local_team_game_facts', schema: 'nba', columns: Object.fromEntries(gameTable.map((column) => [column, { name: column }])) } } }, modeling: { rules: { 'nba.game_id_first_character': nba.modeling.rules['nba.game_id_first_character'] } } };
+      const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const calls: string[] = [];
+      const provider: AgentProvider = {
+        name: 'ollama', available: async () => true,
+        generate: async (messages) => {
+          if (messages[0]!.content.startsWith('You name the kinds')) { calls.push('name'); return '{"1": ["preseason games"], "2": ["regular-season games"], "4": ["playoff games", "postseason"], "5": ["play-in games"]}'; }
+          if (messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) { calls.push('draft'); return playoffs; }
+          calls.push('read');
+          return unreadable;
+        },
+      };
+      const own = { driver: 'duckdb', database: 'kinds-beside-reading' } as ConnectionConfig;
+      const route = createAskPipelineRouteExecutor({
+        projectRoot: '/tmp/ask-kinds-beside-reading',
+        executor: { executeQuery: vi.fn(async (sql: string) => {
+          if (sql.includes('information_schema.columns')) {
+            const rows = /'local_team_game_facts'/.test(sql) ? gameTable.map((column) => ({ table_schema: 'nba', table_name: 'local_team_game_facts', column_name: column, data_type: /win|season/.test(column) ? 'NUMBER' : column === 'game_date' ? 'DATE' : 'VARCHAR' })) : [];
+            return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+          }
+          if (sql.includes('first_day')) {
+            const rows = [{ kind: '1', period: 2014, first_day: '2014-10-04', last_day: '2014-10-24' }, { kind: '2', period: 2014, first_day: '2014-10-28', last_day: '2015-04-15' }, { kind: '4', period: 2014, first_day: '2015-04-18', last_day: '2015-06-16' }];
+            return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+          }
+          return { columns: ['team_name', 'wins'], rowCount: 1, executionTimeMs: 1, rows: [{ team_name: 'Golden State Warriors', wins: 16 }] };
+        }) } as unknown as QueryExecutor,
+        resolveConnection: async () => own,
+        getSemanticLayer: () => undefined,
+        getManifest: () => ({ snapshotId: 'snapshot:kinds-beside-reading', manifest: unnamed as never }),
+        selectProvider: async () => provider,
+        compileSemantic: async () => { throw new Error('no semantic layer'); },
+        priorIntent: () => undefined,
+      });
+      const ask = (question: string) => route({ runId: 'run:kinds-beside-reading', request: { question, requestedMode: 'ask' } as AgentRunRequest, route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {} });
+      const first = await ask('Which team won the most playoff games in 2015?');
+      expect(calls.filter((call) => call === 'name')).toHaveLength(1);
+      expect(first.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+      // Named once for this connection: the next run, on any snapshot, does not ask again.
+      calls.length = 0;
+      const second = await ask('Which team won the most postseason games in 2015?');
+      expect(calls).not.toContain('name');
+      expect(second.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+    });
+
+    it('a name matched by either of its parts is matched by both when one part alone picks other rows (V12 gate, G3)', async () => {
+      const either = "SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND (team_name ILIKE '%Lakers%' OR team_name ILIKE '%Los Angeles%')";
+      const both = "SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND team_name ILIKE '%Lakers%' AND team_name ILIKE '%Los Angeles%'";
+      const { prompts, statements, result } = await askNba('How many games did the Los Angeles Lakers win in 2015?', 'SELECT 1 AS never_asked', either);
+      // The host joins the parts itself, after the warehouse says either part alone picks other rows: the AI is not asked to.
+      expect(prompts.some((prompt) => prompt.includes('The previous statement was not run because'))).toBe(false);
+      expect(statements).toContain(`SELECT 1 FROM nba.local_team_game_facts WHERE (team_name ILIKE '%Los Angeles%') AND NOT (team_name ILIKE '%Lakers%')`);
+      expect(statements.some((sql) => sql.includes("team_name ILIKE '%Lakers%' AND team_name ILIKE '%Los Angeles%'") && !/HAVING|NOT \(/.test(sql))).toBe(true);
+      expect(result.status).toBe('completed');
+      expect((result.askPipelineReceipt?.story ?? []).some((entry) => entry.title === 'Matched "Los Angeles Lakers" by both of its parts')).toBe(true);
+      void both;
+    });
+
+    it('a year read through the model rule on calendar years is applied, and the answer says how it was read (V12 gate, K4)', async () => {
+      const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
+      const manifest = { ...nba, modeling: { rules: {
+        ...nba.modeling.rules,
+        'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule },
+        'nba.playoff_calendar_year': { localId: 'playoff_calendar_year', domain: 'nba', status: 'draft', expression: 'SEASON is the year a season starts. Rows whose GAME_ID starts with 4 (40,377 rows) or 5 (349 rows) all fall in the calendar year after their SEASON (SEASON 2012\'s 4 rows run 2013-04-20 to 2013-06-20): for those rows, calendar year Y is SEASON Y − 1.' },
+      } } };
+      const shifted = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+      const { result } = await askNba('Which team won the most playoff games in 2016?', shifted, shifted, manifest);
+      expect(result.status).toBe('completed');
+      expect(result.answer).not.toContain('does not apply "2016"');
+      expect(result.answer).toContain('it reads 2016 as SEASON 2015: playoff and play-in games are played in the calendar year after their SEASON, so those of 2016 are SEASON 2015; to count SEASON 2016 instead, say "the 2016 season"');
+      // Another year is still not applied.
+      const wrong = await askNba('Which team won the most playoff games in 2016?', shifted.replace('2015', '2013'), shifted.replace('2015', '2013'), manifest);
+      expect(wrong.result.answer).toContain('does not apply "2016"');
     });
 
     it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {
