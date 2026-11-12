@@ -4,7 +4,7 @@
   "description": "Create a ZLens project and open the workbench: npm create zlens@latest",
   "license": "Apache-2.0",
   "author": "ZLens",
-  "homepage": "https://github.com/duckcode-ai-labs/zlens",
+  "homepage": "https://zlens.app",
   "bugs": {
     "url": "https://github.com/duckcode-ai-labs/zlens/issues"
   },
