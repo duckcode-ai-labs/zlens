@@ -101,6 +101,13 @@ did before this refresh. Nothing was deleted or excluded; the owner decides.
 | `specs/dql-2-domain-context/**` (31 files) | implementation spec, workstreams, execution tracker, agent handoff template |
 | `90-DAY-PROMOTION-PLAN.md` | untracked locally; never committed |
 
+Update (November 2026): these pages, `rfcs/`, `media/clips/` and the
+archived pages are still published at their URLs, but search engines are told
+not to list them: each carries `<meta name="robots" content="noindex">`, and
+they are left out of `sitemap.xml` and the docs search. The list is
+`extra.internal_pages` in `mkdocs.yml`; the hook is `scripts/mkdocs/seo.py`.
+The prototypes carry the tag in their own HTML.
+
 ## Media
 
 `media/*.png` (4 DQL-era screenshots) are no longer used by the journey pages.

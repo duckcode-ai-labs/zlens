@@ -21,6 +21,7 @@
 </p>
 
 <p align="center">
+  <a href="https://zlens.app/"><b>Website</b></a> ·
   <a href="https://docs.zlens.app/"><b>Docs</b></a> ·
   <a href="#try-it-in-one-click"><b>Try it in one click</b></a> ·
   <a href="#quickstart"><b>Quickstart</b></a> ·

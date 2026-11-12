@@ -1,0 +1,24 @@
+{#-
+  Material theme overrides for docs.zlens.app.
+
+  - html_title (front matter): the page's full <title>, in place of
+    "<page title> - ZLens". The home page uses it; other pages keep the default.
+  - robots (front matter, or set by scripts/mkdocs/seo.py for internal pages):
+    written as <meta name="robots">.
+-#}
+{% extends "base.html" %}
+
+{% block htmltitle %}
+  {% if page and page.meta and page.meta.html_title %}
+    <title>{{ page.meta.html_title | e }}</title>
+  {% else %}
+    {{ super() }}
+  {% endif %}
+{% endblock %}
+
+{% block extrahead %}
+  {{ super() }}
+  {% if page and page.meta and page.meta.robots %}
+    <meta name="robots" content="{{ page.meta.robots | e }}">
+  {% endif %}
+{% endblock %}

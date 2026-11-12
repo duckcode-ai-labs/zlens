@@ -7,6 +7,8 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  # Home page <title>, robots meta and the sitemap: see scripts/mkdocs/seo.py.
+  custom_dir: scripts/mkdocs/overrides
   language: en
   features:
     - navigation.sections
@@ -80,6 +82,8 @@ plugins:
 hooks:
   - scripts/mkdocs/clips.py
   - scripts/mkdocs/videos.py
+  # Internal pages (extra.internal_pages below): noindex, out of search and the sitemap.
+  - scripts/mkdocs/seo.py
 
 extra_css:
   - stylesheets/zlens.css
@@ -88,6 +92,7 @@ extra_javascript:
   - javascripts/clips.js
 
 copyright: >-
+  <a href="https://zlens.app/">ZLens website</a> ·
   <a href="https://docs.zlens.app/architecture/overview/">Architecture</a> ·
   <a href="https://github.com/duckcode-ai-labs/zlens/blob/main/CONTRIBUTING.md">Contributing</a> ·
   <a href="https://github.com/duckcode-ai-labs/zlens/blob/main/SUPPORT.md">Support</a> ·
@@ -95,10 +100,26 @@ copyright: >-
 
 extra:
   social:
+    - icon: material/web
+      link: https://zlens.app/
+      name: ZLens website
     - icon: fontawesome/brands/github
       link: https://github.com/duckcode-ai-labs/zlens
     - icon: fontawesome/brands/discord
       link: https://discord.gg/Dnm6bUvk
+  # Published, but not user docs: design records, maintainer notes and the
+  # archived pages. They keep their URLs; scripts/mkdocs/seo.py marks them
+  # noindex and keeps them out of search and the sitemap. `*` also matches `/`.
+  internal_pages:
+    - rfcs/*
+    - specs/*
+    - performance/*
+    - media/*
+    - archive.md
+    - tutorials/README.md
+    - tutorials/0[1-4]-*  # 05 (CI with zlens eval) is current: Reference nav
+    - guides/notebook-research.md
+    - guides/dashboards.md
 
 # Internal artifacts kept out of the published site. docs/README.md is the
 # github.com landing page for docs/; index.md is the site home. The "moved"

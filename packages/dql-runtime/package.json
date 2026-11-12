@@ -34,7 +34,7 @@
     "url": "https://github.com/duckcode-ai-labs/zlens.git",
     "directory": "packages/dql-runtime"
   },
-  "homepage": "https://github.com/duckcode-ai-labs/zlens",
+  "homepage": "https://zlens.app",
   "bugs": {
     "url": "https://github.com/duckcode-ai-labs/zlens/issues"
   },

@@ -12,6 +12,8 @@ import { RELEASE_PACKAGE_PATHS, licenseFileFor } from './release-packages.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = 'https://github.com/duckcode-ai-labs/zlens';
+// npm and the VS Code Marketplace link "Homepage" to the website; repository and bugs stay on GitHub.
+const HOMEPAGE = 'https://zlens.app';
 // sha256 of https://www.apache.org/licenses/LICENSE-2.0.txt
 const APACHE_2_SHA256 = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30';
 
@@ -81,7 +83,7 @@ for (const relPath of publishedPaths) {
     assert.equal(manifest.license, 'Apache-2.0');
     assert.equal(manifest.repository?.url, `${REPO}.git`);
     assert.equal(manifest.repository?.directory, relPath);
-    assert.equal(manifest.homepage, REPO);
+    assert.equal(manifest.homepage, HOMEPAGE);
     assert.equal(manifest.bugs?.url, `${REPO}/issues`);
     assert.ok(manifest.files?.includes(licenseFile), `"files" lists ${licenseFile}`);
     assert.ok(manifest.files?.includes('NOTICE'), '"files" lists NOTICE');

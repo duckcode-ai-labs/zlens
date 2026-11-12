@@ -1,4 +1,5 @@
 ---
+html_title: "ZLens docs: certified answers on your warehouse"
 hide:
   - toc
 ---
