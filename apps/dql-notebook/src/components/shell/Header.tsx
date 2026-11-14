@@ -4,7 +4,7 @@ import { notebookStoreApi, useDispatch, useNotebookStore } from '../../store/Not
 import { themes } from '../../themes/notebook-theme';
 import type { Theme } from '../../themes/notebook-theme';
 import { HostPersonMenu } from './HostPersonMenu';
-import { hostReadOnly, hostReader, navKeyForView, readOnlyReason, useHostUi } from '../../host/host-ui';
+import { hostReadOnly, navKeyForView, readOnlyReason, useHostUi } from '../../host/host-ui';
 import { api } from '../../api/client';
 import { serializeDqlNotebook } from '../../utils/parse-workbook';
 import { useQueryExecution } from '../../hooks/useQueryExecution';
@@ -12,6 +12,7 @@ import { downloadDashboard } from '../../utils/export-dashboard';
 import { setBlockName } from '../../utils/block-studio';
 import { TaskCenter } from './TaskCenter';
 import { ZLensMark } from './ZLensMark';
+import { PAGE_NAMES } from './page-title';
 import { createNotebookSaveQueue } from '../../utils/notebook-save-queue';
 
 // Saves to one notebook file are serialized; see utils/notebook-save-queue.ts.
@@ -29,9 +30,9 @@ function ProductMark({ t }: { t: Theme }) {
 }
 
 export function Header() {
-  // A hosted reader is not using a workbench: the product is just ZLens to them (RFC 0010 HH-9 `audience`).
+  // The product is ZLens on every page (never "Workbench": business readers use it too).
   const hostUi = useHostUi();
-  const productName = hostReader(hostUi) ? 'ZLens' : 'ZLens Workbench';
+  const productName = 'ZLens';
   const state = useNotebookStore(useShallow((store) => ({
     activeBlockPath: store.activeBlockPath,
     activeFile: store.activeFile,
@@ -60,9 +61,6 @@ export function Header() {
   const [savedFlash, setSavedFlash] = useState(false);
   const [runHover, setRunHover] = useState(false);
   const [saveHover, setSaveHover] = useState(false);
-  const [themeHover, setThemeHover] = useState(false);
-  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
-  const themeMenuRef = useRef<HTMLDivElement>(null);
   const [exportHover, setExportHover] = useState(false);
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
   const exportDropdownRef = useRef<HTMLDivElement>(null);
@@ -73,19 +71,11 @@ export function Header() {
   // gets a static title and hides the file chip + editor actions.
   const isEditorView = state.mainView === 'notebook' || state.mainView === 'block_studio';
   const hasActiveEditorFile = isEditorView && Boolean(state.activeFile);
+  // Every page names itself (the same names as the browser tab, see page-title.ts).
   const VIEW_TITLES: Partial<Record<typeof state.mainView, string>> = {
-    home: 'Home',
-    business_artifact: state.activeFile?.name.replace(/\.(dqlnb|dql)$/i, '') ?? 'Business Definition',
-    lineage: 'Lineage',
-    lineage_detail: 'Lineage',
-    connection: 'Settings',
-    apps: 'Apps',
-    git: 'Source control',
-    settings: 'Settings',
-    imports: 'Import SQL',
-    // Both views render the Modeling workspace; the header names what you see.
-    domains: 'Modeling',
-    modeling: 'Modeling',
+    ...PAGE_NAMES,
+    business_artifact: state.activeFile?.name.replace(/\.(dqlnb|dql)$/i, '') ?? 'Business definition',
+    host_page: productName,
   };
   const headerTitle = isEditorView
     ? state.activeFile
@@ -205,43 +195,6 @@ export function Header() {
     }, 750);
     return () => clearTimeout(timer);
   }, [state.autoSave, currentDirty, state.activeFile, state.cells, state.blockStudioDraft, handleSave]);
-
-  // v1.3.2 — three Luna themes (obsidian dark, paper warm light, white plain light).
-  const THEMES: ReadonlyArray<{
-    mode: 'obsidian' | 'paper' | 'white';
-    label: string;
-    glyph: string;
-    swatch: string;
-  }> = [
-    { mode: 'obsidian', label: 'Obsidian', glyph: '●', swatch: '#0d0e11' },
-    { mode: 'paper', label: 'Paper', glyph: '☼', swatch: '#f7f4ed' },
-    { mode: 'white', label: 'White', glyph: '○', swatch: '#ffffff' },
-  ] as const;
-  const currentThemeKey: 'obsidian' | 'paper' | 'white' =
-    state.themeMode === 'dark' || state.themeMode === 'midnight' ? 'obsidian'
-    : state.themeMode === 'light' ? 'paper'
-    : state.themeMode === 'arctic' ? 'white'
-    : (state.themeMode as 'obsidian' | 'paper' | 'white');
-  const currentTheme = THEMES.find((t) => t.mode === currentThemeKey) ?? THEMES[0];
-
-  // Close theme menu on outside click / Escape
-  useEffect(() => {
-    if (!themeMenuOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (themeMenuRef.current && !themeMenuRef.current.contains(e.target as Node)) {
-        setThemeMenuOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setThemeMenuOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [themeMenuOpen]);
 
   const btnBase = {
     height: 28,
@@ -402,112 +355,7 @@ export function Header() {
           </>
         )}
 
-        {/* Theme dropdown — pick Obsidian / Paper / White */}
-        <div ref={themeMenuRef} style={{ position: 'relative' }}>
-          <button
-            onClick={() => setThemeMenuOpen((o) => !o)}
-            onMouseEnter={() => setThemeHover(true)}
-            onMouseLeave={() => setThemeHover(false)}
-            title={`Theme: ${currentTheme.label}`}
-            aria-haspopup="true"
-            aria-expanded={themeMenuOpen}
-            style={{
-              ...btnBase,
-              background: themeHover || themeMenuOpen ? t.btnHover : t.btnBg,
-              color: t.textSecondary,
-              padding: '0 10px',
-              fontSize: 12,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <span
-              style={{
-                width: 12,
-                height: 12,
-                borderRadius: 3,
-                background: currentTheme.swatch,
-                border: `1px solid ${t.headerBorder}`,
-                flexShrink: 0,
-              }}
-            />
-            <span style={{ fontFamily: t.fontMono, fontSize: 11, letterSpacing: '0.04em' }}>
-              {currentTheme.label}
-            </span>
-            <span style={{ fontSize: 11, color: t.textMuted }}>▾</span>
-          </button>
-          {themeMenuOpen && (
-            <div
-              role="menu"
-              style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                marginTop: 4,
-                minWidth: 160,
-                background: t.headerBg,
-                border: `1px solid ${t.headerBorder}`,
-                borderRadius: 6,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.32)',
-                padding: 4,
-                zIndex: 1000,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 1,
-              }}
-            >
-              {THEMES.map((th) => {
-                const active = th.mode === currentThemeKey;
-                return (
-                  <button
-                    key={th.mode}
-                    role="menuitemradio"
-                    aria-checked={active}
-                    onClick={() => {
-                      dispatch({ type: 'SET_THEME', mode: th.mode });
-                      setThemeMenuOpen(false);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '6px 8px',
-                      border: 'none',
-                      background: active ? t.btnHover : 'transparent',
-                      color: t.textPrimary,
-                      cursor: 'pointer',
-                      borderRadius: 4,
-                      fontSize: 12,
-                      fontFamily: t.font,
-                      textAlign: 'left',
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!active) (e.currentTarget as HTMLButtonElement).style.background = t.btnHover;
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!active) (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 14,
-                        height: 14,
-                        borderRadius: 3,
-                        background: th.swatch,
-                        border: `1px solid ${t.headerBorder}`,
-                        flexShrink: 0,
-                      }}
-                    />
-                    <span style={{ flex: 1 }}>{th.label}</span>
-                    {active && <span style={{ color: t.accent, fontSize: 11 }}>✓</span>}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
+        {/* The theme is chosen in Settings » Appearance (and the command palette), not in the header. */}
         {state.appMode === 'studio' && hasActiveEditorFile && state.mainView !== 'block_studio' && (
           <>
         {/* Save */}

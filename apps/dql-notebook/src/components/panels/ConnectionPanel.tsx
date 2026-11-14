@@ -48,6 +48,9 @@ import {
 } from './connection-metadata-scope';
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
+import { AppearanceSettings } from '../settings/AppearanceSettings';
+import { connectionValueText } from './connection-values';
+import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 export interface ConnectionInfo {
   default: string;
@@ -213,6 +216,8 @@ export function ConnectionPanel({
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string; dataFolder?: DataFolderStatusView } | null>(null);
   // The ZLens app for Snowflake has a Backups tab; elsewhere this stays unmanaged and the tab is not shown.
   const [snowflakeBackups, setSnowflakeBackups] = useState<SnowflakeAppBackups | null>(null);
+  // The app for Snowflake: a managed project (no Project & dbt tab).
+  const snowflakeApp = useSnowflakeApp();
   useEffect(() => {
     let alive = true;
     void api.getSnowflakeAppBackups().then((status) => { if (alive) setSnowflakeBackups(status); });
@@ -850,7 +855,7 @@ export function ConnectionPanel({
                     <div key={k} style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
                       <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.fontMono, minWidth: 70, flexShrink: 0 }}>{k}</span>
                       <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-                        {isSensitiveField(k) ? '••••••••' : String(v)}
+                        {isSensitiveField(k) ? '••••••••' : connectionValueText(v, snowflakeApp)}
                       </span>
                     </div>
                   ))}
@@ -1221,7 +1226,7 @@ export function ConnectionPanel({
         <div style={{ fontSize: 14, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>{setupSchemaQuestion ? 'Which schemas should ZLens read?' : 'Metadata scope'}</div>
         <div style={{ fontSize: 11.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
           {setupSchemaQuestion
-            ? `Tick the schemas that hold your tables. ${rowsPrivacy(info?.valueProfile)}`
+            ? `Tick the schemas that hold your tables. ${rowsPrivacy(info?.valueProfile, false, isSnowflakeApp())}`
             : 'ZLens synchronizes this authorized scope into local SQLite. Warm Ask, Notebook, and Saved queries searches use that index instead of scanning the warehouse.'}
         </div>
       </div>
@@ -1230,7 +1235,7 @@ export function ConnectionPanel({
           {warehouseFirst ? (
             <>
               <strong style={{ color: t.textPrimary }}>Choose the schemas to model.</strong>
-              {' '}{rowsPrivacy(info?.valueProfile)}
+              {' '}{rowsPrivacy(info?.valueProfile, false, isSnowflakeApp())}
             </>
           ) : (
             <>
@@ -1513,7 +1518,8 @@ export function ConnectionPanel({
         <div style={{ display: 'flex', gap: 0, alignItems: 'stretch', minHeight: 0 }}>
           <nav aria-label="Settings sections" style={{ width: 'clamp(190px, 17vw, 240px)', flexShrink: 0, borderRight: `1px solid ${t.cellBorder}`, padding: '10px 10px 10px 0', display: 'flex', flexDirection: 'column', gap: 2, alignSelf: 'flex-start', position: 'sticky', top: 0 }}>
             {navItem(activeTab === 'overview', 'Overview', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'overview' }))}
-            {navItem(activeTab === 'project', 'Project & dbt', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'project' }),
+            {/* The app for Snowflake has no dbt project or project folder to set up: its project is managed. */}
+            {snowflakeApp ? null : navItem(activeTab === 'project', 'Project & dbt', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'project' }),
               <span style={{ width: 7, height: 7, borderRadius: 999, background: dbtPreparation?.status === 'failed' ? 'var(--status-error)' : dbtPreparation?.status === 'running' || dbtPreparation?.status === 'queued' ? 'var(--status-info)' : projectReady ? 'var(--status-success)' : 'var(--status-warning)' }} title={dbtPreparation?.status === 'failed' ? 'Needs attention' : dbtPreparation?.status === 'running' || dbtPreparation?.status === 'queued' ? 'Preparing' : projectReady ? 'Ready' : 'Missing'} />)}
             {navItem(activeTab === 'database', 'Database', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'database' }),
               <span style={{ width: 7, height: 7, borderRadius: 999, background: connected ? 'var(--status-success)' : 'var(--status-warning)' }} title={connected ? 'Configured' : 'Missing'} />)}
@@ -1521,6 +1527,7 @@ export function ConnectionPanel({
               <span style={{ width: 7, height: 7, borderRadius: 999, background: aiConfigured ? 'var(--status-success)' : 'var(--status-warning)' }} title={aiConfigured ? 'Configured' : 'Optional · missing'} />)}
             {navItem(activeTab === 'memory', 'Agent memory', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'memory' }))}
             {snowflakeBackups?.managed && navItem(activeTab === 'backups', 'Backups', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'backups' }))}
+            {navItem(activeTab === 'appearance', 'Appearance', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'appearance' }))}
             <div style={{ height: 1, background: t.cellBorder, margin: '10px 10px 10px 0' }} />
             {navItem(activeTab === 'advanced', 'Advanced', () => dispatch({ type: 'SET_SETTINGS_TAB', tab: 'advanced' }),
               <span style={{ fontSize: 10, color: t.textMuted }}>Advanced</span>)}
@@ -1541,6 +1548,8 @@ export function ConnectionPanel({
                 setDbtConfigured(true);
                 void api.getOnboardingStatus().then((onboarding) => setDbtPreparation(onboarding.preparation ?? null)).catch(() => undefined);
               }} />
+            ) : activeTab === 'appearance' ? (
+              <AppearanceSettings />
             ) : activeTab === 'backups' && snowflakeBackups?.managed ? (
               <SnowflakeAppBackupsPanel t={t} initial={snowflakeBackups} />
             ) : activeTab === 'advanced' ? (
@@ -1594,6 +1603,8 @@ function SettingsOverview({
   const themeMode = useNotebookStore((state) => state.themeMode);
   const dispatch = useDispatch();
   const t = themes[themeMode];
+  // The app for Snowflake sets its own project up: no Guided Setup, no project or dbt card.
+  const snowflakeApp = useSnowflakeApp();
   const activeProvider = providers.find((provider) => provider.active && provider.configured)
     ?? providers.find((provider) => provider.enabled && provider.configured);
   const cards: Array<{
@@ -1655,14 +1666,16 @@ function SettingsOverview({
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 750, color: t.textPrimary }}>Settings overview</div>
-          <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 4, lineHeight: 1.5 }}>One place for project, data, AI, memory, and advanced runtime configuration.</div>
+          <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 4, lineHeight: 1.5 }}>{snowflakeApp ? 'One place for data, AI, memory, backups and appearance.' : 'One place for project, data, AI, memory, and advanced runtime configuration.'}</div>
         </div>
-        <button type="button" onClick={() => dispatch({ type: 'OPEN_SETUP' })} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 15px', borderRadius: 8, border: 'none', background: t.accent, color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: t.font, whiteSpace: 'nowrap' }}>
-          <Settings2 size={14} /> Guided Setup
-        </button>
+        {snowflakeApp ? null : (
+          <button type="button" onClick={() => dispatch({ type: 'OPEN_SETUP' })} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 15px', borderRadius: 8, border: 'none', background: t.accent, color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: t.font, whiteSpace: 'nowrap' }}>
+            <Settings2 size={14} /> Guided Setup
+          </button>
+        )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
-        {cards.map((card) => {
+        {cards.filter((card) => !(snowflakeApp && card.tab === 'project')).map((card) => {
           const positive = card.state === 'configured' || card.state === 'passed';
           const preparing = card.state === 'preparing';
           const failed = card.state === 'failed';

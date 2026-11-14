@@ -24,6 +24,7 @@ import {
   type SqlNotebookDraftMeta,
   type ThreadItem,
 } from '../agent/UnifiedAgentRunPanel';
+import { isSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 // A Home that summarises (RFC 0010 HH-16) loads after Ask, never before it.
 const HomeSummary = React.lazy(() => import('./HomeSummary').then((module) => ({ default: module.HomeSummary })));
@@ -1330,7 +1331,7 @@ function ConversationSidebar({
       </div>
       <div style={{ padding: '10px 12px', borderTop: `1px solid ${t.headerBorder}`, display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, color: t.textMuted }}>
         <ShieldCheck size={12} style={{ flexShrink: 0, color: t.success }} />
-        <span>{hostUi.host ? 'Only you see your chats' : 'Private project history · not committed to Git'}</span>
+        <span>{hostUi.host || isSnowflakeApp() ? 'Only you see your chats' : 'Private project history · not committed to Git'}</span>
       </div>
     </aside>
   );

@@ -14,6 +14,8 @@ export type ChartType =
   | 'sankey' | 'kpi' | 'table';
 
 export const DATE_NAME_RE = /date|time|at|day|month|year/i;
+/** A column that names a period, whatever its type: a season, a year, a quarter, a month, a week. */
+export const PERIOD_NAME_RE = /(^|_)(season|year|yr|fy|quarter|qtr|month|week|period)($|_)/i;
 const LABEL_NAME_RE = /^(label|name|category|status|type|group)$/i;
 const VALUE_NAME_RE = /^(value|count|total|revenue|amount|sum|avg|price|quantity|sales)$/i;
 
@@ -101,6 +103,14 @@ export function detectChartType(result: QueryResult): ChartType {
   if (labelCol && valueCol) {
     const valueAllNumeric = sample.every((r) => isNumericValue(r[valueCol]));
     if (valueAllNumeric) return 'bar';
+  }
+
+  // Line chart: col[0] names a period stored as a number (SEASON 2012, YEAR, FISCAL_QUARTER) and
+  // another column is the measure. A season is a time axis to read left to right, not a value to
+  // scatter from 0 (new-user test B12: wins by season drew one column of dots at x = 2K).
+  if (PERIOD_NAME_RE.test(col0) && sample.every((r) => isNumericValue(r[col0]) || isStringLike(r[col0]))
+    && columns.some((column) => column !== col0 && isMeasureColumn(result, column) && sample.every((r) => isNumericValue(r[column])))) {
+    return 'line';
   }
 
   // Scatter: two numeric columns

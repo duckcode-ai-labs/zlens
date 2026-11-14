@@ -13,6 +13,7 @@ import {
   mergeDbtDatabaseObjects,
   type DbtDatabaseObject,
 } from './dbt-database-catalog';
+import { isSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 export function DbtDatabaseList({
   t,
@@ -142,7 +143,7 @@ export function DbtDatabaseList({
   };
 
   if (loading) {
-    return <CatalogStatus t={t}><Loader2 size={13} className="dql-spin" /> Loading dbt database objects…</CatalogStatus>;
+    return <CatalogStatus t={t}><Loader2 size={13} className="dql-spin" /> {isSnowflakeApp() ? 'Loading tables and views…' : 'Loading dbt database objects…'}</CatalogStatus>;
   }
 
   if (error) {
@@ -162,7 +163,9 @@ export function DbtDatabaseList({
   return (
     <div>
       <div style={{ padding: '7px 10px', borderBottom: `1px solid ${t.cellBorder}`, color: t.textMuted, fontSize: 10.5 }}>
-        dbt scope · showing {tables.length.toLocaleString()} of {total.toLocaleString()} object{total === 1 ? '' : 's'}
+        {isSnowflakeApp()
+          ? `Showing ${tables.length.toLocaleString()} of ${total.toLocaleString()} ${total === 1 ? 'table or view' : 'tables and views'}`
+          : <>dbt scope · showing {tables.length.toLocaleString()} of {total.toLocaleString()} object{total === 1 ? '' : 's'}</>}
       </div>
       {tables.map((table) => {
         const open = expanded.has(table.dbtUniqueId);
@@ -202,7 +205,7 @@ export function DbtDatabaseList({
                 {columnsLoading ? <CatalogStatus t={t} compact><Loader2 size={11} className="dql-spin" /> Loading columns…</CatalogStatus> : null}
                 {!columnsLoading && columnError ? <CatalogStatus t={t} compact>Columns unavailable. The relation can still be inserted and queried.</CatalogStatus> : null}
                 {!columnsLoading && !columnError && loadedColumns.has(table.dbtUniqueId) && table.columns.length === 0
-                  ? <CatalogStatus t={t} compact>No columns are documented in dbt or visible from the selected connection.</CatalogStatus>
+                  ? <CatalogStatus t={t} compact>{isSnowflakeApp() ? 'No columns are visible to this app for this table.' : 'No columns are documented in dbt or visible from the selected connection.'}</CatalogStatus>
                   : null}
                 {!columnsLoading && table.columns.map((column) => (
                   <button

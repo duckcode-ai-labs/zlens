@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Activity, Boxes, ClipboardList, ExternalLink, GitPullRequest, Hammer, Inbox, MessageCircle, Settings, ShieldCheck, Users } from 'lucide-react';
 import { applyHostNav, navItemAllowed, useHostPage, useHostUi, type NavId, type RailGroup } from '../../host/host-ui';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { Tooltip } from '@zlens/ui';
 import {
   FileText,
@@ -154,6 +155,7 @@ export function ActivityBar() {
   const dispatch = useDispatch();
   const t = themes[state.themeMode];
   const [expanded, setExpanded] = useState<boolean>(readInitialExpanded);
+  const snowflakeApp = useSnowflakeApp();
 
   useEffect(() => {
     persistExpanded(expanded);
@@ -191,14 +193,14 @@ export function ActivityBar() {
   // the onboarding flow (Settings → Setup); the app lands on Apps.
   // `id` is the item's stable nav id, the name a host uses to relabel, hide or
   // regroup it (RFC 0010 HH-9 `nav`); `key` is the panel it opens.
+  const appsItem: RailNavItem = { id: 'apps', key: 'apps', title: 'Apps', icon: <Package size={16} strokeWidth={1.75} />, active: state.mainView === 'apps' };
+  const askItem: RailNavItem = { id: 'ask', key: 'ask', title: 'Ask', icon: <MessageCircle size={16} strokeWidth={1.75} />, active: state.mainView === 'ask' };
   const navGroups: Array<RailGroup<RailNavItem>> = [
     {
       id: 'insights',
       label: 'Insights',
-      items: [
-        { id: 'apps', key: 'apps', title: 'Apps', icon: <Package size={16} strokeWidth={1.75} />, active: state.mainView === 'apps' },
-        { id: 'ask', key: 'ask', title: 'Ask', icon: <MessageCircle size={16} strokeWidth={1.75} />, active: state.mainView === 'ask' },
-      ],
+      // The app for Snowflake opens on Ask, so Ask comes first there.
+      items: snowflakeApp ? [askItem, appsItem] : [appsItem, askItem],
     },
     {
       id: 'build',
@@ -218,7 +220,8 @@ export function ActivityBar() {
         // undiscoverable — the word only appeared after you already arrived.
         { id: 'modeling', key: 'domains', title: 'Modeling', icon: <Boxes size={16} strokeWidth={1.75} />, active: state.mainView === 'domains' || state.mainView === 'modeling' || state.mainView === 'skills' },
         { id: 'ask-traces', key: 'ask_observability', title: 'Ask observability', icon: <Activity size={16} strokeWidth={1.75} />, active: state.mainView === 'ask_observability' || state.mainView === 'ask_trace' },
-        { id: 'source-control', key: 'git', title: 'Source control', icon: <GitBranch size={16} strokeWidth={1.75} />, active: state.mainView === 'git' },
+        // The app for Snowflake has no Git: its projects live on a volume in the customer's account.
+        ...(snowflakeApp ? [] : [{ id: 'source-control', key: 'git', title: 'Source control', icon: <GitBranch size={16} strokeWidth={1.75} />, active: state.mainView === 'git' } as RailNavItem]),
         { id: 'settings', key: 'settings', title: 'Settings', icon: <Settings size={16} strokeWidth={1.75} />, active: state.mainView === 'settings' || state.mainView === 'connection' },
       ],
     },

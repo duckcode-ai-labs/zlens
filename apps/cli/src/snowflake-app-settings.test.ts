@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
-import { startLocalServer } from './local-runtime.js';
+import { SNOWFLAKE_APP_NO_HISTORY, snowflakeAppIndexHtml, startLocalServer } from './local-runtime.js';
+import { ZLENS_FAVICON_SVG } from './brand-page.js';
 import {
   IdleSuspender,
   SnowflakeAppSettings,
@@ -101,6 +102,18 @@ describe('reading the app settings', () => {
     expect(onlyData).not.toContain('Configurations');
     expect(snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: ['A', 'B'] })).toContain('reads one');
   });
+
+  it('wears the ZLens brand: the lockup on the page, the mark as the browser icon, no plan to sell', () => {
+    const html = snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: true, databases: [] });
+    expect(html).toContain('<title>ZLens: almost ready</title>');
+    expect(html).toContain('aria-label="ZLens"');
+    expect(html).toContain('M113.8 0V-9L154.43');
+    expect(html).toContain('<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,');
+    expect(html).toContain('#0E9F74');
+    expect(html).toContain('2 steps are left');
+    expect(snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: [] })).toContain('One step is left');
+    expect(snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: ['A', 'B'] })).not.toContain('Team plan');
+  });
 });
 
 describe('stopping when idle', () => {
@@ -188,5 +201,55 @@ describe('the server, set up from Snowsight', () => {
     expect((await call('/api/snowflake-app/setup', 'OTHER')).status).toBe(403);
     // Snowflake's readiness probe is never held up by the setup.
     expect((await fetch(`http://127.0.0.1:${port}/api/health`)).status).toBe(200);
+  });
+});
+
+describe('the page the app for Snowflake serves', () => {
+  it('is marked as the app for Snowflake, has no Git history to show, and carries the ZLens icon', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-sf-app-page-'));
+    roots.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'sf', connections: { default: { driver: 'sqlite', filepath: 'main.sqlite' } } }));
+    writeFileSync(join(projectRoot, 'index.html'), '<!DOCTYPE html><html><head><title>ZLens</title></head><body></body></html>');
+    const state: { user?: string; databases: string[] } = { user: 'JSMITH', databases: ['ZLENS_APP', 'SALES'] };
+    const port = await startLocalServer({
+      rootDir: projectRoot, projectRoot, executor: {} as QueryExecutor, preferredPort: 0, host: '127.0.0.1',
+      snowflakeIngress: {},
+      snowflakeAppSettings: { userConfiguration: 'ZLENS_USER', appName: 'ZLENS_APP', ttlMs: 0 },
+      snowflakeAppQuery: fakeSnowflake(state),
+      captureServer: (created) => { servers.push(created); },
+    });
+    const call = (path: string) => fetch(`http://127.0.0.1:${port}${path}`, { headers: { 'Sf-Context-Current-User': 'JSMITH' } });
+
+    const page = await (await call('/')).text();
+    expect(page).toContain('<meta name="zlens-snowflake-app" content="1" />');
+    expect(page.indexOf('zlens-snowflake-app')).toBeLessThan(page.indexOf('<title>'));
+    // Other files are served as they are, read once; a folder or a missing file is a 404.
+    mkdirSync(join(projectRoot, 'assets'), { recursive: true });
+    writeFileSync(join(projectRoot, 'assets', 'app.js'), 'console.log(1);');
+    const script = await call('/assets/app.js');
+    expect(script.status).toBe(200);
+    expect(await script.text()).toBe('console.log(1);');
+    expect((await call('/assets')).status).toBe(404);
+    expect((await call('/assets/missing.js')).status).toBe(404);
+
+    // The image has no git: the History tab says what the app keeps instead of "Git is not installed".
+    const history = await (await call('/api/blocks/history?path=blocks/a.dql')).json() as { status: string; message: string };
+    expect(history).toEqual({ entries: [], status: 'git_unavailable', message: SNOWFLAKE_APP_NO_HISTORY });
+    expect(history.message).not.toMatch(/PATH|install/i);
+
+    for (const icon of ['/favicon.svg', '/favicon.ico']) {
+      const response = await call(icon);
+      expect(response.headers.get('content-type')).toBe('image/svg+xml');
+      expect(await response.text()).toBe(ZLENS_FAVICON_SVG);
+    }
+  });
+
+  it('leaves the page unmarked everywhere else', () => {
+    const html = Buffer.from('<!DOCTYPE html><html><head><title>ZLens</title></head></html>');
+    expect(snowflakeAppIndexHtml(html).toString()).toContain('<head>\n    <meta name="zlens-snowflake-app" content="1" />');
+    // Marking twice changes nothing.
+    expect(snowflakeAppIndexHtml(snowflakeAppIndexHtml(html)).toString().match(/zlens-snowflake-app/g)).toHaveLength(1);
+    expect(ZLENS_FAVICON_SVG).toContain('#0E9F74');
+    expect(ZLENS_FAVICON_SVG).not.toContain('#6d5dfc');
   });
 });

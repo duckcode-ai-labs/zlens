@@ -31,6 +31,7 @@ import {
 import { useNotebook } from '../../store/NotebookStore';
 import { hostReadOnly, useHostUi } from '../../host/host-ui';
 import type { NotebookAction, AppMode } from '../../store/types';
+import { isSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 type PaletteMode = 'studio' | 'app' | 'both';
 
@@ -94,7 +95,8 @@ export function CommandPalette({
     const panels: Array<[string, NonNullable<typeof state.sidebarPanel>, React.ComponentType<any>]> = [
       ['Files', 'files', Files],
       ['Lineage', 'lineage', GitFork],
-      ['Git', 'git', GitBranch],
+      // The app for Snowflake has no Git.
+      ...(isSnowflakeApp() ? [] : [['Git', 'git', GitBranch] as [string, NonNullable<typeof state.sidebarPanel>, React.ComponentType<any>]]),
       ['Saved queries', 'block_library', Blocks],
       ['Apps', 'apps', Network],
       ['Connections', 'connection', Plug],

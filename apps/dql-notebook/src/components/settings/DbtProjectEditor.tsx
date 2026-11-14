@@ -384,7 +384,9 @@ export function DbtProjectEditor({
         <div>
           <div style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary }}>Project &amp; dbt</div>
           <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5 }}>
-            Preview a local project or Git repository before ZLens replaces the active dbt configuration.
+            {offline
+              ? 'Preview a dbt project folder on this install before ZLens replaces the active dbt configuration.'
+              : 'Preview a local project or Git repository before ZLens replaces the active dbt configuration.'}
           </div>
         </div>
       ) : null}
@@ -407,8 +409,9 @@ export function DbtProjectEditor({
 
       <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, background: t.cellBg, padding: 16, display: 'grid', gap: 10 }}>
         <label style={{ display: 'grid', gap: 5 }}>
-          <span style={{ fontSize: 11, fontWeight: 650, color: t.textSecondary }}>Local dbt project path or Git repository URL</span>
-          <input value={source} onChange={(event) => { setSource(event.target.value); setPreview(null); }} placeholder=". or https://github.com/org/analytics.git" style={input} />
+          {/* Without internet access (ZLENS_NO_EGRESS) no Git repository is offered: the server refuses one too. */}
+          <span style={{ fontSize: 11, fontWeight: 650, color: t.textSecondary }}>{offline ? 'Local dbt project path' : 'Local dbt project path or Git repository URL'}</span>
+          <input value={source} onChange={(event) => { setSource(event.target.value); setPreview(null); }} placeholder={offline ? '.' : '. or https://github.com/org/analytics.git'} style={input} />
         </label>
         {preview ? (
           <div style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '10px 11px', color: t.textSecondary, fontSize: 11.5, lineHeight: 1.5 }}>

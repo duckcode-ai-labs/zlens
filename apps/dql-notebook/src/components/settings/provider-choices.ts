@@ -36,6 +36,13 @@ export const CORTEX_HELP = [
   'Claude may be processed in another Snowflake region when your account allows cross-region inference.',
 ];
 
+/** The same, in the ZLens app for Snowflake: ZLens signs in to Cortex as the app itself. */
+export const CORTEX_HELP_SNOWFLAKE_APP = [
+  'Snowflake Cortex runs Claude inside your Snowflake account. ZLens signs in as this app, so there is no API key.',
+  'Cortex stays inside your account, so result values may reach it.',
+  'Claude may be processed in another Snowflake region when your account allows cross-region inference.',
+];
+
 const CORTEX_METHOD_WORDS: Record<string, string> = {
   key_pair: 'key pair',
   programmatic_access_token: 'programmatic access token',

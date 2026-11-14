@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { noEgress } from '@zlens/connectors';
 
 export type NativeMcpProvider = 'openai' | 'anthropic';
 
@@ -81,9 +82,14 @@ export function remoteMcpConfigPath(projectRoot: string): string {
   return join(projectRoot, '.dql', 'mcp-servers.json');
 }
 
+/** Said when an install without internet access (ZLENS_NO_EGRESS) leaves a saved server out. */
+export const NO_EGRESS_MCP_WARNING = 'This install has no internet access (ZLENS_NO_EGRESS): MCP servers and hosted connectors are not used.';
+
 export function loadRemoteMcpServers(projectRoot: string, provider: NativeMcpProvider): RemoteMcpLoadResult {
   const path = remoteMcpConfigPath(projectRoot);
   if (!existsSync(path)) return { path, servers: [], warnings: [] };
+  // Without internet access nothing is handed to a provider to call out to, whatever the file says.
+  if (noEgress()) return { path, servers: [], warnings: [NO_EGRESS_MCP_WARNING] };
   let parsed: RawMcpConfig;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf-8')) as RawMcpConfig;
@@ -317,6 +323,8 @@ export interface ProjectKnowledgeServer extends KnowledgeToolMapping {
  */
 export function loadKnowledgeServers(projectRoot: string): { path: string; servers: ProjectKnowledgeServer[]; warnings: string[] } {
   const { path, parsed, warnings } = readRawMcpConfig(projectRoot);
+  // Without internet access DQL's own MCP client connects to nothing (a server URL, or a command that may download).
+  if (noEgress()) return { path, servers: [], warnings: parsed ? [...warnings, NO_EGRESS_MCP_WARNING] : warnings };
   const servers: ProjectKnowledgeServer[] = [];
   for (const server of normalizeEntries(parsed?.servers, 'server', warnings)) {
     if (!server.enabled || !usesFor(server, 'knowledge')) continue;

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmbeddingSettings } from './EmbeddingSettings';
-import { CORTEX_HELP, aiTurnedOff, brandsAllowed, cortexSignInLine, providerAllowed } from './provider-choices';
+import { CORTEX_HELP, CORTEX_HELP_SNOWFLAKE_APP, aiTurnedOff, brandsAllowed, cortexSignInLine, providerAllowed } from './provider-choices';
 import { CommaListInput } from '../common/CommaListInput';
 import { Sparkles } from 'lucide-react';
 import {
@@ -28,6 +28,7 @@ import {
   updateHintScopeField,
   type AgentHintScopeField,
 } from './hint-review';
+import { isSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 const PROVIDER_ORDER: ProviderSettingsId[] = ['claude-code', 'codex', 'anthropic', 'openai', 'gemini', 'ollama', 'custom-openai', 'cortex'];
 // Subscription providers (log in with an installed CLI) render as their own group,
@@ -135,7 +136,7 @@ export function ConnectionRuntimeSettings({
           <div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>AI providers, memory &amp; connections</div>
             <div style={{ color: t.textSecondary, fontSize: 13, marginTop: 6, lineHeight: 1.5, maxWidth: 820 }}>
-              Connect a model provider, manage the agent's learning &amp; memory, and (optionally) attach MCP servers. Secrets stay under <code>.dql/</code> and are never returned raw.
+              Connect a model provider, manage the agent's learning &amp; memory, and (optionally) attach MCP servers. {isSnowflakeApp() ? 'In the Snowflake app, AI runs through Snowflake Cortex: there are no keys to keep.' : <>Secrets stay under <code>.dql/</code> and are never returned raw.</>}
             </div>
           </div>
           <SummaryCard
@@ -245,22 +246,31 @@ export function ConnectionRuntimeSettings({
           {section === 'advanced' && (
             <>
               <section>
-                <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
-                <McpConnectionsEditor
-                  settings={mcpSettings}
-                  t={t}
-                  onChange={setMcpSettings}
-                  onStatus={setStatus}
-                />
+                {mcpSettings.noEgress || isSnowflakeApp() ? (
+                  <NoOutsideConnections t={t} />
+                ) : (
+                  <>
+                    <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
+                    <McpConnectionsEditor
+                      settings={mcpSettings}
+                      t={t}
+                      onChange={setMcpSettings}
+                      onStatus={setStatus}
+                    />
+                  </>
+                )}
               </section>
-              <section style={{ marginTop: 22 }}>
-                <SectionTitle title="Runtime status" detail="Environment variables remain supported for Docker, CI, and shell-based setup." t={t} />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-                  {groups.map((group) => (
-                    <EnvGroupCard key={group.id} group={group} t={t} />
-                  ))}
-                </div>
-              </section>
+              {/* Without internet access the install set its own environment: no keys for outside providers, Slack or email. */}
+              {mcpSettings.noEgress || isSnowflakeApp() ? null : (
+                <section style={{ marginTop: 22 }}>
+                  <SectionTitle title="Runtime status" detail="Environment variables remain supported for Docker, CI, and shell-based setup." t={t} />
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
+                    {groups.map((group) => (
+                      <EnvGroupCard key={group.id} group={group} t={t} />
+                    ))}
+                  </div>
+                </section>
+              )}
             </>
           )}
           {!section && (
@@ -271,13 +281,19 @@ export function ConnectionRuntimeSettings({
             </summary>
             <div style={{ padding: '4px 16px 18px' }}>
               <section style={{ marginTop: 14 }}>
-                <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
-                <McpConnectionsEditor
-                  settings={mcpSettings}
-                  t={t}
-                  onChange={setMcpSettings}
-                  onStatus={setStatus}
-                />
+                {mcpSettings.noEgress || isSnowflakeApp() ? (
+                  <NoOutsideConnections t={t} />
+                ) : (
+                  <>
+                    <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
+                    <McpConnectionsEditor
+                      settings={mcpSettings}
+                      t={t}
+                      onChange={setMcpSettings}
+                      onStatus={setStatus}
+                    />
+                  </>
+                )}
               </section>
 
               <section style={{ marginTop: 22 }}>
@@ -574,6 +590,21 @@ function McpConnectionsEditor({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Without internet access (ZLENS_NO_EGRESS, as in the ZLens app for Snowflake) nothing can be attached: no MCP
+ * server and no hosted connector. The server refuses them too, so the page matches what the install can do.
+ */
+function NoOutsideConnections({ t }: { t: Theme }) {
+  return (
+    <>
+      <SectionTitle title="Outside connections" detail="MCP servers and hosted connectors." t={t} />
+      <div role="note" style={{ border: '1px solid var(--border-subtle)', borderRadius: 10, background: t.cellBg, padding: '11px 13px', fontSize: 12.5, lineHeight: 1.55, color: t.textSecondary }}>
+        This install has no internet access, so it connects to no MCP servers or hosted connectors. Everything ZLens uses runs inside it.
+      </div>
+    </>
   );
 }
 
@@ -1004,7 +1035,9 @@ function ProviderSettingsForm({
       <div>
         <div style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary }}>AI provider</div>
         <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5 }}>
-          AI is optional. You can run queries and build Apps without it. Keys stay in <span style={{ fontFamily: t.fontMono, fontSize: 11.5 }}>.dql/</span> and are never returned raw.
+          {isSnowflakeApp()
+            ? 'AI is optional. You can run queries and build Apps without it. Here it runs on Claude through Snowflake Cortex, inside your Snowflake account, with no API key.'
+            : <>AI is optional. You can run queries and build Apps without it. Keys stay in <span style={{ fontFamily: t.fontMono, fontSize: 11.5 }}>.dql/</span> and are never returned raw.</>}
         </div>
       </div>
 
@@ -1193,7 +1226,7 @@ function CortexSignInFields({
         </label>
       ) : null}
       <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.5 }}>
-        {CORTEX_HELP.map((sentence) => <div key={sentence}>{sentence}</div>)}
+        {(isSnowflakeApp() ? CORTEX_HELP_SNOWFLAKE_APP : CORTEX_HELP).map((sentence) => <div key={sentence}>{sentence}</div>)}
       </div>
     </div>
   );
@@ -2036,7 +2069,9 @@ function MemoryEditor({
 
       <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 10, padding: '11px 13px' }}>
         <span style={{ fontSize: 11.5, color: t.textMuted, lineHeight: 1.55 }}>
-          Entries added here are local advisory records under <span style={{ fontFamily: t.fontMono, fontSize: 10.5 }}>.dql/cache/</span>. Put shared agent guidance in Git under <span style={{ fontFamily: t.fontMono, fontSize: 10.5 }}>skills/</span> or <span style={{ fontFamily: t.fontMono, fontSize: 10.5 }}>domains/&lt;domain&gt;/skills/</span>. Advisory memory and skills never approve or certify a governed hint.
+          {isSnowflakeApp()
+            ? 'Entries added here are notes for the AI, kept with this project. They never approve or certify anything.'
+            : <>Entries added here are local advisory records under <span style={{ fontFamily: t.fontMono, fontSize: 10.5 }}>.dql/cache/</span>. Put shared agent guidance in Git under <span style={{ fontFamily: t.fontMono, fontSize: 10.5 }}>skills/</span> or <span style={{ fontFamily: t.fontMono, fontSize: 10.5 }}>domains/&lt;domain&gt;/skills/</span>. Advisory memory and skills never approve or certify a governed hint.</>}
         </span>
       </div>
     </div>

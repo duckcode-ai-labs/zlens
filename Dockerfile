@@ -42,6 +42,8 @@ COPY apps ./apps
 COPY scripts ./scripts
 
 RUN pnpm install --frozen-lockfile
+# Source maps beside the UI's minified JavaScript: Snowflake's app security review asks for them.
+ENV ZLENS_UI_SOURCEMAP=1
 RUN pnpm -r build
 
 # Trim devDependencies for the runtime image.

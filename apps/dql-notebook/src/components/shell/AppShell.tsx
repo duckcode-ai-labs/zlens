@@ -12,6 +12,8 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { HostBanner } from './HostBanner';
 import { SnowflakeAppSetupBanner } from './SnowflakeAppSetupBanner';
+import { setSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { usePageTitle } from './page-title';
 import { hostLandingView, useHostUi } from '../../host/host-ui';
 import { HostRefusalNotice, ReadOnlyStrip } from './HostReadOnly';
 import { DevPanel } from './DevPanel';
@@ -86,6 +88,7 @@ export function AppShell() {
       .then((launch) => {
         if (!alive) return;
         setSetupLaunch(launch);
+        if (launch.snowflakeAppManaged) setSnowflakeApp(true);
         if (launch.shouldOpen) dispatch({ type: 'OPEN_SETUP' });
       })
       .catch(() => {
@@ -178,6 +181,10 @@ export function AppShell() {
     if (view) dispatch({ type: 'SET_MAIN_VIEW', view });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the landing is decided once, from the first state
   }, []);
+
+  const snowflakeApp = useSnowflakeApp();
+  // Each page names itself in the browser tab ("Ask · ZLens").
+  usePageTitle();
 
   // Global keyboard shortcuts
   useKeyboardShortcuts();
@@ -313,7 +320,7 @@ export function AppShell() {
     >
       {/* The host's strip (HH-9), e.g. "Draft space — changes go to review" */}
       <HostBanner />
-      <SnowflakeAppSetupBanner enabled={Boolean(setupLaunch?.snowflakeAppManaged)} />
+      <SnowflakeAppSetupBanner enabled={snowflakeApp || Boolean(setupLaunch?.snowflakeAppManaged)} />
       {/* Header spans full width */}
       <Header />
       <HostRefusalNotice />
@@ -361,7 +368,7 @@ export function AppShell() {
                 <ConnectionPanel variant="page" />
               </ConnectionWorkspace>
             ) : state.mainView === 'git' ? (
-              <GitPage />
+              snowflakeApp ? <NoGitInSnowflakeApp t={t} /> : <GitPage />
             ) : state.mainView === 'readiness' ? (
               <ReadinessPage />
             ) : state.mainView === 'skills' ? (
@@ -453,6 +460,18 @@ export function AppShell() {
           />
         </Suspense>
       )}
+    </div>
+  );
+}
+
+/** The app for Snowflake has no Git (its rail leaves Source control out); a stale link lands here. */
+function NoGitInSnowflakeApp({ t }: { t: (typeof themes)[keyof typeof themes] }) {
+  return (
+    <div style={{ flex: 1, minWidth: 0, display: 'grid', placeItems: 'center', background: t.appBg, color: t.textSecondary, fontFamily: t.font, padding: 24 }}>
+      <div style={{ maxWidth: 460, fontSize: 13, lineHeight: 1.6 }}>
+        <div style={{ fontSize: 16, fontWeight: 650, color: t.textPrimary, marginBottom: 6 }}>No source control here</div>
+        Your work is saved inside your Snowflake account, on the app&apos;s own volume. ZLens backs it up once a day: see <strong>Settings » Backups</strong>.
+      </div>
     </div>
   );
 }

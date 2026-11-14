@@ -14,6 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import type { SemanticLayerProviderConfig } from './provider.js';
+import { readEnv } from '../../env.js';
 
 /** Default cache TTL: 10 minutes. */
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -67,6 +68,10 @@ export function resolveRepoSource(
       : projectRoot;
     return { localPath, freshClone: false, warnings: [] };
   }
+
+  // Remote source. Without internet access (ZLENS_NO_EGRESS, as in the ZLens app for Snowflake) nothing is
+  // cloned or pulled, whichever route asked.
+  refuseWithoutInternet();
 
   // Remote source: clone or update
   const repoUrl = config.repoUrl;
@@ -179,7 +184,15 @@ function injectToken(repoUrl: string, token: string | undefined): string {
 /**
  * Manually refresh a cached repo (for `zlens semantic pull` CLI command).
  */
+/** Thrown before any clone or pull on an install with no internet access (ZLENS_NO_EGRESS). */
+export const NO_EGRESS_REPOSITORY_ERROR = 'This install has no internet access (ZLENS_NO_EGRESS), so it cannot read a Git repository. Use a project folder on this install.';
+
+function refuseWithoutInternet(): void {
+  if (/^(1|true|on|yes)$/i.test(readEnv('ZLENS_NO_EGRESS')?.trim() ?? '')) throw new Error(NO_EGRESS_REPOSITORY_ERROR);
+}
+
 export function pullCachedRepo(repoUrl: string, branch: string = 'main'): RepoResolveResult {
+  refuseWithoutInternet();
   const cacheBase = getCacheBaseDir();
   const key = cacheKey(repoUrl, branch);
   const cloneDir = join(cacheBase, key);
