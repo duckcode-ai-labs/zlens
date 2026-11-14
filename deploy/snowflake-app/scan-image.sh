@@ -15,7 +15,13 @@ trivy_image="aquasec/trivy:0.76.2"
 clamav_image="clamav/clamav-debian:stable"  # multi-platform (the plain clamav image has no arm64 build)
 
 echo "== Runs as: $(docker inspect --format '{{.Config.User}}' "$image")"
-test "$(docker inspect --format '{{.Config.User}}' "$image")" = node || { echo "the app image must run as node (ZLENS_USER=node)" >&2; exit 1; }
+test "$(docker inspect --format '{{.Config.User}}' "$image")" = 1000:1000 || { echo "the app image must run as uid 1000 (docker build --target snowflake-app)" >&2; exit 1; }
+
+echo "== Minimal: no shell, no package manager"
+docker run --rm --entrypoint /nodejs/bin/node "$image" -e '
+  const found = ["/bin/sh", "/bin/bash", "/usr/bin/apt", "/usr/bin/dpkg", "/usr/local/bin/npm", "/usr/bin/npm"].filter((p) => require("fs").existsSync(p));
+  if (found.length) { console.error("not minimal, found: " + found.join(", ")); process.exit(1); }
+  console.log("no shell, no package manager");'
 
 echo "== Trivy: fixable critical and high CVEs"
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v zlens-trivy-cache:/root/.cache "$trivy_image" image \

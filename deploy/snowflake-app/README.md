@@ -11,13 +11,13 @@ every component and flow of information is in [ARCHITECTURE.md](ARCHITECTURE.md)
 `snowflake.yml` defines two packages: `ZLENS_PACKAGE` (INTERNAL, for development, used below) and
 `ZLENS` (EXTERNAL, what customers install). How a version reaches customers: [RELEASING.md](RELEASING.md).
 
-1. Build the image for Snowflake's platform, with the Snowflake driver baked in and ZLens running as the
-   unprivileged `node` user, and push it to an image repository in your account
-   (`CREATE IMAGE REPOSITORY ...`):
+1. Build the app's image for Snowflake's platform (the Dockerfile's `snowflake-app` stage: distroless Node
+   with no shell or package manager, the Snowflake driver baked in, running as uid 1000), and push it to an
+   image repository in your account (`CREATE IMAGE REPOSITORY ...`):
 
    ```bash
-   docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" \
-     --build-arg ZLENS_USER=node -t zlens-snowflake .
+   docker build --platform linux/amd64 --target snowflake-app \
+     --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake .
    snow spcs image-registry login
    docker tag zlens-snowflake <orgname>-<acctname>.registry.snowflakecomputing.com/<db>/<schema>/<repo>/zlens:<tag>
    docker push <orgname>-<acctname>.registry.snowflakecomputing.com/<db>/<schema>/<repo>/zlens:<tag>

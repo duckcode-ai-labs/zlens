@@ -157,19 +157,20 @@ docker compose --profile ollama up   # adds a local Ollama on :11434
 
 ### ZLens inside Snowflake (preview)
 
-The same image runs inside a Snowflake account (Snowpark Container Services),
-where it has no internet access. Bake the Snowflake driver into it, for the
-`linux/amd64` platform Snowflake runs, and run ZLens as the image's unprivileged
-`node` user (Snowflake's security review asks for a non-root container):
+ZLens runs inside a Snowflake account (Snowpark Container Services), where it
+has no internet access, from its own minimal image: the Dockerfile's
+`snowflake-app` stage, distroless Node with no shell or package manager, the
+Snowflake driver baked in, running as uid 1000 (Snowflake's security review
+asks for minimal, non-root images). Build it for the `linux/amd64` platform
+Snowflake runs:
 
 ```bash
-docker build --platform linux/amd64 \
-  --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" \
-  --build-arg ZLENS_USER=node -t zlens-snowflake .
+docker build --platform linux/amd64 --target snowflake-app \
+  --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake .
 ```
 
-`ZLENS_USER` is `root` by default, so a bind-mounted folder of any owner keeps
-working with the standard image.
+The standard image runs as `root` by default, so a bind-mounted folder of any
+owner keeps working; `--build-arg ZLENS_USER=node` runs it as `node` instead.
 
 Inside Snowflake the entrypoint sees the service's sign-in token
 (`/snowflake/session/token`, with `SNOWFLAKE_HOST` set). On the first start it

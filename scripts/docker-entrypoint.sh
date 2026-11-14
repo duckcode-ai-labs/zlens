@@ -62,9 +62,9 @@ maybe_use_demo_project() {
 # ── ZLens inside Snowflake ───────────────────────────────────────────────────
 # ZLENS_SNOWFLAKE_APP=1, or running in Snowpark Container Services (Snowflake
 # writes the service's sign-in token to /snowflake/session/token and sets
-# SNOWFLAKE_HOST): the project lives on the mounted volume, is created on the
-# first start with one Snowflake connection, and the container reaches nothing
-# on the internet. Each default below can be overridden by setting it.
+# SNOWFLAKE_HOST): deploy/snowflake-app/snowflake-entrypoint.mjs prepares the
+# project and starts ZLens (the app's own image has no shell, so that start-up
+# is plain Node; this image hands the same path to it).
 snowflake_token_file="${ZLENS_SNOWFLAKE_TOKEN_FILE:-/snowflake/session/token}"
 
 is_snowflake_app() {
@@ -72,74 +72,9 @@ is_snowflake_app() {
   [ -n "${SNOWFLAKE_HOST:-}" ] && [ -f "$snowflake_token_file" ]
 }
 
-# The connection, written once into dql.config.json. Account and host stay
-# ${...} references, read from the environment at run time, so the project on
-# the volume names no account. Inside Snowflake it signs in with the service's
-# token file; elsewhere (a local test) with a key pair.
-write_snowflake_connection() {
-  ZLENS_SF_TOKEN_FILE="$snowflake_token_file" node -e '
-    const fs = require("fs");
-    const env = process.env;
-    const path = "dql.config.json";
-    const config = JSON.parse(fs.readFileSync(path, "utf8"));
-    // Snowflake sets SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA in every container to where the service lives,
-    // which is not data: the database and schema come only from ZLENS_SNOWFLAKE_*.
-    const pick = (name) => env["ZLENS_SNOWFLAKE_" + name]
-      || (name === "DATABASE" || name === "SCHEMA" ? undefined : env["SNOWFLAKE_" + name]) || undefined;
-    const connection = { driver: "snowflake", account: "${SNOWFLAKE_ACCOUNT}" };
-    if (env.SNOWFLAKE_HOST) connection.host = "${SNOWFLAKE_HOST}";
-    for (const [key, name] of [["warehouse", "WAREHOUSE"], ["database", "DATABASE"], ["schema", "SCHEMA"], ["role", "ROLE"]]) {
-      const value = pick(name);
-      if (value) connection[key] = value;
-    }
-    if (fs.existsSync(env.ZLENS_SF_TOKEN_FILE)) {
-      Object.assign(connection, { authMethod: "oauth", tokenFilePath: env.ZLENS_SF_TOKEN_FILE });
-    } else if (env.ZLENS_SNOWFLAKE_PRIVATE_KEY_PATH) {
-      Object.assign(connection, { authMethod: "key_pair", username: env.ZLENS_SNOWFLAKE_USER || "", privateKeyPath: env.ZLENS_SNOWFLAKE_PRIVATE_KEY_PATH });
-    } else {
-      console.error("[zlens-docker] No Snowflake sign-in: no token file at " + env.ZLENS_SF_TOKEN_FILE + " and no ZLENS_SNOWFLAKE_PRIVATE_KEY_PATH.");
-      process.exit(1);
-    }
-    config.connections = { snowflake: connection };
-    config.defaultConnectionName = "snowflake";
-    fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
-  '
-}
-
-prepare_snowflake_app() {
-  export ZLENS_NO_EGRESS="${ZLENS_NO_EGRESS:-1}"
-  export ZLENS_LOCK_CONNECTIONS="${ZLENS_LOCK_CONNECTIONS:-1}"
-  # No model unless the app package chooses one: ZLENS_MODEL_PROVIDERS=cortex
-  # gives it Claude through Snowflake Cortex, signed in with the service's token.
-  export ZLENS_MODEL_PROVIDERS="${ZLENS_MODEL_PROVIDERS:-none}"
-  # Inside Snowflake its ingress signs people in and names them (Sf-Context-Current-User): ZLens trusts that
-  # header there, and only there (the server checks for Snowflake's token file too). ZLENS_SNOWFLAKE_APP_USER,
-  # set by the app, names the one person the free app serves.
-  if [ -f "$snowflake_token_file" ]; then
-    export ZLENS_SNOWFLAKE_INGRESS="${ZLENS_SNOWFLAKE_INGRESS:-1}"
-  fi
-  mkdir -p "$workspace"
-  cd "$workspace"
-  # The app image runs as the unprivileged `node` user (ZLENS_USER=node). A volume first used by an
-  # image that ran as root holds files this user cannot change: say so plainly instead of failing later.
-  for path in . dql.config.json .dql; do
-    if [ -e "$path" ] && [ ! -w "$path" ]; then
-      log "Cannot write $workspace/$path as $(id -un) (uid $(id -u)): the volume was probably created by an image that ran as root."
-      log "Give it to this user once (chown -R $(id -u):$(id -g) $workspace) or run the image as root."
-      exit 1
-    fi
-  done
-  if [ ! -f dql.config.json ]; then
-    log "First start: creating a warehouse-first project in $workspace."
-    zlens init --warehouse-first --yes >/dev/null
-    write_snowflake_connection
-    log "Project ready with its Snowflake connection."
-  fi
-}
-
 if [ "${1:-}" = "zlens" ] || [ "${1:-}" = "dql" ]; then
   if is_snowflake_app; then
-    prepare_snowflake_app
+    exec node /opt/zlens/snowflake-entrypoint.mjs "$@"
   else
     case "${2:-}" in
       notebook|slack|compile|app|agent|verify|schedule|mcp|lineage)

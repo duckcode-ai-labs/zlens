@@ -61,7 +61,7 @@ flowchart TB
 
 | Component | What it is |
 |---|---|
-| Container `zlens` | The ZLens server (Node.js 24 on `node:24-trixie-slim`, Debian 13), running as the unprivileged `node` user (uid 1000), built from this repository's [`Dockerfile`](../../Dockerfile) with the Snowflake Node.js driver included. Code in the image: `/opt/dql` (server and CLI), `/opt/dql/templates/starter`, `/opt/zlens/drivers`, `/usr/local/bin/dql-docker-entrypoint` |
+| Container `zlens` | The ZLens server (Node.js 24 on distroless `gcr.io/distroless/nodejs24-debian13`, pinned by digest: no shell, package manager or build tools), running as an unprivileged user (uid 1000), built from the `snowflake-app` stage of this repository's [`Dockerfile`](../../Dockerfile) with the Snowflake Node.js driver included. Code in the image: `/opt/dql` (server and CLI), `/opt/dql/templates/starter`, `/opt/zlens/drivers`, `/opt/zlens/snowflake-entrypoint.mjs` (start-up) |
 | Service `core.zlens` | One container; one endpoint `ui` on port 3474 (`public: true`, reached only through the ingress); readiness probe `GET /api/health` on port 3474, called by Snowflake inside the service |
 | Compute pool `<application name>_POOL` (`APP_POOL` in the diagram) | `CPU_X64_XS`, one node, created at install; suspends 10 minutes after its service stops (`stop_app()`, or ZLens stopping itself after 30 idle minutes) |
 | Warehouse `<application name>_WH` | The app's own, created at install: `XSMALL`, suspends after 60 seconds idle |
