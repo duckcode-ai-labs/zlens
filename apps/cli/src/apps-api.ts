@@ -8214,13 +8214,13 @@ const PLACEHOLDER_GOALS = new Set(['a dashboard of live, checked numbers', 'edit
  * they gave none.
  */
 export function appIntroFromGoal(goal: string): string | undefined {
-  const text = goal.replace(/\s+/g, ' ').trim();
+  const text = goal.slice(0, 2000).replace(/\s+/g, ' ').trim();
   if (!text || PLACEHOLDER_GOALS.has(text.toLowerCase()) || (/^create\s/i.test(text) && text.split(' ').length <= 6)) return undefined;
   const sentences = text.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [text];
   let intro = sentences.slice(0, 2).join('').trim();
   if (intro.length > 320) {
     const cut = intro.slice(0, 320);
-    intro = `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 160)).replace(/[\s,;:]+$/, '')}…`;
+    intro = `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 160)).trimEnd().replace(/[,;:]$/, '')}…`;
   }
   intro = intro.charAt(0).toUpperCase() + intro.slice(1);
   return /[.!?…]$/.test(intro) ? intro : `${intro}.`;
@@ -8397,6 +8397,15 @@ export function separateNewAppDrafts(
   return drafts.filter((draft) => !discarded.has(draft.id)).map((draft) => renamed.get(draft.id) ?? draft);
 }
 
+/** "Sales (3)" is a numbered copy of "Sales"; undefined for a name with no " (n)" at its end. Linear on any name. */
+function numberedCopyBase(name: string): string | undefined {
+  const trimmed = name.trimEnd();
+  if (!trimmed.endsWith(')')) return undefined;
+  const open = trimmed.lastIndexOf(' (');
+  if (open <= 0 || !/^\d+$/.test(trimmed.slice(open + 2, -1))) return undefined;
+  return trimmed.slice(0, open).trimEnd();
+}
+
 /** The sentences the App templates used to start an App's intro with: placeholders, not what the App is for. */
 export const STOCK_INTRO_SENTENCES = [
   'State the decision this brief supports, then add governed evidence below.',
@@ -8439,11 +8448,11 @@ export function removeEmptyAppCopies(projectRoot: string): string[] {
   try {
     const drafts = storage.listAppBuildDrafts();
     names = [...projectAppIdentities(projectRoot).names, ...drafts.map((draft) => draft.name)];
-    shells = drafts.filter((draft) => /\s\(\d+\)$/.test(draft.name ?? '') && isEmptyNewAppShell(draft, storage.listAppBuildOperations(draft.id).length));
+    shells = drafts.filter((draft) => numberedCopyBase(draft.name ?? '') !== undefined && isEmptyNewAppShell(draft, storage.listAppBuildOperations(draft.id).length));
   } finally {
     storage.close();
   }
-  const baseName = (name: string) => name.replace(/\s+\(\d+\)$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const baseName = (name: string) => (numberedCopyBase(name) ?? name).replace(/\s+/g, ' ').trim().toLowerCase();
   const moved: string[] = [];
   for (const shell of shells) {
     const base = baseName(shell.name);

@@ -530,31 +530,59 @@ describe('Dashboard visualization vocabulary and icons (UI-004)', () => {
 });
 
 // V12: "Warriors 2016 scoring" showed "Max POINTS PER GAME by game type" beside "POINTS PER GAME by game type".
-describe('A reader sees a chart of the same numbers once', () => {
-  const ok = (columns: string[], rows: Array<Record<string, unknown>>) => ({ status: 'ok', result: { columns, rows, rowCount: rows.length, executionTime: 1 } });
+describe('A reader sees a chart of the same numbers from the same data once', () => {
+  const path = 'blocks/warriors_ppg_regular_vs_playoffs_2016.dql';
+  const rows = (columns: string[], data: Array<Record<string, unknown>>) => ({ columns, rows: data, rowCount: data.length, executionTime: 1 });
+  // A field tile over the certified saved query, and the saved query's own tile: the same file, both certified.
+  const fieldTile = (result: unknown, trust: 'certified' | 'review_required' = 'certified', sourceId = 'app:block:nba:ppg') => ({ status: 'ok', tileType: 'dataset', result, citation: { kind: 'dataset_query', name: 'PPG', path }, dataset: { sourceId, trust, validation: { outcome: 'accepted' } } });
+  const blockTile = (result: unknown) => ({ status: 'ok', tileType: 'block', result, blockPath: path, certificationStatus: 'certified' });
   const items = [
     { i: 'intro', x: 0, y: 0, w: 12, h: 2, text: { markdown: '# Warriors 2016 scoring' }, viz: { type: 'text' } },
-    { i: 'max-ppg', x: 0, y: 2, w: 6, h: 4, sourceId: 'app:block:nba:ppg', title: 'Max POINTS PER GAME by game type', viz: { type: 'bar' } },
+    { i: 'max-ppg', x: 0, y: 2, w: 6, h: 4, sourceId: 'app:block:nba:ppg', query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] }, title: 'Max POINTS PER GAME by game type', viz: { type: 'bar' } },
     { i: 'ppg', x: 6, y: 2, w: 6, h: 4, block: { blockId: 'warriors_ppg_regular_vs_playoffs_2016' }, title: 'POINTS PER GAME by game type', viz: { type: 'bar' } },
-    { i: 'ppg-table', x: 0, y: 6, w: 12, h: 3, sourceId: 'app:block:nba:ppg', title: 'Points per game', viz: { type: 'table' } },
-    { i: 'wins', x: 0, y: 9, w: 6, h: 3, sourceId: 'app:block:nba:wins', title: 'Wins by game type', viz: { type: 'bar' } },
+    { i: 'ppg-table', x: 0, y: 6, w: 12, h: 3, sourceId: 'app:block:nba:ppg', query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] }, title: 'Points per game', viz: { type: 'table' } },
+    { i: 'wins', x: 0, y: 9, w: 6, h: 3, sourceId: 'app:block:nba:wins', query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] }, title: 'Wins by game type', viz: { type: 'bar' } },
   ];
+  const ppg = (playoffs: number) => [{ GAME_TYPE: 'Playoffs', points: playoffs }, { GAME_TYPE: 'Regular Season', points: 115.8902439024 }];
   const results = new Map<string, unknown>([
-    ['max-ppg', ok(['GAME_TYPE', 'max_points_per_game'], [{ GAME_TYPE: 'Playoffs', max_points_per_game: 119.2857142857 }, { GAME_TYPE: 'Regular Season', max_points_per_game: 115.8902439024 }])],
-    ['ppg', ok(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 115.8902439024 }, { GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }])],
-    ['ppg-table', ok(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }, { GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 115.8902439024 }])],
-    ['wins', ok(['GAME_TYPE', 'WINS'], [{ GAME_TYPE: 'Playoffs', WINS: 15 }, { GAME_TYPE: 'Regular Season', WINS: 67 }])],
+    ['max-ppg', fieldTile(rows(['GAME_TYPE', 'max_points_per_game'], ppg(119.2857142857).map(({ GAME_TYPE, points }) => ({ GAME_TYPE, max_points_per_game: points }))))],
+    ['ppg', blockTile(rows(['GAME_TYPE', 'POINTS_PER_GAME'], ppg(119.2857142857).reverse().map(({ GAME_TYPE, points }) => ({ GAME_TYPE, POINTS_PER_GAME: points }))))],
+    ['ppg-table', fieldTile(rows(['GAME_TYPE', 'POINTS_PER_GAME'], ppg(119.2857142857).map(({ GAME_TYPE, points }) => ({ GAME_TYPE, POINTS_PER_GAME: points }))))],
+    ['wins', fieldTile(rows(['GAME_TYPE', 'WINS'], [{ GAME_TYPE: 'Playoffs', WINS: 15 }, { GAME_TYPE: 'Regular Season', WINS: 67 }]), 'certified', 'app:block:nba:wins')],
   ]);
 
-  it('hides the later chart whose rows are the same numbers, keeps a table of them, and closes the gap', () => {
+  it('hides the later chart whose rows are the same numbers of the same data, keeps a table of them, and closes the gap', () => {
     const visible = prepareStakeholderItems(items as never, results as never, 12);
     expect(visible.map((item) => item.i)).toEqual(['intro', 'max-ppg', 'ppg-table', 'wins']);
     expect(isRepeatedResultStakeholderTile(items[2] as never, items as never, results as never)).toBe(true);
     expect(isRepeatedResultStakeholderTile(items[4] as never, items as never, results as never)).toBe(false);
     // Different numbers are never folded.
     const other = new Map(results);
-    other.set('ppg', ok(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 110 }, { GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }]));
+    other.set('ppg', blockTile(rows(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 110 }, { GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }])));
     expect(prepareStakeholderItems(items as never, other as never, 12).map((item) => item.i)).toEqual(['intro', 'max-ppg', 'ppg', 'ppg-table', 'wins']);
+  });
+
+  it('never hides a tile with other trust or from other data, nor a single number that happens to agree', () => {
+    const same = rows(['GAME_TYPE', 'WINS'], [{ GAME_TYPE: 'Playoffs', WINS: 15 }, { GAME_TYPE: 'Regular Season', WINS: 67 }]);
+    const pair = [
+      { i: 'a', x: 0, y: 0, w: 6, h: 4, sourceId: 'app:block:nba:wins', query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] }, title: 'Wins', viz: { type: 'bar' } },
+      { i: 'b', x: 6, y: 0, w: 6, h: 4, sourceId: 'app:block:nba:wins', query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] }, title: 'Wins again', viz: { type: 'bar' } },
+    ];
+    // The same data, but the later tile reads Not certified yet: it stays, so the reader sees every such tile.
+    const otherTrust = new Map<string, unknown>([['a', fieldTile(same, 'certified', 'app:block:nba:wins')], ['b', fieldTile(same, 'review_required', 'app:block:nba:wins')]]);
+    expect(prepareStakeholderItems(pair as never, otherTrust as never, 12).map((item) => item.i)).toEqual(['a', 'b']);
+    // Other data with the same numbers stays.
+    const otherData = new Map<string, unknown>([['a', fieldTile(same, 'certified', 'app:block:nba:wins')], ['b', { ...fieldTile(same, 'certified', 'app:block:orders:totals'), citation: { kind: 'dataset_query', name: 'Orders', path: 'blocks/orders.dql' } }]]);
+    const otherPair = [pair[0]!, { ...pair[1]!, sourceId: 'app:block:orders:totals' }];
+    expect(prepareStakeholderItems(otherPair as never, otherData as never, 12).map((item) => item.i)).toEqual(['a', 'b']);
+    // The publish journey's App: a certified Total spend KPI and a not-certified Order total KPI with the same sum.
+    const kpis = [
+      { i: 'spend', x: 0, y: 0, w: 3, h: 2, sourceId: 'app:block:orders:customers', query: { dimensions: [], measures: [{ measure: 'lifetime_spend' }] }, title: 'Total spend', viz: { type: 'kpi' } },
+      { i: 'orders', x: 3, y: 0, w: 3, h: 2, sourceId: 'app:block:orders:customers', query: { dimensions: [], measures: [{ measure: 'order_total' }] }, title: 'Order total', viz: { type: 'kpi' } },
+    ];
+    const total = rows(['total'], [{ total: 1234.5 }]);
+    const kpiResults = new Map<string, unknown>([['spend', fieldTile(total, 'certified', 'app:block:orders:customers')], ['orders', fieldTile(total, 'certified', 'app:block:orders:customers')]]);
+    expect(prepareStakeholderItems(kpis as never, kpiResults as never, 12).map((item) => item.i)).toEqual(['spend', 'orders']);
   });
 });
 

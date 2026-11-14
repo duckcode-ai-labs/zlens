@@ -261,11 +261,27 @@ const NAME_LEAD_INS = [
   /^(?:the|a|an)\s+/i,
 ];
 
+/** The text without any of these characters at its end. A loop, not a regular expression: linear on any input. */
+function trimEndOf(text: string, characters: string): string {
+  let end = text.length;
+  while (end > 0 && (characters.includes(text[end - 1]!) || /\s/.test(text[end - 1]!))) end -= 1;
+  return text.slice(0, end);
+}
+
+/** Where a long line's first clause ends: ":", ";", ". ", " – ", or ", with" and the like; -1 when it has none. */
+function firstClauseEnd(line: string): number {
+  const ends = [line.indexOf(':'), line.indexOf(';'), line.indexOf('. '), line.indexOf(' – '), line.indexOf(' — '), line.indexOf(' - ')];
+  const comma = /, (?=(?:with|showing|including|and|so|plus)\b)/.exec(line);
+  if (comma) ends.push(comma.index);
+  const found = ends.filter((index) => index > 0);
+  return found.length ? Math.min(...found) : -1;
+}
+
 /** The name's words, never ending on a word that needs more after it, nor on a comma or a colon. */
 function withoutDanglingTail(text: string): string {
-  const words = text.replace(/[\s,;:.\-–—]+$/, '').split(' ');
+  const words = trimEndOf(text, ',;:.-–—').split(' ');
   while (words.length > 1 && NAME_TAIL_WORDS.has(words[words.length - 1]!.toLowerCase().replace(/[^a-z]/g, ''))) words.pop();
-  return words.join(' ').replace(/[\s,;:.\-–—(]+$/, '');
+  return trimEndOf(words.join(' '), ',;:.-–—(');
 }
 
 /**
@@ -275,12 +291,14 @@ function withoutDanglingTail(text: string): string {
  * the"), "did in each season" read as "by season", and never ending on a word like "in" or "the".
  */
 export function appNameFromGoal(goal: string | undefined | null, max = APP_NAME_FROM_GOAL_MAX): string {
-  const firstLine = String(goal ?? '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  // Bounded: a name is read from the first 1,000 characters of a description.
+  const firstLine = String(goal ?? '').slice(0, 1000).split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
   if (!firstLine) return '';
   let name = firstLine;
   // A long line is named by its first clause: what comes before ": the details".
   if (name.length > max) {
-    const clause = name.split(/\s*(?:[:;]|\.\s|\s[–—-]\s|,\s(?=(?:with|showing|including|and|so|plus)\b))\s*/)[0]!.trim();
+    const end = firstClauseEnd(name);
+    const clause = end > 0 ? name.slice(0, end).trim() : name;
     if (clause.split(' ').length >= 2) name = clause;
   }
   for (const leadIn of NAME_LEAD_INS) {
@@ -289,8 +307,8 @@ export function appNameFromGoal(goal: string | undefined | null, max = APP_NAME_
   }
   name = name
     .replace(/\b(?:did|do|does|performed|perform|fared|went|are\s+doing|is\s+doing|have\s+done|has\s+done)\s+(?:in\s+|over\s+|across\s+|during\s+)?(?:each|every)\s+(season|year|month|quarter|week|day|game)\b/i, 'by $1')
-    .replace(/\s+(?:from|between)\s+(\d{4})\s+(?:to|and|through|-|–)\s+(\d{4})\b/i, ', $1–$2')
-    .replace(/[\s.!?]+$/, '');
+    .replace(/ (?:from|between) (\d{4}) (?:to|and|through|-|–) (\d{4})\b/i, ', $1–$2');
+  name = trimEndOf(name, '.!?');
   if (name.length > max) {
     const cut = name.slice(0, max + 1);
     const atWord = cut.lastIndexOf(' ');

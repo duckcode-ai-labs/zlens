@@ -5,6 +5,7 @@ import { settleGridLayout } from '@zlens/core/apps/grid-layout';
 import { nonMeasureColumnRole, isRankColumnName } from '@zlens/core/apps/result-measures';
 import { formatDashboardValue, formatGenUiLabel, isNumericColumn, type DashboardStory } from './dashboard-format';
 import { formatDashboardFilterValue } from './dashboard-filter-words';
+import { readerTileTrust } from './reader-trust';
 
 /**
  * How a dashboard is presented to a stakeholder: which tiles the read-only
@@ -52,10 +53,11 @@ export function prepareStakeholderItems(
 }
 
 /**
- * A chart that shows exactly the numbers of a chart before it on the page (V12: the tester's "Warriors 2016
- * scoring" showed "Max POINTS PER GAME by game type" beside "POINTS PER GAME by game type", the same two bars).
- * A reader sees it once; the author still sees both while editing. A table beside a chart of the same numbers
- * is kept: it is the exact figures, not a repeat.
+ * A chart that shows exactly the numbers of a chart before it on the page, from the same data and with the same
+ * trust (V12: the tester's "Warriors 2016 scoring" showed "Max POINTS PER GAME by game type" beside "POINTS PER
+ * GAME by game type", the same two bars of one saved query). A reader sees it once; the author still sees both
+ * while editing. Never folded: a tile from other data or with other trust (every Not certified yet tile stays in
+ * view), a single number (two KPIs can agree by chance), and a table beside a chart (the exact figures).
  */
 export function isRepeatedResultStakeholderTile(
   item: DashboardLayoutItem,
@@ -63,21 +65,42 @@ export function isRepeatedResultStakeholderTile(
   tileResults: Map<string, DashboardRunTile>,
 ): boolean {
   if (item.text || item.aiPin) return false;
-  const fingerprint = shownNumbersFingerprint(item, tileResults.get(item.i));
+  const tile = tileResults.get(item.i);
+  const fingerprint = shownNumbersFingerprint(item, tile);
   if (!fingerprint) return false;
+  const trust = readerTileTrust(item, tile)?.state;
+  const sources = tileSourceKeys(item, tile);
+  if (!trust || sources.size === 0) return false;
   const index = items.findIndex((candidate) => candidate.i === item.i);
-  return items.some((candidate, candidateIndex) => candidateIndex < index
-    && !candidate.text
-    && !candidate.aiPin
-    && shownNumbersFingerprint(candidate, tileResults.get(candidate.i)) === fingerprint);
+  return items.some((candidate, candidateIndex) => {
+    if (candidateIndex >= index || candidate.text || candidate.aiPin) return false;
+    const candidateTile = tileResults.get(candidate.i);
+    if (shownNumbersFingerprint(candidate, candidateTile) !== fingerprint) return false;
+    if (readerTileTrust(candidate, candidateTile)?.state !== trust) return false;
+    const candidateSources = tileSourceKeys(candidate, candidateTile);
+    return Array.from(sources).some((key) => candidateSources.has(key));
+  });
 }
 
-/** The rows a tile shows, as values in column order whatever the columns are called, and whether it is a table. */
+/** Where a tile's numbers come from: its source id, its saved query, and the saved query's file. */
+function tileSourceKeys(item: DashboardLayoutItem, tile?: DashboardRunTile): Set<string> {
+  const keys = [
+    item.sourceId,
+    tile?.dataset?.sourceId,
+    getDashboardItemBlockId(item),
+    tile?.blockId,
+    tile?.blockPath,
+    tile?.citation?.path,
+  ];
+  return new Set(keys.filter((key): key is string => typeof key === 'string' && key.trim().length > 0).map((key) => key.trim().toLowerCase().replace(/^\.\//, '')));
+}
+
+/** The rows a tile shows (two or more), as values in column order whatever the columns are called, and whether it is a table. */
 function shownNumbersFingerprint(item: DashboardLayoutItem, tile?: DashboardRunTile): string | null {
   if (tile?.status !== 'ok' || !tile.result) return null;
   const rows = tile.result.rows ?? [];
   const columns = tile.result.columns?.length ? tile.result.columns : Object.keys(rows[0] ?? {});
-  if (!rows.length || columns.length < 1 || !rows.some((row) => columns.some((column) => typeof row[column] === 'number'))) return null;
+  if (rows.length < 2 || columns.length < 2 || !rows.some((row) => columns.some((column) => typeof row[column] === 'number'))) return null;
   const value = (raw: unknown) => typeof raw === 'number' ? Number(raw.toPrecision(10)).toString() : canonicalStakeholderValue(raw);
   const tuples = rows.map((row) => columns.map((column) => value(row[column])).join('\u0001')).sort();
   const shape = item.viz?.type === 'table' ? 'table' : 'chart';

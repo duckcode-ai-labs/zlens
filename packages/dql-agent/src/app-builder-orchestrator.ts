@@ -1801,7 +1801,7 @@ function plannerFilterFields(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.flatMap((item) => {
     const object = objectValue(item);
-    const text = object ? stringValue(object.field ?? object.name) : stringValue(item);
+    const text = (object ? stringValue(object.field ?? object.name) : stringValue(item))?.slice(0, 200);
     if (!text) return [];
     const field = text.split(/\s*(?:=|!=|<>|>=|<=|>|<|\bbetween\b|\bin\b|\bcontains\b|\bis\b|:)\s*/i)[0]!.trim();
     return field && /^[A-Za-z_][A-Za-z0-9_. ]*$/.test(field) ? [field] : [];
