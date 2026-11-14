@@ -65,6 +65,7 @@ import {
 import { resolveNpmInvocation } from './npm-runtime.js';
 import { allowedOllamaEndpoint, OLLAMA_ENDPOINT_REFUSED, savedOllamaEndpoint } from './ollama-endpoint.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, NO_EGRESS_DBT_CLOUD_REASON, NO_EGRESS_METRICFLOW_REASON } from './deployment-locks.js';
+import { ZLENS_FAVICON_SVG } from './brand-page.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, withSnowflakeUser, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
 import { LONG_REQUEST_PATH, answerLongRequest, handleLongRequestPoll } from './long-request.js';
@@ -970,7 +971,6 @@ export const APP_SOURCE_REUSABLE_TAG = 'app-source';
 const NOTEBOOK_EXECUTE_PREVIEW_ROW_LIMIT = 500;
 /** A file from an export holds the whole result up to this many rows; a larger one is refused, never cut without a word. */
 export const EXPORT_MAX_ROWS = 100_000;
-const NOTEBOOK_FAVICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#6d5dfc"/><path d="M9 9h14v14H9z" fill="none" stroke="#fff" stroke-width="2"/><path d="M13 13h6M13 17h6M13 21h4" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>';
 
 /** The exact server-held preview evidence an App Autopilot request needs. */
 export type AppAutopilotPreviewRequirement = 'none' | 'result' | 'failed_tile';
@@ -20508,12 +20508,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
-    if (req.method === 'GET' && path === '/favicon.ico') {
+    // The browser icon: the ZLens Signal mark (index.html links /favicon.svg; browsers also ask for /favicon.ico).
+    if (req.method === 'GET' && (path === '/favicon.ico' || path === '/favicon.svg')) {
       res.writeHead(200, {
         'Content-Type': 'image/svg+xml',
         'Cache-Control': 'public, max-age=86400',
       });
-      res.end(NOTEBOOK_FAVICON_SVG);
+      res.end(ZLENS_FAVICON_SVG);
       return;
     }
 
@@ -28287,6 +28288,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(serializeJSON({ entries: [], status: 'error', error: HOSTED_FILE_REFUSED, code: 'PERMISSION_DENIED' }));
           return;
         }
+        // The app for Snowflake has no Git (its image holds no git): say what it keeps instead.
+        if (snowflakeApp) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ entries: [], status: 'git_unavailable', message: SNOWFLAKE_APP_NO_HISTORY }));
+          return;
+        }
         const history = await readBlockHistory(projectRoot, named);
         res.writeHead(history.httpStatus, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(history.body));
@@ -33625,7 +33632,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
     // A hosted page says so before any script runs, so the app never shows its single-user screens there, even while
     // the person's capability map is loading or failing to load (RFC 0010 HH-9).
-    const content = hostIdentity && requestedPath === '/index.html' ? hostedIndexHtml(readFileSync(filePath)) : readFileSync(filePath);
+    let content: Buffer = hostIdentity && requestedPath === '/index.html' ? hostedIndexHtml(readFileSync(filePath)) : readFileSync(filePath);
+    // The app for Snowflake says so before any script runs, so the page opens on Ask and leaves out the laptop's screens.
+    if (snowflakeApp && requestedPath === '/index.html') content = snowflakeAppIndexHtml(content);
     res.writeHead(200, {
       'Content-Type': contentTypeFor(filePath),
       'Cache-Control': staticResponseCacheControl(filePath),
@@ -42696,6 +42705,7 @@ function contentTypeFor(filePath: string): string {
     case '.html':
       return 'text/html; charset=utf-8';
     case '.json':
+    case '.map':
       return 'application/json; charset=utf-8';
     case '.js':
       return 'application/javascript; charset=utf-8';
@@ -46076,6 +46086,18 @@ export function safeHostUiExtras(answer: unknown): {
         };
       }),
   };
+}
+
+/** What the saved-query History tab says in the app for Snowflake, which keeps no Git history. */
+export const SNOWFLAKE_APP_NO_HISTORY = 'The Snowflake app keeps no version history for saved queries. Its daily backups keep earlier copies of the whole project: Settings » Backups.';
+
+/** The app's page as the app for Snowflake serves it: marked (`<meta name="zlens-snowflake-app" content="1">`) before any script. */
+export function snowflakeAppIndexHtml(content: Buffer): Buffer {
+  const html = content.toString('utf8');
+  if (html.includes('name="zlens-snowflake-app"')) return content;
+  const tag = '<meta name="zlens-snowflake-app" content="1" />';
+  const marked = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, (head) => `${head}\n    ${tag}`) : `${tag}${html}`;
+  return Buffer.from(marked, 'utf8');
 }
 
 /** The app's page as a hosted server serves it: marked hosted (`<meta name="dql-hosted" content="1">`) before any script. */

@@ -22,6 +22,7 @@ import {
   NOTEBOOK_TEMPLATE_LABELS,
   type NotebookTemplate,
 } from './notebook-templates';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 interface NewNotebookModalProps {
   onFileOpened: (file: NotebookFile) => void;
@@ -62,6 +63,8 @@ export function NewNotebookModal({ onFileOpened }: NewNotebookModalProps) {
   const [visibility, setVisibility] = useState<'private' | 'shared'>('shared');
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // The app for Snowflake serves one person and has no Git: no "who is this for", no file paths.
+  const snowflakeApp = useSnowflakeApp();
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -275,7 +278,7 @@ export function NewNotebookModal({ onFileOpened }: NewNotebookModalProps) {
                   {error}
                 </span>
               )}
-              {name && !error && (
+              {name && !error && !snowflakeApp && (
                 <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.fontMono }}>
                   {visibility === 'private'
                     ? `Private path: .dql/local/private/notebooks/${notebookFileStem(slugify(name))}.dqlnb`
@@ -311,12 +314,14 @@ export function NewNotebookModal({ onFileOpened }: NewNotebookModalProps) {
                 ))}
               </select>
               <span style={{ fontSize: 10.5, lineHeight: 1.3, color: t.textMuted, fontFamily: t.font }}>
-                Optional. Lists this notebook under the domain's Used by tab without moving the Git file.
+                {snowflakeApp
+                  ? "Optional. Lists this notebook under the domain's Used by tab."
+                  : "Optional. Lists this notebook under the domain's Used by tab without moving the Git file."}
               </span>
             </div>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+          {snowflakeApp ? null : <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: t.textSecondary, fontFamily: t.font }}>
               Who is this for
             </label>
@@ -336,7 +341,7 @@ export function NewNotebookModal({ onFileOpened }: NewNotebookModalProps) {
                 t={t}
               />
             </div>
-          </div>
+          </div>}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             <label

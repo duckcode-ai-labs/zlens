@@ -31,12 +31,22 @@ export const ROWS_PRIVACY_SHORT = 'Reads structure and counts rows to check keys
 /** Said instead of "nothing is sent" when the project has value profiles on. */
 export const VALUE_PROFILES_ON = 'Value profiles are on: a few column values are sent to your AI provider.';
 
-/** The rows sentence for this project: with value profiles on, it says what is sent. */
-export function rowsPrivacy(valueProfileOn = false, short = false): string {
-  if (!valueProfileOn) return short ? ROWS_PRIVACY_SHORT : ROWS_PRIVACY;
-  return short
-    ? `Reads structure and counts rows to check keys; sample rows stay on this computer. ${VALUE_PROFILES_ON}`
-    : `ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. ${VALUE_PROFILES_ON}`;
+/**
+ * The rows sentence for this project: with value profiles on, it says what is sent. In the ZLens app for
+ * Snowflake (`insideSnowflake`) the rows stay in the customer's Snowflake account, not on a computer.
+ */
+export function rowsPrivacy(valueProfileOn = false, short = false, insideSnowflake = false): string {
+  const sentence = !valueProfileOn
+    ? (short ? ROWS_PRIVACY_SHORT : ROWS_PRIVACY)
+    : short
+      ? `Reads structure and counts rows to check keys; sample rows stay on this computer. ${VALUE_PROFILES_ON}`
+      : `ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. ${VALUE_PROFILES_ON}`;
+  if (!insideSnowflake) return sentence;
+  return sentence
+    .replace('shown only to you, on this computer', 'shown only to you, inside your Snowflake account')
+    .replace('stay on this computer', 'stay in your Snowflake account')
+    .replace('Nothing is sent anywhere unless', 'Nothing is sent to the AI unless')
+    .replace('Nothing is sent unless', 'Nothing is sent to the AI unless');
 }
 
 export type ModelingMode = 'dbt-first' | 'warehouse-first' | 'hybrid';

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync } from 'node:fs';
 import { readEnv } from '@zlens/core';
+import { brandedPage } from './brand-page.js';
 
 /**
  * ZLens running inside Snowflake (Snowpark Container Services, the ZLens app): Snowflake signs the
@@ -81,5 +82,5 @@ export function sameOriginAsHost(origin: string | undefined, host: string | stri
 /** The page a refused person sees in the browser (the API answers in JSON). */
 export function snowflakeIngressRefusalPage(message: string): string {
   const safe = message.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-  return `<!doctype html><html><head><meta charset="utf-8"><title>ZLens</title><style>body{font-family:system-ui,sans-serif;max-width:36rem;margin:15vh auto;padding:0 1rem;color:#222}</style></head><body><h1>ZLens</h1><p>${safe}</p></body></html>`;
+  return brandedPage({ title: 'ZLens', body: `<p>${safe}</p>` });
 }

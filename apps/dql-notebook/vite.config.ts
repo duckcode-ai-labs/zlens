@@ -21,6 +21,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // The ZLens app for Snowflake ships the UI's source maps beside its minified JavaScript, as
+    // Snowflake's app security review asks (the Dockerfile's builder sets ZLENS_UI_SOURCEMAP=1).
+    // The npm package leaves them out to stay small.
+    sourcemap: /^(1|true|on|yes)$/i.test(process.env.ZLENS_UI_SOURCEMAP ?? ''),
     rollupOptions: {
       output: {
         manualChunks: {

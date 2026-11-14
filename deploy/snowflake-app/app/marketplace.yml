@@ -1,0 +1,12 @@
+# What the ZLens app needs in the consumer's account, shown on its Marketplace listing and checked
+# by Snowsight before an install or upgrade (Snowflake's enforced standard 4.2; file reference:
+# https://docs.snowflake.com/en/developer-guide/native-apps/marketplace-file). It sits next to
+# manifest.yml at the package root. The app creates this pool itself at install (setup.sql,
+# core.ensure_zlens) with the CREATE COMPUTE POOL privilege the manifest asks for. ZLens reaches no
+# external endpoint, so there are no connections.
+required_compute_pools:
+  - ZLENS_POOL:
+      label: "ZLens compute pool"
+      description: "One CPU_X64_XS node that ZLens creates at install and runs on. ZLens stops itself after 60 idle minutes, and the pool suspends 10 minutes later."
+      compatible_instance_families:
+        - CPU_X64_XS

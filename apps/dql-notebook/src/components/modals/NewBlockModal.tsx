@@ -5,6 +5,7 @@ import { api } from '../../api/client';
 import type { NotebookFile } from '../../store/types';
 import { blockGitPath } from './artifact-location';
 import { authoredDomainOptions } from '../domains/authored-domain-options';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 interface NewBlockModalProps {
   onFileOpened: (file: NotebookFile) => void;
@@ -36,6 +37,8 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
   // Shared by default, matching every block that already exists.
   const [visibility, setVisibility] = useState<'private' | 'shared'>('shared');
   const [error, setError] = useState<string | null>(null);
+  // The app for Snowflake serves one person and has no Git or dbt: no "who is this for", no file paths.
+  const snowflakeApp = useSnowflakeApp();
   const [creating, setCreating] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -188,7 +191,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
             >
               SQL query
               <span style={{ display: 'block', marginTop: 3, color: t.textMuted, fontWeight: 400, fontSize: 11 }}>
-                Build from dbt models, tables, and SELECT queries.
+                {snowflakeApp ? 'Build from tables and SELECT queries.' : 'Build from dbt models, tables, and SELECT queries.'}
               </span>
             </button>
             <button
@@ -209,12 +212,12 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
             >
               Query from metrics
               <span style={{ display: 'block', marginTop: 3, color: t.textMuted, fontWeight: 400, fontSize: 11 }}>
-                Build from dbt/DQL metrics and dimensions.
+                {snowflakeApp ? 'Build from metrics and dimensions.' : 'Build from dbt/DQL metrics and dimensions.'}
               </span>
             </button>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {snowflakeApp ? null : <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={{ fontSize: 12, fontWeight: 500, color: t.textSecondary, fontFamily: t.font }}>
               Who is this for
             </label>
@@ -246,7 +249,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
                 </button>
               ))}
             </div>
-          </div>
+          </div>}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label
@@ -287,7 +290,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
                 {error}
               </span>
             )}
-            {name && !error && (
+            {name && !error && !snowflakeApp && (
               <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.fontMono }}>
                 {visibility === 'private'
                   ? `Private path: .dql/local/private/blocks/${folderPath.trim() ? `${folderPath.trim().replace(/^\/+|\/+$/g, '')}/` : ''}${slugify(name)}.dql`
@@ -352,7 +355,9 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
           >
             {blockType === 'semantic'
               ? 'Saved queries built from metrics use governed metrics, dimensions, and chart intent. They do not start with raw SQL.'
-              : 'SQL blocks are reusable SELECT queries stored in the blocks/ folder. Use them for dbt models, tables, and imported SQL.'}
+              : snowflakeApp
+                ? 'SQL blocks are reusable SELECT queries over your tables.'
+                : 'SQL blocks are reusable SELECT queries stored in the blocks/ folder. Use them for dbt models, tables, and imported SQL.'}
           </div>
         </div>
 

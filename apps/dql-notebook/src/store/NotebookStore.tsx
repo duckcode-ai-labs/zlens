@@ -19,6 +19,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { NotebookState, NotebookAction, Cell } from "./types";
 import { downstreamCellIds } from "../utils/notebook-dependencies";
 import { appHomePageId } from "../components/apps/app-links";
+import { snowflakeAppPage } from "../snowflake-app/snowflake-app-mode";
 
 // Apps now live in the sidebar, so the notebook shell always starts in the
 // full authoring surface. Clear the legacy mode preference so users do not get
@@ -70,7 +71,8 @@ function readInitialMainView(): NotebookState['mainView'] {
   const params = new URLSearchParams(window.location.search);
   return params.has('domain') || params.has('domainSection') || params.has('modelArea')
     ? 'domains'
-    : 'apps';
+    // The app for Snowflake opens on Ask: one person asking about their own data.
+    : snowflakeAppPage() ? 'ask' : 'apps';
 }
 
 /**

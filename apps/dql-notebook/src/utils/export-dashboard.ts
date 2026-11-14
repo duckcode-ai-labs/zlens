@@ -226,7 +226,7 @@ export function exportDashboardHtml(title: string, cells: Cell[]): string {
   <div class="content">
     ${cellBlocks}
   </div>
-  <p class="exported-by">Built with ZLens Workbench</p>
+  <p class="exported-by">Built with ZLens</p>
 </body>
 </html>`;
 }

@@ -1,4 +1,5 @@
 import { readEnv } from '@zlens/core';
+import { brandedPage } from './brand-page.js';
 
 /**
  * The ZLens app for Snowflake, set up from Snowsight instead of SQL. The admin types the one person
@@ -143,7 +144,7 @@ export function chooseDatabase(granted: string[], current: string | undefined): 
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-/** What a person sees while the app is not set up yet: plain steps for the admin, with the app's name filled in. */
+/** What a person sees while the app is not set up yet: plain steps for the admin, with the app's name filled in, in the ZLens brand. */
 export function snowflakeAppSetupPage(input: { appName?: string; needsUser: boolean; databases: string[] }): string {
   const app = input.appName ?? '<this app>';
   const steps: string[] = [];
@@ -159,9 +160,13 @@ export function snowflakeAppSetupPage(input: { appName?: string; needsUser: bool
     ];
     steps.push(`<li><strong>What ZLens may read.</strong> Run this in a worksheet, with your database and schema in place of MY_DB and MY_SCHEMA:<pre>${escapeHtml(grants.join('\n'))}</pre></li>`);
   } else if (input.databases.length > 1) {
-    steps.push(`<li><strong>One database.</strong> This app can see ${input.databases.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}. The free app reads one: revoke the others, or ask for the Team plan.</li>`);
+    steps.push(`<li><strong>One database.</strong> This app can see ${input.databases.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}. ZLens reads one: revoke the others, so one is left.</li>`);
   }
-  return `<!doctype html><html><head><meta charset="utf-8"><title>ZLens: almost ready</title><style>body{font-family:system-ui,sans-serif;max-width:44rem;margin:12vh auto;padding:0 1rem;color:#222;line-height:1.5}pre{background:#f4f4f2;padding:.75rem;overflow-x:auto;font-size:.85rem}code{background:#f4f4f2;padding:0 .2rem}</style></head><body><h1>ZLens is almost ready</h1><p>Your Snowflake admin has one or two steps left:</p><ol>${steps.join('')}</ol><p>Then reload this page. ZLens picks the changes up within a minute, without a restart.</p></body></html>`;
+  const left = steps.length === 1 ? 'One step is left' : `${steps.length} steps are left`;
+  return brandedPage({
+    title: 'ZLens: almost ready',
+    body: `<h1>ZLens is almost ready</h1><p><span class="dot"></span>ZLens is running in your Snowflake account. ${left} for your Snowflake admin:</p><ol>${steps.join('')}</ol><p>Then reload this page. ZLens picks the changes up within a minute, without a restart.</p>`,
+  });
 }
 
 /**

@@ -45,6 +45,9 @@ describe('when the Snowflake sign-in counts', () => {
     expect(sameOriginAsHost('http://abc-org-acct.snowflakecomputing.app', 'abc-org-acct.snowflakecomputing.app')).toBe(false);
     expect(sameOriginAsHost(undefined, 'h')).toBe(false);
     expect(snowflakeIngressRefusalPage('<b>x</b>')).toContain('&lt;b&gt;x&lt;/b&gt;');
+    // The refusal page wears the ZLens brand like the setup page.
+    expect(snowflakeIngressRefusalPage('No.')).toContain('aria-label="ZLens"');
+    expect(snowflakeIngressRefusalPage('No.')).toContain('<link rel="icon"');
   });
 });
 
