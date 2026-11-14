@@ -190,7 +190,7 @@ describe('on the host: the drafted answer shows the store names, never their UUI
     expect(prompts[1]).toContain('join dev.locations ON dev.orders.location_id = dev.locations.location_id');
     expect(prompts[1]).toContain('relation:dev.locations');
     expect(result.status).toBe('completed');
-    expect(result.answer).toContain('Philadelphia · 11.29 | Brooklyn · 10.01');
+    expect(result.answer).toContain('Philadelphia · 11.29; Brooklyn · 10.01');
     expect(result.answer).not.toContain(store.brooklyn);
     const checks = (result.askPipelineReceipt?.checks ?? []).filter((check) => check.id === 'key_labels');
     expect(checks.map((check) => check.passed)).toEqual([false, true]);
@@ -203,7 +203,7 @@ describe('on the host: the drafted answer shows the store names, never their UUI
     expect(result.status).toBe('completed');
     expect(result.answer).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
     expect(result.answer).toContain('The rows are identified by location_id, internal key with no name beside it in this result.');
-    expect(result.answer).toContain('the rows are grouped by location_id, an internal key; locations.location_name names them, and the statement could not be made to show it.');
+    expect(result.answer).toContain('The rows are grouped by location_id, an internal key; locations.location_name names them, and the statement could not be made to show it.');
   });
 
   it('a draft that already shows the names is not sent back, and its prompt is unchanged', async () => {

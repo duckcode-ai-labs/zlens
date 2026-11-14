@@ -262,7 +262,7 @@ export interface PrepareDeps {
    * answered; `previous` carries a draft the warehouse rejected, with its
    * error, for one correction. `declined` means the tables cannot answer.
    */
-  draftSql?: (input: { question: string; intent?: AnalyticalIntentV1; vocabulary: VocabularyIndex; reason?: string; previous?: { sql: string; error: string } }) => Promise<{ sql: string; relations: string[]; proof: string[]; engine?: string } | { error: string; /** The tables could not be read at all (none in the catalog, or the connection could not describe them): a setup problem, never evidence about the data. */ unavailable?: boolean } | { declined: string } | { refused: string } | undefined>;
+  draftSql?: (input: { question: string; intent?: AnalyticalIntentV1; vocabulary: VocabularyIndex; reason?: string; previous?: { sql: string; error: string }; /** The earlier question a follow-up continues, when no reading carries it ("Which of those…"). */ followUp?: string }) => Promise<{ sql: string; relations: string[]; proof: string[]; engine?: string } | { error: string; /** The tables could not be read at all (none in the catalog, or the connection could not describe them): a setup problem, never evidence about the data. */ unavailable?: boolean } | { declined: string } | { refused: string } | undefined>;
   /** Dialect for relational composition. */
   dialect?: SqlDialectLike;
   /** Certified block source text by block ref. */

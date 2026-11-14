@@ -1120,7 +1120,8 @@ describe('the units contract of a result', () => {
     expect(text).toMatch(/2 customers share the name "Jordan Lee"; one row per customer, keyed by customer_id\./);
     expect(text).not.toMatch(/stored as/);
     const certified = composeAnsweredText(intent, { columns: ['revenue'], rows: [{ revenue: 1 }], rowCount: 1, executionTimeMs: 1 }, local, 'certified', { caveats: ['the block groups by customer_name (a label) with no identity key, so two entities sharing a name would merge; recertify it with the entity key to keep them apart'] });
-    expect(certified).toMatch(/Source: a certified saved query\. the block groups by customer_name .* recertify it with the entity key to keep them apart\.$/);
+    // Answer, then the reading with what the reader must know, then one source line (V13).
+    expect(certified).toMatch(/The block groups by customer_name .* recertify it with the entity key to keep them apart\.\n\nSource: a certified saved query\.$/);
   });
 
   it('never reads raw UUIDs out: an id beside its name is left to the table, and rows keyed only by UUIDs are said to be', () => {
@@ -1128,14 +1129,14 @@ describe('the units contract of a result', () => {
     const brooklyn = '40e6ddd6-b8f6-4e17-8bd6-5e53966809d2';
     const philly = '4b6c2304-2b9e-41e4-942a-cf11a1819378';
     const named = composeAnsweredText(intent, { columns: ['location_id', 'location_name', 'average_order_value'], rows: [{ location_id: brooklyn, location_name: 'Brooklyn', average_order_value: 10.01 }, { location_id: philly, location_name: 'Philadelphia', average_order_value: 11.29 }], rowCount: 2, executionTimeMs: 1 }, local, 'review_required');
-    expect(named).toContain('Leading rows: Brooklyn · 10.01 | Philadelphia · 11.29.');
+    expect(named).toContain('2 rows, starting with Brooklyn · 10.01; Philadelphia · 11.29.');
     expect(named).not.toContain(brooklyn);
     const keyed = composeAnsweredText(intent, { columns: ['location_id', 'average_order_value'], rows: [{ location_id: philly, average_order_value: 11.29 }, { location_id: brooklyn, average_order_value: 10.01 }], rowCount: 2, executionTimeMs: 1 }, local, 'review_required');
     expect(keyed).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/);
-    expect(keyed).toContain('Leading rows: 11.29 | 10.01. The rows are identified by location_id, internal key with no name beside it in this result.');
+    expect(keyed).toContain('2 rows, starting with 11.29; 10.01. The rows are identified by location_id, internal key with no name beside it in this result.');
     // A readable key with no name beside it is still read out (a store number is not a UUID).
     const readable = composeAnsweredText(intent, { columns: ['store_code', 'orders'], rows: [{ store_code: 'BK-1', orders: 3 }, { store_code: 'PH-2', orders: 4 }], rowCount: 2, executionTimeMs: 1 }, local, 'review_required');
-    expect(readable).toContain('Leading rows: BK-1 · 3 | PH-2 · 4.');
+    expect(readable).toContain('2 rows, starting with BK-1 · 3; PH-2 · 4.');
   });
 });
 
@@ -1413,7 +1414,7 @@ describe('a governed semantic route that fails at runtime falls back to review-r
     expect(outcome.candidate.tier).toBe('exploratory');
     expect(outcome.candidate.trust).toBe('review_required');
     expect(outcome.receipt.refusals.some((refusal) => refusal.tier === 'semantic')).toBe(true);
-    expect(outcome.text).toContain('review the SQL before relying on the numbers');
+    expect(outcome.text).toContain('review it before relying on the numbers');
   });
 });
 
@@ -2287,8 +2288,9 @@ describe('an authored semantic metric the engine did not answer', () => {
     expect(reasons[0]).toContain('rebuild it exactly from the definition in CONTEXT');
     expect(outcome.kind).toBe('answered');
     if (outcome.kind !== 'answered') return;
-    expect(outcome.text).toContain('the semantic engine did not run % DOD Core User ACM (no semantic layer is loaded for this project)');
-    expect(outcome.text).toContain('rebuilding that metric from its authored definition');
+    expect(outcome.text).toContain('rebuilding % DOD Core User ACM from its authored definition because the semantic engine did not run it');
+    // The engine's own words stay on the receipt for How it was answered.
+    expect(outcome.receipt.refusals.some((refusal) => refusal.tier === 'semantic' && /no semantic layer is loaded/.test(refusal.message))).toBe(true);
   });
 });
 
@@ -2702,7 +2704,7 @@ describe('the schema lane: no certified or governed evidence, the AI writes SQL 
     if (outcome.kind !== 'answered') return;
     expect(outcome.candidate.tier).toBe('exploratory');
     expect(outcome.candidate.trust).toBe('review_required');
-    expect(outcome.text).toContain('written by AI from the schema of dev.orders');
+    expect(outcome.text).toContain('Source: SQL written by AI from the orders table');
   });
 
   it('when the tables do not hold what was asked, the drafter declines and the answer is an honest gap with nothing executed', async () => {
@@ -2858,7 +2860,11 @@ describe('the schema lane: no certified or governed evidence, the AI writes SQL 
       executeDeps: { run: async () => rows },
     });
     expect(outcome.kind).toBe('answered');
-    expect(outcome.text).toContain("it filters on status = 'competitor'");
+    // What it filters on is SQL: kept with the answer's proof for How it was answered, never in the answer (V13).
+    expect(outcome.text).not.toContain('filters on');
+    expect(outcome.kind === 'answered' && outcome.candidate.proof).toContain("applied on the data: status = 'competitor'");
+    // The record the next question reads keeps it: a follow-up edits those filters.
+    expect(outcome.kind === 'answered' && outcome.record).toContain("it filters on status = 'competitor'");
   });
 
   it('with AI-drafted SQL turned off for the project, nothing is drafted', async () => {
@@ -2952,7 +2958,7 @@ describe('the guards read the user, and a grouping must stand for the breakdown'
       executeDeps: { run: async () => ({ columns: ['TAGS', 'amount'], rows: [{ TAGS: 'x', amount: 1 }], rowCount: 1, executionTimeMs: 1 }) },
     });
     expect(outcome.kind).toBe('answered');
-    expect(outcome.text).toContain('no certified block or semantic metric answers this');
+    expect(outcome.text).toContain('no certified saved query or metric answers this');
     expect(outcome.text).not.toMatch(/governed relational|governed tables/);
   });
 });
@@ -3375,7 +3381,7 @@ describe('the answer reads the reading the host corrected, and a winning margin 
     expect(outcome.kind).toBe('answered');
     expect(outcome.text).toContain('I read this as: Playoff games the Warriors won in 2016.');
     expect(outcome.text).not.toContain('cannot be applied');
-    expect(outcome.text).toContain('it counts only playoff games (GAME_ID starting with 4)');
+    expect(outcome.text).toContain('I read this as: Playoff games the Warriors won in 2016. It counts only playoff games (GAME_ID starting with 4).');
     expect(outcome.receipt.reading).toBe('Playoff games the Warriors won in 2016');
   });
 

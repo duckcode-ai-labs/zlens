@@ -212,11 +212,14 @@ const EXPECTED_TEST_FILES = 198;
 // 2884 with Describe with AI reading the tile queries Cortex writes in other shapes, keeping near-word roles and
 // views, planning one tile for each thing it shows, waiting at most its time and asking again only after a quick
 // first reply, and telling the planner the exact JSON (app-builder-orchestrator.test.ts +5), and a cut-off brief
-// read after a sentence with braces of its own (app-builder-planner-json.test.ts +1; V12).
-const EXPECTED_TESTS = 2884;
+// read after a sentence with braces of its own (app-builder-planner-json.test.ts +1; V12, #336).
+// 2895 with one Ask draft per question and draft names cut between words (metadata/drafts.test.ts +6), and a
+// slow-reading follow-up that keeps its context, says when it ran out of time, a plain clarification, and the
+// answer as one answer sentence, the reading and one source line (ask-pipeline/slow-reading.test.ts +5; V13, #337).
+const EXPECTED_TESTS = 2895;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2803.
+// The ordinary lane's share is the difference: 2814.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

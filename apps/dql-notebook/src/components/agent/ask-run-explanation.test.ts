@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REFUSAL_SENTENCES, containsInternalCode, explainAskRun, isAskPipelineReceipt, plainReason, plainRefs, rowCountWords, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
+import { REFUSAL_SENTENCES, checksPassedSentence, containsInternalCode, explainAskRun, isAskPipelineReceipt, passedCheckCount, plainReason, plainRefs, readerDetail, rowCountWords, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
 
 const base = (overrides: Record<string, unknown>) => ({ version: 1, dispatches: [], tiers: [], candidates: [], refusals: [], story: [], timings: {}, ...overrides });
 
@@ -140,6 +140,16 @@ describe('how an Ask run was answered, as steps in plain words', () => {
     expect(warehouse.headline).toMatch(/^Stopped while running on the warehouse/);
   });
 
+  it('a reading that ran out of time is not "Done": it says the SQL was written from the question\'s words (V12 retest)', () => {
+    const slow = { ...aiAnswer, checks: [], story: [
+      { phase: 'read', title: 'Ran out of time to check the reading', state: 'missed', detail: 'no time was left to correct the reading', at: 1 },
+      { phase: 'schema', title: 'Drafted SQL over sales.opportunities', state: 'done', at: 2 },
+    ] };
+    const explanation = explainAskRun({ receipt: slow, payload: { sql: 'SELECT 1' }, status: 'completed' }) as RunExplanation;
+    expect(explanation.steps[0]).toMatchObject({ kind: 'read', outcome: 'failed', reason: 'The AI model took too long to read the question, so the SQL was written from the question\'s words.' });
+    expect(explanation.ending).toBe('answered');
+  });
+
   it('a conversation is one step; a run the pipeline did not write is not explained here', () => {
     const chat = explainAskRun({ receipt: base({ intent: { kind: 'conversation', reading: 'A greeting.' } }), status: 'completed' })!;
     expect(chat.steps).toHaveLength(1);
@@ -269,5 +279,30 @@ describe('config keys never reach a business reader (V11 tester)', () => {
     const read = explanation.steps.find((step) => step.kind === 'read')!;
     expect(read.story).toEqual([expect.objectContaining({ title: 'Did not look for "Boston" in stored values', detail: 'Searching stored values is not turned on for these tables, so the AI chose the field from its name and description.' })]);
     expect(JSON.stringify(explanation)).not.toMatch(/runtimeValueGrounding|searchSafeColumns|allowlisted/);
+  });
+
+  // V12 claims check and payroll page: "All 2 checks passed", "probe 164 ms · pack 1223 ms", and the certified tier
+  // saying the payroll question "is modeled: warriors ppg …".
+  it('says check counts in plain English and keeps internal words off the steps page', () => {
+    expect([1, 2, 3].map(checksPassedSentence)).toEqual(['The check passed.', 'Both checks passed.', 'All 3 checks passed.']);
+    expect(readerDetail('probe 164 ms · pack 1223 ms')).toBeUndefined();
+    expect(readerDetail('base 20 ms')).toBeUndefined();
+    expect(readerDetail('no certified block or semantic metric answers this ("player payroll in 2016" is modeled: warriors ppg regular vs playoffs 2016, player. Use warriors ppg instead of reporting a gap.)'))
+      .toBe('No certified saved query or semantic metric answers this, so the AI wrote the SQL from the tables.');
+    expect(readerDetail('Matched the certified block for this ranking.')).toBe('Matched the certified saved query for this ranking.');
+    const payroll = explainAskRun({
+      receipt: base({
+        tiers: [{ round: 0, tier: 'certified', outcome: 'refused' }],
+        refusals: [{ tier: 'certified', code: 'block_not_applicable', message: 'no certified block ("player payroll in 2016" is modeled: warriors ppg regular vs playoffs 2016, player)' }],
+        story: [{ version: 1, phase: 'context', title: 'Searched the project: 10 tables', detail: 'probe 164 ms · pack 1223 ms', state: 'done', at: 1 }],
+      }),
+      payload: { gap: { kind: 'not_modeled', message: 'No column holds player salary or payroll data' } },
+      status: 'blocked',
+    })!;
+    expect(payroll.steps.find((step) => step.kind === 'certified')?.reason).toBe('No certified saved query matches this question.');
+    expect(JSON.stringify(payroll)).not.toMatch(/is modeled|probe 164 ms/);
+    const answered = explainAskRun({ receipt: base({ checks: [{ label: 'A', passed: true }, { label: 'B', passed: true }], executed: { tier: 'exploratory', rowCount: 1 } }), payload: {}, status: 'completed' });
+    expect(passedCheckCount(answered)).toBe(2);
+    expect(answered?.steps.find((step) => step.kind === 'checks')?.reason).toBe('Both checks passed.');
   });
 });

@@ -2,7 +2,7 @@ import type { EChartsOption } from 'echarts';
 import type { DashboardVizStyle } from '@zlens/core/apps/viz-style';
 import type { CellChartConfig, QueryResult } from '../../../store/types';
 import type { ThemeMode } from '../../../themes/notebook-theme';
-import { formatChartValue } from '../../../utils/value-format';
+import { formatChartValue, isYearLikeColumn } from '../../../utils/value-format';
 import {
   abbreviate,
   categoryColumns,
@@ -163,7 +163,8 @@ function cartesianOption(
   // A time axis runs left to right. The shared DATE_NAME_RE also matches
   // words like "category", so the orientation uses whole name parts or the
   // values themselves.
-  const timeLabels = TIME_NAME_RE.test(labelCol) || categories.every((value) => /^\d{4}-\d{2}(-\d{2})?(T|$)/.test(value));
+  // A season or fiscal year is a period too: seasons read 2014, 2015, 2016, never in query order (V12).
+  const timeLabels = TIME_NAME_RE.test(labelCol) || isYearLikeColumn(labelCol) || categories.every((value) => /^\d{4}-\d{2}(-\d{2})?(T|$)/.test(value));
   const timeAxis = isLine || timeLabels;
   // Queries need not return periods in order; a time axis is drawn oldest
   // to newest unless the author chose a sort.

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRun } from '@zlens/agent';
-import { captureReviewRequiredDraft, reviewRequiredAnswerOf } from './review-draft-capture.js';
+import { captureReviewRequiredDraft, reviewRequiredAnswerOf, standaloneQuestionOf } from './review-draft-capture.js';
 
 const roots: string[] = [];
 afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
@@ -80,5 +80,27 @@ describe('every Tier-2 (review-required) Ask answer leaves a durable draft', () 
     expect(reviewRequiredAnswerOf(run({ status: 'needs_clarification' }))).toBeNull();
     expect(reviewRequiredAnswerOf(run({}, { result: undefined }))).toBeNull();
     expect(reviewRequiredAnswerOf(run({ figuresWithheld: true }))).toBeNull();
+  });
+
+  it('names a follow-up draft from what it answered, not from its own few words', () => {
+    const root = project();
+    const reading = 'Find the player with the most double-double games in the 2009 season.';
+    const followUp = run({ question: 'What about 2009?' }, { askIntentV1: { reading, provenance: {}, filters: [] } });
+    expect(standaloneQuestionOf(followUp, { askIntentV1: { reading } })).toBe(reading);
+    const draft = captureReviewRequiredDraft(root, followUp);
+    expect(draft!.path).toBe('blocks/_drafts/find_player_most_double_double_games_2009_season.dql');
+    expect(draft!.path).not.toContain('about_2009');
+    // A question that stands on its own keeps its own words, whatever the reading says.
+    expect(standaloneQuestionOf(run(), { askIntentV1: { reading: 'Rank teams by wins in 2017.' } })).toBe('Which team had the most wins in season 2017?');
+    // A clause carried from the earlier answer makes it a follow-up too.
+    expect(standaloneQuestionOf(run({ question: 'Which had a winning record?' }), { askIntentV1: { reading: 'Of the top 5 teams in 2019, which had a winning record?', filters: [{ source: 'inherited' }] } }))
+      .toBe('Of the top 5 teams in 2019, which had a winning record?');
+  });
+
+  it('asking the same question again, in other case and punctuation, reuses its one draft', () => {
+    const root = project();
+    const first = captureReviewRequiredDraft(root, run());
+    const again = captureReviewRequiredDraft(root, run({ id: 'run-3', question: 'which team had the most wins in season 2017' }, { sql: 'SELECT 79', dqlArtifact: undefined }));
+    expect(again).toMatchObject({ path: first!.path, created: false, askedTimes: 2 });
   });
 });

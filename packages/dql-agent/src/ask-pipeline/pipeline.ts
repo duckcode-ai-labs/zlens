@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
+import { withoutTrailing } from '../text-ends.js';
 import type { AgentProvider, ProviderRunOptions } from '../providers/types.js';
-import { executeCandidate, fillPeriodGaps, literalIsFieldName, statementFailure, type ExecuteDeps, type ExecutedRows } from './execute.js';
+import { executeCandidate, fillPeriodGaps, literalIsFieldName, relationName, statementFailure, type ExecuteDeps, type ExecutedRows } from './execute.js';
 import { describeIntent, intentExecutionFingerprint, intentRefs, type AnalyticalIntentV1, type IntentPredicate } from './intent.js';
-import { composeAnsweredText, composeFailedText, composeGapText, describeResultColumns, labelFor, type AskStoryStepV1, type ContextLedgerV1, type GapKind, type PipelineOutcome, type PipelineReceipt } from './outcomes.js';
+import { composeAnsweredText, composeAnswerRecord, composeFailedText, composeGapText, describeResultColumns, labelFor, type AskStoryStepV1, type ContextLedgerV1, type GapKind, type PipelineOutcome, type PipelineReceipt } from './outcomes.js';
 import { entails, prepare, type PrepareDeps, type PreparedCandidate, type PreparedRefusal, type PrepareResult } from './prepare/index.js';
 import { blocksNamedByQuestion } from './named-blocks.js';
 import { applySkillPolicies } from './policies.js';
@@ -800,14 +801,24 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   // schema. A question the tables do not hold is declined by the drafter and
   // stays an honest gap. A policy or domain-contract denial never reaches it,
   // and it runs only when AI-drafted SQL is enabled for the project.
-  const schemaLane = async (why: string, hint?: AnalyticalIntentV1, options: { onDecline?: 'gap' | 'fallthrough'; caveats?: string[]; draftQuestion?: string } = {}): Promise<PipelineOutcome | undefined> => {
+  const schemaLane = async (why: string, hint?: AnalyticalIntentV1, options: {
+    onDecline?: 'gap' | 'fallthrough'; caveats?: string[]; draftQuestion?: string;
+    /** The earlier question this one follows up on, for a draft that has no reading to carry it. */
+    followUp?: string;
+    /** Said instead of "I read this as …" when no reading could be made. */
+    readingNote?: string;
+    /** The reading ran out of time: a decline is not evidence about the data, and the answer says the run ran out of time. */
+    cutShort?: boolean;
+  } = {}): Promise<PipelineOutcome | undefined> => {
     if (input.stopAfter === 'reading') return undefined;
     if (!input.prepareDeps.draftSql || !(input.explorationOptIn || input.explorationAuto)) return undefined;
     // Only a security policy stops AI-written SQL; nothing about how tables join does.
     if (receipt.refusals.some((refusal) => refusal.code === 'policy_filter_unbindable' || refusal.code === 'policy_conflict')) return undefined;
     const reading: AnalyticalIntentV1 = hint && hint.kind === 'analytics'
       ? hint
-      : { version: 1, kind: 'analytics', reading: input.question, measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' } as AnalyticalIntentV1;
+      // No reading: the question's own words, and for a follow-up the question it follows, so what is saved from
+      // this answer and the next follow-up still say what "those" were.
+      : { version: 1, kind: 'analytics', reading: options.followUp ? `${withoutTrailing(input.question.trim(), '.')} (following up on: ${options.followUp})` : input.question, measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' } as AnalyticalIntentV1;
     const asRead = reading;
     let previous: { sql: string; error: string } | undefined;
     let lastFailure: Extract<Awaited<ReturnType<typeof executeCandidate>>, { ok: false }> | undefined;
@@ -830,31 +841,50 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
         .map((meta) => (inPoints && meta.kind === 'percent' && meta.unit === 'fraction' ? { ...meta, unit: 'percentage_points' as const } : meta));
       const result: ExecutedRows = { ...executed.result, columnsMeta };
       receipt.context = { ...receipt.context!, used: { joins: [], relations: [...new Set(candidate.relations ?? [])], tier: candidate.tier, ...(candidate.engine ? { engine: candidate.engine } : {}) } };
-      const tables = (candidate.relations ?? []).join(', ');
-      const applied = candidate.proof.find((line) => line.startsWith('applied on the data: '));
       // Say why the governed tiers did not answer, from their own refusals: a
       // governed metric that exists but cannot take this reading's filter is
-      // not the same as no metric at all, and the next question reads this.
+      // not the same as no metric at all. Their own words stay in the receipt.
       const placeholder = new Set(['no_certified_block', 'exploration_not_opted_in', 'semantic_runtime_unavailable']);
       const governedRefusal = ['relational', 'semantic', 'certified']
         .map((tier) => receipt.refusals.find((refusal) => refusal.tier === tier && !placeholder.has(refusal.code)))
         .find(Boolean);
+      // An authored semantic metric rebuilt in SQL says which engine did not run it.
+      const rebuilt = [...new Set(reading.measures.flatMap((measure) => measure.change ? [] : measure.derived ? [measure.derived.numerator, measure.derived.denominator] : [measure.ref])
+        .map((ref) => input.vocabulary.get(ref)).filter((entry) => Boolean(entry?.engineOnly)).map((entry) => entry!.label ?? entry!.name))];
+      // ONE SOURCE LINE, in a reader's words: which tables the AI read and why it wrote the SQL. The filters it
+      // applied are SQL, shown on the SQL tab and in How it was answered, never in the answer (new-user test V12:
+      // "it filters on PLAYER_NAME ILIKE 'LeBron James' AND … LIKE '4%'" in the answer text).
+      const names = [...new Set((candidate.relations ?? []).map(relationName))];
+      const tableWords = names.length ? `the ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`} table${names.length === 1 ? '' : 's'}` : 'the tables';
+      const because = rebuilt.length
+        ? `rebuilding ${rebuilt.join(', ')} from ${rebuilt.length === 1 ? 'its' : 'their'} authored definition because the semantic engine did not run ${rebuilt.length === 1 ? 'it' : 'them'}`
+        : governedRefusal
+          ? `because ${governedRefusal.tier === 'certified' ? 'no certified saved query answers it as asked' : `${governedRefusal.tier === 'semantic' ? 'the semantic layer' : 'the modeled tables'} could not answer it as asked`}`
+          : 'because no certified saved query or metric answers this';
+      const source = `SQL written by AI from ${tableWords}, ${because}; review it before relying on the numbers`;
+      // What the drafting host could not fix and the reader must know (a
+      // grouping by keys whose names it could not join) is said in the answer;
+      // which kinds of row it counts is said with the reading.
+      const drafted = candidate.proof.filter((line) => line.startsWith('caveat: ')).map((line) => line.slice('caveat: '.length));
+      const scope = drafted.filter((line) => /^it counts\b/i.test(line));
+      // THE RECORD THE NEXT QUESTION READS keeps the technical detail: the governed tier's own words, the tables
+      // in full and what the statement filtered on (a follow-up edits those filters).
       const why = governedRefusal
         ? `the governed ${governedRefusal.tier} tier could not answer it as read (${governedRefusal.message.replace(/[.\s]+$/, '').slice(0, 180)})`
         : 'no certified block or semantic metric answers this';
-      // An authored semantic metric rebuilt in SQL says which engine did not
-      // run it and why, in the semantic tier's own words.
-      const rebuilt = [...new Set(reading.measures.flatMap((measure) => measure.change ? [] : measure.derived ? [measure.derived.numerator, measure.derived.denominator] : [measure.ref])
-        .map((ref) => input.vocabulary.get(ref)).filter((entry) => Boolean(entry?.engineOnly)).map((entry) => entry!.label ?? entry!.name))];
+      const tables = (candidate.relations ?? []).join(', ');
+      const applied = candidate.proof.find((line) => line.startsWith('applied on the data: '));
       const engineRefusal = rebuilt.length ? receipt.refusals.find((refusal) => refusal.tier === 'semantic') : undefined;
-      const source = `the SQL was written by AI from the ${tables ? `schema of ${tables}` : 'available table schemas'}${applied ? `; it ${applied.replace(/^applied on the data: /, 'filters on ')}` : ''}`;
-      const caveat = rebuilt.length
-        ? `the semantic engine did not run ${rebuilt.join(', ')}${engineRefusal ? ` (${engineRefusal.message.replace(/[.\s]+$/, '').slice(0, 180)})` : ''}, so ${source}, rebuilding ${rebuilt.length === 1 ? 'that metric' : 'those metrics'} from ${rebuilt.length === 1 ? 'its' : 'their'} authored definition; review the SQL before relying on the numbers`
-        : `${why}, so ${source}; review the SQL before relying on the numbers`;
-      // What the drafting host could not fix and the reader must know (a
-      // grouping by keys whose names it could not join) is said in the answer.
-      const drafted = candidate.proof.filter((line) => line.startsWith('caveat: ')).map((line) => line.slice('caveat: '.length));
-      return { kind: 'answered', intent: reading, candidate, result, text: composeAnsweredText(reading, result, input.vocabulary, candidate.trust, { caveats: [...(options.caveats ?? []), caveat, ...drafted] }), receipt };
+      const recordSource = `the SQL was written by AI from the ${tables ? `schema of ${tables}` : 'available table schemas'}${applied ? `; it ${applied.replace(/^applied on the data: /, 'filters on ')}` : ''}`;
+      const recordCaveat = rebuilt.length
+        ? `the semantic engine did not run ${rebuilt.join(', ')}${engineRefusal ? ` (${engineRefusal.message.replace(/[.\s]+$/, '').slice(0, 180)})` : ''}, so ${recordSource}, rebuilding ${rebuilt.length === 1 ? 'that metric' : 'those metrics'} from ${rebuilt.length === 1 ? 'its' : 'their'} authored definition; review the SQL before relying on the numbers`
+        : `${why}, so ${recordSource}; review the SQL before relying on the numbers`;
+      return {
+        kind: 'answered', intent: reading, candidate, result,
+        text: composeAnsweredText(reading, result, input.vocabulary, candidate.trust, { caveats: [...(options.caveats ?? []), ...drafted.filter((line) => !scope.includes(line))], scope, source, ...(options.readingNote ? { readingNote: options.readingNote } : {}) }),
+        record: composeAnswerRecord(reading, result, input.vocabulary, candidate.trust, { caveats: [...(options.caveats ?? []), recordCaveat, ...drafted] }),
+        receipt,
+      };
     };
     // The first statement ran and returned nothing: kept, so a redraft that
     // fails or declines still ends in the honest empty answer.
@@ -882,7 +912,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       if (input.signal?.aborted) break;
       if (remaining() < 12_000 || (input.dispatchWindowMs && input.dispatchWindowMs() <= 0)) { outOfTime = true; break; }
       const draftStarted = now();
-      const drafted = await prepareExploratory(hint && hint.kind === 'analytics' ? hint : undefined, input.vocabulary, input.prepareDeps, options.draftQuestion ?? input.question, { reason: why, ...(previous ? { previous } : {}) });
+      const drafted = await prepareExploratory(hint && hint.kind === 'analytics' ? hint : undefined, input.vocabulary, input.prepareDeps, options.draftQuestion ?? input.question, { reason: why, ...(previous ? { previous } : {}), ...(options.followUp ? { followUp: options.followUp } : {}) });
       mark(attempt === 1 ? 'schema_draft' : 'schema_redraft', draftStarted);
       const draftMs = timings[attempt === 1 ? 'schema_draft' : 'schema_redraft'];
       receipt.refusals.push(...drafted.refusals);
@@ -917,6 +947,17 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
         return { kind: 'gap', gap: 'not_modeled', message, nearest: [], text: `No query was run because the AI-drafted SQL failed a check: ${message}.${advice}`, receipt, intent: reading, offerExploration: false };
       }
       const declined = drafted.refusals.find((refusal) => refusal.code === 'exploration_declined');
+      // A READING CUT SHORT BY TIME IS NOT A DATA GAP. Without a reading the AI had only the words, and a decline
+      // from the words alone ("those" does not say which teams) says nothing about the data (new-user test V12,
+      // long-chat N4: "the tables Ask searched do not hold it" after an 85 s reading). Said as running out of time.
+      if (declined && options.cutShort && options.onDecline !== 'fallthrough') {
+        const readSeconds = Math.round((timings.resolve ?? 0) / 1_000);
+        const message = `Ask ran out of time before the AI could read the question${readSeconds >= 20 ? ` (reading it took the AI model ${readSeconds} s)` : ''}, and the words alone did not say enough to write the SQL`;
+        receipt.intent = reading; receipt.reading = reading.reading;
+        receipt.failure = { stage: 'prepare', reason: 'provider_timeout', message };
+        step('schema', 'Ran out of time: the words alone did not say enough to write the SQL', 'failed', { detail: declined.message, ms: draftMs });
+        return { kind: 'failed', stage: 'prepare', message, text: `No query was run: ${message}. Nothing is wrong with the question: ask it again${options.followUp ? ', or say in full what it refers to' : ''}.`, receipt, intent: reading };
+      }
       if (declined) {
         step('schema', 'The tables searched do not hold what was asked', 'missed', { detail: declined.message, ms: draftMs });
         if (options.onDecline === 'fallthrough') return undefined;
@@ -1161,7 +1202,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       step('read', 'Settled the reading', 'done', { detail: `${resolution.intent.reading}${unrenderedNote ? ` · searched again: ${unrenderedNote}` : ''} · ${callsNote} in ${Math.round((timings.resolve ?? 0) / 100) / 10} s` });
       if (resolution.status === 'clarify' && resolution.unmatched?.length) step('read', 'Named fields this project does not hold', 'missed', { detail: resolution.unmatched.map((problem) => problem.message).join('; ') });
     } else if (resolution.status === 'failed') {
-      step('read', resolution.reason === 'provider_error' ? 'The AI model did not answer' : 'Could not read the question into governed fields', resolution.reason === 'provider_error' ? 'failed' : 'missed', { detail: `${resolution.detail} · ${callsNote}` });
+      step('read', resolution.reason === 'provider_error' ? 'The AI model did not answer' : resolution.code === 'reading_out_of_time' ? 'Ran out of time to check the reading' : 'Could not read the question into governed fields', resolution.reason === 'provider_error' ? 'failed' : 'missed', { detail: `${resolution.detail} · ${callsNote}` });
     } else {
       step('read', 'Settled the reading', 'done', { detail: callsNote });
     }
@@ -1176,7 +1217,18 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   // question about these tables. The model itself failing (timeout, quota,
   // authentication) is not: it could not draft either.
   if (!settled && resolution.status === 'failed' && (resolution.reason === 'invalid' || resolution.reason === 'unparseable')) {
-    const drafted = await schemaLane(`the question could not be read into the governed vocabulary (${resolution.detail.slice(0, 300)})`);
+    // NO READING IS SAID AS NONE. The answer says the SQL was written from the words, and why, instead of echoing
+    // the question as its reading (new-user test V12: "I read this as: What was the Boston Celtics' playoff record
+    // in 2008?."). A FOLLOW-UP KEEPS ITS CONTEXT: the draft is told which question it follows, so "those" still
+    // means that answer's rows (V12 long-chat N4 lost it after an 85 s reading).
+    const cutShort = resolution.code === 'reading_out_of_time';
+    const readSeconds = Math.round((timings.resolve ?? 0) / 1_000);
+    const followUp = input.prior?.reading ? withoutTrailing(input.prior.reading.trim(), '.') || undefined : undefined;
+    const words = `the SQL was written from your words${followUp ? ' and the question before it' : ''}`;
+    const readingNote = cutShort
+      ? `The AI model took too long to read the question${readSeconds >= 20 ? ` (${readSeconds} s)` : ''}, so ${words}`
+      : `The AI could not read the question into the project's fields, so ${words}`;
+    const drafted = await schemaLane(`the question could not be read into the governed vocabulary (${resolution.detail.slice(0, 300)})`, undefined, { readingNote, ...(followUp ? { followUp } : {}), ...(cutShort ? { cutShort: true } : {}) });
     if (drafted) return drafted;
   }
   if (resolution.status === 'failed') {
@@ -1895,6 +1947,11 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   // Which kinds of row it counts (only the regular season, or every game type) is said for a certified answer
   // too (new-user test V9 retest: a certified regular-season answer to a question that named no game type).
   const kindsNote = input.kindsNote?.({ sql: candidate.sql, relations: [...new Set([...(candidate.relations ?? []), ...(candidate.joins ?? []).map((step) => step.relation)])] });
-  if (kindsNote) caveats.push(kindsNote);
-  return { kind: 'answered', intent, candidate, result, text: composeAnsweredText(intent, result, input.vocabulary, candidate.trust, { notes: [...(receipt.grounding ?? []), ...textMatches], caveats, tier: candidate.tier }), receipt };
+  const notes = [...(receipt.grounding ?? []), ...textMatches];
+  return {
+    kind: 'answered', intent, candidate, result,
+    text: composeAnsweredText(intent, result, input.vocabulary, candidate.trust, { notes, caveats, tier: candidate.tier, ...(kindsNote ? { scope: [kindsNote] } : {}) }),
+    record: composeAnswerRecord(intent, result, input.vocabulary, candidate.trust, { notes, caveats: [...caveats, ...(kindsNote ? [kindsNote] : [])], tier: candidate.tier }),
+    receipt,
+  };
 }

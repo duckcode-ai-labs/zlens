@@ -1242,8 +1242,14 @@ export {
   upsertReviewRequiredAnswerDraft,
   reviewAnswerFingerprint,
   findReviewDraftByFingerprint,
+  findReviewDraftByQuestion,
+  deriveReviewDraftSlug,
+  normalizeDraftQuestion,
+  automaticAskDraftState,
+  listAutomaticAskDrafts,
+  clearAutomaticAskDrafts,
 } from "./metadata/drafts.js";
-export type { GeneratedDqlArtifactDraftRecord, SemanticDraftNameInput, ReviewRequiredAnswerDraftRecord, ReviewRequiredAnswerDraft } from "./metadata/drafts.js";
+export type { GeneratedDqlArtifactDraftRecord, SemanticDraftNameInput, ReviewRequiredAnswerDraftRecord, ReviewRequiredAnswerDraft, AutomaticAskDraft } from "./metadata/drafts.js";
 export {
   persistOwner,
   readPersistedOwner,

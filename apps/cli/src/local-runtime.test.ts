@@ -3244,6 +3244,17 @@ describe('agent run runtime API', () => {
     ]));
   });
 
+  it('the next question reads the answer\'s technical record, while the person reads the plain answer (V13)', () => {
+    const turn = conversationTurnInputFromRun({
+      id: 'run-record', question: 'Which 5 teams scored the most points per game?', status: 'completed', route: 'generated_answer', trustState: 'review_required',
+      answer: '5 rows, starting with Bucks · 118.67.\n\nI read this as: Top 5 teams by points per game.\n\nSource: SQL written by AI from the team_game table.',
+      artifacts: [{ kind: 'answer', payload: { answerRecord: 'I read this as: Top 5 teams by points per game. 5 rows across 3 columns. Leading rows: 1610612749 · Bucks · 118.67.', result: { columns: ['TEAM_ID', 'TEAM', 'PPG'], rows: [{ TEAM_ID: 1610612749, TEAM: 'Bucks', PPG: 118.67 }] } } }],
+      evaluations: [], nextActions: [],
+    } as any);
+    expect(turn.answerSummary).toContain('Leading rows: 1610612749 · Bucks · 118.67');
+    expect(turn.answerText).toContain('5 rows, starting with Bucks · 118.67.');
+  });
+
   it('AGT-009 persists only actual certified output columns, never a requested-but-absent revenue label', () => {
     const turn = conversationTurnInputFromRun({
       id: 'run-top-customers-output-contract',

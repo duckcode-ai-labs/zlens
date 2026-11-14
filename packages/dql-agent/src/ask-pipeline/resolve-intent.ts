@@ -1,4 +1,5 @@
 import type { RenderedCards } from './vocabulary.js';
+import { withoutLeading, withoutTrailing } from '../text-ends.js';
 import type { AgentMessage, AgentProvider, ProviderRunOptions } from '../providers/types.js';
 import { generateStructured } from '../providers/structured-output.js';
 import {
@@ -1917,10 +1918,24 @@ export function auditLedger(question: string, intent: AnalyticalIntentV1, ledger
  * (new-user test V11 retest, Q16: 'Which did you mean for "best player — which stat should define …?"?').
  */
 export function clauseQuestion(clause: string): string {
-  const asked = clause.trim();
-  if (!/\?\s*$/.test(asked)) return `Which did you mean for "${asked}"?`;
-  const tail = asked.split(/\s[—–-]\s/).pop()!.trim();
-  return `${tail.charAt(0).toUpperCase()}${tail.slice(1)}`;
+  const asked = clause.trim().replace(/\s+/g, ' ');
+  if (/\?\s*$/.test(asked)) {
+    const tail = asked.split(/\s[—–-]\s/).pop()!.trim();
+    return `${tail.charAt(0).toUpperCase()}${tail.slice(1)}`;
+  }
+  // A clause that holds a question and then says what is unclear ("How are the Warriors doing lately? — neither
+  // the measure of 'doing' … nor 'lately' …") is never quoted inside another question (new-user test V12, Q17:
+  // 'Which did you mean for "How are the Warriors doing lately? — neither …"?'). What is unclear is said, then asked.
+  const mark = asked.lastIndexOf('?');
+  if (mark >= 0) {
+    const unclear = withoutTrailing(withoutLeading(asked.slice(mark + 1), '—–:;,.-'), '.');
+    if (unclear) return `Not clear yet: ${unclear}. Which did you mean?`;
+  }
+  const plain = withoutTrailing(asked, '?.').replace(/\?/g, '');
+  // A clause written as a question without its mark ("what defines 'best player' (…)") is asked as that question,
+  // not quoted inside another one (V13 gate, Q16).
+  if (/^(who|what|which|when|where|why|how)\b/i.test(plain)) return `${plain.charAt(0).toUpperCase()}${plain.slice(1)}?`;
+  return `What do you mean by "${plain}"?`;
 }
 
 /** A retry after a provider timeout needs room for one more full dispatch (the subscription CLI's 60 s) plus 15 s for the rest of the turn. */

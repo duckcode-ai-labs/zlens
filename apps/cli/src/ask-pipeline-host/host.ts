@@ -1592,10 +1592,12 @@ export function answeredArtifactTitle(
   trustState: 'certified' | 'governed' | 'review_required',
   source: 'certified_block' | 'block_as_evidence' | 'governed_definitions' | 'ai_sql',
 ): string {
+  // ONE TRUST VOCABULARY (new-user test V12): Certified, From Metrics, AI-generated; the source, when it adds
+  // something, after a dot.
   if (trustState === 'certified') return 'Certified answer';
-  if (source === 'ai_sql') return 'AI-drafted answer';
-  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Answer from a certified saved query, not certified for this question' : 'Answer to review, from a certified saved query';
-  return trustState === 'governed' ? 'Semantic answer' : 'Answer to review, from governed definitions';
+  if (source === 'ai_sql') return 'AI-generated answer';
+  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Answer from Metrics · via a certified saved query' : 'AI-generated answer · via a certified saved query';
+  return trustState === 'governed' ? 'Answer from Metrics' : 'AI-generated answer · from Metrics definitions';
 }
 
 export function coverageEvaluations(receipt: Pick<PipelineReceipt, 'uncovered' | 'coverage'>): Array<{ id: string; label: string; passed: boolean; severity: 'warning' | 'info'; message: string }> {
@@ -2477,7 +2479,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     // THE LAST TIER'S DRAFT: one read-only statement from the reading and the
     // admitted relations and columns, validated against the catalog before
     // the tier may even consider it. Review-required by construction.
-    const makeDraftSql = (state: AskRunState): NonNullable<PrepareDeps['draftSql']> => async ({ question, intent, vocabulary: initial, reason, previous }) => {
+    const makeDraftSql = (state: AskRunState): NonNullable<PrepareDeps['draftSql']> => async ({ question, intent, vocabulary: initial, reason, previous, followUp }) => {
       const hostStep = stepFor(state);
       let current = initial;
       const refs = intent ? [...intent.measures.flatMap((measure) => measure.derived ? [measure.derived.numerator, measure.derived.denominator] : [measure.ref]), ...intent.groupBy.map((group) => group.ref), ...intent.display, ...intent.filters.map((filter) => filter.ref), ...(intent.time?.ref ? [intent.time.ref] : [])] : [];
@@ -3145,6 +3147,9 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const skillLines = skillsForDraft(current.entries, `${question} ${intent?.reading ?? ''} ${draftTables.join(' ')}`)
         .map((entry) => `- project skill ${entry.label ?? entry.name}: ${(entry.skill?.guidance ?? entry.description ?? '').replace(/\s+/g, ' ').slice(0, 1500)}`);
       const contextLines = [
+        // A FOLLOW-UP WITH NO READING (the reading ran out of time) is told which question it follows, first: in a
+        // long chat the conversation summary can be about earlier turns (new-user test V12, long-chat N4 lost "those").
+        ...(followUp ? [`- this question follows up on the question just before it, "${shownToModel(followUp).slice(0, 300)}": a word like "those", "them", "that" or "it" means the rows of that question's answer, and its restrictions still hold unless this question changes them`] : []),
         ...(contextText ? [`- conversation so far: ${contextText.slice(0, 600)}`] : []),
         ...(prior?.intent.reading ? [`- previous reading: ${shownToModel(prior.intent.reading).slice(0, 300)}${prior.summary ? `; its answer: ${prior.summary.slice(0, 300)}` : ''}`] : []),
         ...(prior?.drafted && prior.sql ? [`- previous AI-drafted SQL in this conversation (this question follows up on it: edit it, and keep every restriction it applies unless the question changes it): ${shownToModel(prior.sql.replace(/\s+/g, ' ')).slice(0, 1500)}`] : []),
@@ -4576,6 +4581,9 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
     reviewStatus: effectiveTrust.reviewStatus,
     text: outcome.text,
     answer: outcome.text,
+    // What the conversation keeps for the next question: the technical record (keys, tables, filters), not the
+    // reader's words (conversationTurnInputFromRun).
+    ...(outcome.record && outcome.record !== outcome.text ? { answerRecord: outcome.record } : {}),
     sql: candidate.sql,
     ...(candidate.params?.length ? { sqlParams: candidate.params } : {}),
     result: {

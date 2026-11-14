@@ -69,6 +69,13 @@ describe('buildVizOption (RFC 0008 step 4)', () => {
     expect(chronological(['2024', '2022', '2023'])).toEqual(['2022', '2023', '2024']);
   });
 
+  // V12: an App's "WINS by season" bars listed 2015, 2014, 2016, 2017, 2018 (query order).
+  it('draws seasons in year order whatever order the query returns them', () => {
+    const seasons = { columns: ['SEASON', 'WINS'], rows: [2015, 2014, 2016, 2018, 2017].map((season) => ({ SEASON: season, WINS: season - 1950 })), rowCount: 5 } as any;
+    const built = buildVizOption({ chartType: 'bar', result: seasons, themeMode: 'paper', config: { chart: 'bar', x: 'SEASON', y: 'WINS' } })!;
+    expect(built.categories).toEqual(['2014', '2015', '2016', '2017', '2018']);
+  });
+
   it('labels only the last mark when asked, and sorts by value', () => {
     const built = buildVizOption({ chartType: 'bar', result: regions, themeMode: 'paper', config: { chart: 'bar', style: { labels: 'last', sort: 'asc' } } })!;
     expect(built.categories).toEqual(['APAC', 'EU', 'US']);
@@ -89,7 +96,8 @@ describe('buildVizOption (RFC 0008 step 4)', () => {
     // A stack writes a lower segment's value inside it.
     const stacked: QueryResult = { columns: ['season', 'regular', 'playoffs'], rows: [{ season: '2015', regular: 73, playoffs: 15 }], rowCount: 1, executionTime: 1 };
     const [lower, upper] = series(buildVizOption({ chartType: 'stacked-bar', result: stacked, themeMode: 'paper', config: { chart: 'stacked-bar', valueLabels: 'auto' } })!.option);
-    expect([lower.label.position, upper.label.position]).toEqual(['inside', 'right']);
+    // Seasons are periods, so the bars stand on a time axis running left to right and the top segment's value sits above it (#337).
+    expect([lower.label.position, upper.label.position]).toEqual(['inside', 'top']);
     expect(lower.data[0]).toMatchObject({ value: 73, label: { show: true } });
   });
 

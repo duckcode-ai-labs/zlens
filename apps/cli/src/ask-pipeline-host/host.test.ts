@@ -157,7 +157,7 @@ describe('a ref outside the envelope is explained as out of scope, never as none
     const run = toExecutorResult('run:draft-join', outcome, Date.now());
     const card = run.artifacts![0]!;
     expect(run).toMatchObject({ trustState: 'review_required', resolvedRoute: 'semantic_answer' });
-    expect(card).toMatchObject({ title: 'Answer to review, from governed definitions', trustState: 'review_required' });
+    expect(card).toMatchObject({ title: 'AI-generated answer · from Metrics definitions', trustState: 'review_required' });
     // No AI wrote this SQL: never routed or titled as AI-drafted.
     expect(card.payload).toMatchObject({ route: { tier: 'semantic_metric' }, sourceTier: 'semantic_layer', certification: 'review_required' });
     expect(run.evaluations?.find((evaluation) => evaluation.id === 'pipeline-governed-joins')?.message).toContain('order_to_location');
@@ -193,22 +193,23 @@ describe('a ref outside the envelope is explained as out of scope, never as none
     const governed = toExecutorResult('run:evidence', outcome([]), Date.now());
     const governedCard = governed.artifacts![0]!;
     expect(governed.trustState).toBe('governed');
-    expect(governedCard).toMatchObject({ title: 'Answer from a certified saved query, not certified for this question', trustState: 'governed' });
+    expect(governedCard).toMatchObject({ title: 'Answer from Metrics · via a certified saved query', trustState: 'governed' });
     expect(governedCard.payload).toMatchObject({ route: { tier: 'certified_block' }, sourceTier: 'certified_artifact', certification: 'governed' });
     const doubted = toExecutorResult('run:evidence-doubt', outcome(['beverage']), Date.now());
     const doubtedCard = doubted.artifacts![0]!;
     expect(doubted.trustState).toBe('review_required');
-    expect(doubtedCard).toMatchObject({ title: 'Answer to review, from a certified saved query', trustState: 'review_required' });
-    for (const card of [governedCard, doubtedCard]) expect(card.title).not.toMatch(/^Certified|AI-/);
+    expect(doubtedCard).toMatchObject({ title: 'AI-generated answer · via a certified saved query', trustState: 'review_required' });
+    // One trust vocabulary (V13): Certified, From Metrics, AI-generated. Neither is headed certified.
+    for (const card of [governedCard, doubtedCard]) expect(card.title).not.toMatch(/^Certified/);
   });
 
   it('every answer title follows the trust decision', () => {
     expect(answeredArtifactTitle('certified', 'certified_block')).toBe('Certified answer');
-    expect(answeredArtifactTitle('review_required', 'ai_sql')).toBe('AI-drafted answer');
-    expect(answeredArtifactTitle('governed', 'governed_definitions')).toBe('Semantic answer');
-    expect(answeredArtifactTitle('review_required', 'governed_definitions')).toBe('Answer to review, from governed definitions');
-    expect(answeredArtifactTitle('governed', 'block_as_evidence')).toBe('Answer from a certified saved query, not certified for this question');
-    expect(answeredArtifactTitle('review_required', 'block_as_evidence')).toBe('Answer to review, from a certified saved query');
+    expect(answeredArtifactTitle('review_required', 'ai_sql')).toBe('AI-generated answer');
+    expect(answeredArtifactTitle('governed', 'governed_definitions')).toBe('Answer from Metrics');
+    expect(answeredArtifactTitle('review_required', 'governed_definitions')).toBe('AI-generated answer · from Metrics definitions');
+    expect(answeredArtifactTitle('governed', 'block_as_evidence')).toBe('Answer from Metrics · via a certified saved query');
+    expect(answeredArtifactTitle('review_required', 'block_as_evidence')).toBe('AI-generated answer · via a certified saved query');
   });
 });
 
@@ -1090,8 +1091,8 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
     expect(statements.some((sql) => sql.includes('FROM sales.opportunities WHERE'))).toBe(true);
     expect(result.status).toBe('completed');
     expect(result.askPipelineReceipt?.executed?.tier).toBe('exploratory');
-    expect(result.answer).toContain('written by AI from the schema');
-    expect(result.artifacts?.find((artifact) => artifact.kind === 'answer')?.title).toBe('AI-drafted answer');
+    expect(result.answer).toContain('Source: SQL written by AI from the opportunities table');
+    expect(result.artifacts?.find((artifact) => artifact.kind === 'answer')?.title).toBe('AI-generated answer');
     expect(result.trustState).toBe('review_required');
   });
 
@@ -1115,7 +1116,9 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       "SELECT COUNT(*) AS lost_deals FROM sales.opportunities WHERE LOWER(stage) = 'closed lost' AND LOWER(competitor) = 'splunk'",
     ]);
     expect(result.status).toBe('completed');
-    expect(result.answer).toContain("it filters on LOWER(stage) = 'closed lost' AND LOWER(competitor) = 'splunk'");
+    // What it filters on stays with the answer's proof (How it was answered), never in the answer text (V13).
+    expect(result.answer).not.toContain('filters on');
+    expect(JSON.stringify(result.artifacts?.[0]?.payload)).toContain("applied on the data: LOWER(stage) = 'closed lost' AND LOWER(competitor) = 'splunk'");
     // The run keeps what each drafting call was for and what it returned, and
     // the checks as verdicts: a failed stated-value check, then a passing one.
     const drafts = (result.askPipelineReceipt?.dispatches ?? []).filter((dispatch) => dispatch.purpose === 'intent:draft');
@@ -1277,8 +1280,8 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(statements).toHaveLength(1);
       expect(statements[0]).toContain("FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%'");
       expect(result.status).toBe('completed');
-      expect(JSON.stringify(result)).not.toContain('it counts every kind of game together');
-      expect(result.answer).toContain('it counts only games whose GAME_ID starts with 2, one kind of game');
+      expect(JSON.stringify(result)).not.toMatch(/it counts every kind of game together/i);
+      expect(result.answer).toContain('It counts only games whose GAME_ID starts with 2, one kind of game');
       const story = result.askPipelineReceipt?.story ?? [];
       expect(story.some((entry) => entry.title.startsWith('The SQL reads LOCAL_TEAM_SEASON_FACTS, a total of every kind of GAME_ID'))).toBe(true);
     });
@@ -1289,7 +1292,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(statements).toHaveLength(1);
       expect(statements[0]).toContain('FROM nba.local_team_season_facts WHERE season = 2015');
       expect(result.status).toBe('completed');
-      expect(result.answer).toContain('it counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+      expect(result.answer).toContain('It counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
     });
 
     it('a drafter that finds no field for a named kind is shown the kinds before every table is searched', async () => {
@@ -1301,7 +1304,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(statements).toHaveLength(1);
       expect(statements[0]).toContain("CAST(game_id AS VARCHAR) LIKE '4%'");
       expect(result.status).toBe('completed');
-      expect(result.answer).toContain('it counts only games whose GAME_ID starts with 4, one kind of game');
+      expect(result.answer).toContain('It counts only games whose GAME_ID starts with 4, one kind of game');
       const drafts = (result.askPipelineReceipt?.dispatches ?? []).filter((dispatch) => dispatch.purpose === 'intent:draft');
       expect(drafts.map((dispatch) => [dispatch.label, dispatch.outcome])).toEqual([['draft', 'declined'], ['widen', 'sql']]);
     });
@@ -1311,10 +1314,10 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const manifest = { ...nba, modeling: { rules: { ...nba.modeling.rules, 'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule } } } };
       const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
       const one = await askNba('Which team won the most playoff games in 2015?', playoffs, 'NO_SQL: No column identifies playoff games.', manifest);
-      expect(one.result.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+      expect(one.result.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
       const every = 'SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY team_name ORDER BY wins DESC LIMIT 1';
       const all = await askNba('Which team won the most games in 2015?', every, every, manifest);
-      expect(all.result.answer).toContain('it counts every kind of game together: preseason, regular-season, playoff and play-in games (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+      expect(all.result.answer).toContain('It counts every kind of game together: preseason, regular-season, playoff and play-in games (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
     });
 
     it('a stated game type is applied by a statement that keeps that kind by its code (V10 retest)', async () => {
@@ -1324,7 +1327,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       // "Playoffs" is a value the question states; the statement keeps the playoffs by GAME_ID, not by that word.
       const kept = await askNba('Which team won the most games in the 2015 Playoffs?', playoffs, playoffs, manifest);
       expect(kept.result.status).toBe('completed');
-      expect(kept.result.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+      expect(kept.result.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
       // Keeping another kind does not apply it.
       const regular = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
       const wrong = await askNba('Which team won the most games in the 2015 Playoffs?', regular, regular, manifest);
@@ -1341,7 +1344,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(statements).toHaveLength(1);
       expect(statements[0]).toContain("CAST(game_id AS VARCHAR) LIKE '2%'");
       expect(result.status).toBe('completed');
-      expect(result.answer).toContain('it counts only regular-season games (GAME_ID starting with 2)');
+      expect(result.answer).toContain('It counts only regular-season games (GAME_ID starting with 2)');
       // A statement that keeps the kind on one table and reads a total of every kind beside it is drafted again too (V12 gate, N4).
       const mixed = "SELECT g.team_name, SUM(g.win) AS wins, MAX(s.wins) AS season_wins FROM nba.local_team_game_facts g JOIN nba.local_team_season_facts s ON s.team_name = g.team_name WHERE g.season = 2015 AND CAST(g.game_id AS VARCHAR) LIKE '2%' GROUP BY g.team_name";
       const both = await askNba('Which of those had the most wins?', oneKind, mixed, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 regular season had the most wins.' });
@@ -1398,12 +1401,12 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const ask = (question: string) => route({ runId: 'run:kinds-beside-reading', request: { question, requestedMode: 'ask' } as AgentRunRequest, route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {} });
       const first = await ask('Which team won the most playoff games in 2015?');
       expect(calls.filter((call) => call === 'name')).toHaveLength(1);
-      expect(first.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+      expect(first.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
       // Named once for this connection: the next run, on any snapshot, does not ask again.
       calls.length = 0;
       const second = await ask('Which team won the most postseason games in 2015?');
       expect(calls).not.toContain('name');
-      expect(second.answer).toContain('it counts only playoff games (GAME_ID starting with 4)');
+      expect(second.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
     });
 
     it('a name matched by either of its parts is matched by both when one part alone picks other rows (V12 gate, G3)', async () => {
@@ -1430,7 +1433,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const { result } = await askNba('Which team won the most playoff games in 2016?', shifted, shifted, manifest);
       expect(result.status).toBe('completed');
       expect(result.answer).not.toContain('does not apply "2016"');
-      expect(result.answer).toContain('it reads 2016 as SEASON 2015: playoff and play-in games are played in the calendar year after their SEASON, so those of 2016 are SEASON 2015; to count SEASON 2016 instead, say "the 2016 season"');
+      expect(result.answer).toContain('It reads 2016 as SEASON 2015: playoff and play-in games are played in the calendar year after their SEASON, so those of 2016 are SEASON 2015; to count SEASON 2016 instead, say "the 2016 season"');
       // Another year is still not applied.
       const wrong = await askNba('Which team won the most playoff games in 2016?', shifted.replace('2015', '2013'), shifted.replace('2015', '2013'), manifest);
       expect(wrong.result.answer).toContain('does not apply "2016"');
@@ -1441,7 +1444,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const { prompts, statements, result } = await askNba('Which team won the most games in 2015?', every, every);
       expect(prompts).toHaveLength(1);
       expect(statements[0]).toContain('FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY');
-      expect(result.answer).toContain('it counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+      expect(result.answer).toContain('It counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
     });
   });
 

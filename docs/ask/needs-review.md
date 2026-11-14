@@ -12,16 +12,20 @@ For a question such as `How many orders were placed at each store location?`
 in the sample project:
 
 1. The trust line reads **AI-generated answer**, with the checks it passed,
-   for example **4 checks passed**.
-2. The summary says where the answer came from, for example
-   `Source: SQL written by AI from the schema (review before relying on it)`.
+   for example **3 checks passed**: the same checks **How it was answered**
+   lists.
+2. The answer says the figures first, then how Ask read the question, then one
+   source line, for example `Source: SQL written by AI from the orders and
+   locations tables, because no certified saved query or metric answers this;
+   review it before relying on the numbers.`
 3. The result card says `AI-generated`.
-4. Under the result, a line reads **Saved for review as a draft saved query (not
-   certified):** and the draft's path, such as
-   `domains/commerce/blocks/_drafts/many_orders_placed_each_store_location.dql`.
+4. Under the result, a line reads **Saved as a draft saved query for review (not
+   certified):** and the draft's name, such as
+   `how_many_orders_placed_each_store_location`. Asking the same question again
+   reuses that draft and counts the asks.
 5. **Open draft to review** opens that draft in the saved query editor.
 
-The draft is named after its file, here `many_orders_placed_each_store_location`.
+The draft is named after the question, here `how_many_orders_placed_each_store_location`.
 When every table the answer reads is listed in one Domain's **Source systems**
 (in the sample, `orders` and `locations` are both in **commerce**), the draft
 is saved in that Domain and its **Domain** is already set. When the tables
@@ -99,7 +103,7 @@ saves a draft and opens it in the saved query editor.
 - **Answer from Metrics**: built from semantic metrics and dimensions, with no
   AI-written SQL. If ZLens had to guess how to group a dimension, the note says
   **Review required** and asks you to check the mapping.
-- **Needs review** on an App page answer: the answer read an App tile whose
+- **AI-generated** on an App page answer: the answer read an App tile whose
   data is not certified. See [Ask about an App](../apps/ask-about-an-app.md).
 - On the command line, `zlens agent ask` prints
   `! AI-generated · review required` and the draft path:

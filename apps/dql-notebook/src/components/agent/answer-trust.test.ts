@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { answerSourceOf, answerTrustBadge, answerTrustHeading } from './answer-trust';
+import { answerCardTrustTitle, answerSourceOf, answerTrustBadge, answerTrustHeading } from './answer-trust';
 import type * as UnifiedAgentRunPanelModule from './UnifiedAgentRunPanel';
 
 let simpleRunTitle: typeof UnifiedAgentRunPanelModule.simpleRunTitle;
@@ -35,26 +35,36 @@ describe('one trust decision for the heading, the badge, the note and the card',
   it('a certified block served as evidence is never headed or badged AI-generated', () => {
     const run = answered('governed', 'certified_block', 'Answer from a certified saved query, not certified for this question');
     expect(answerSourceOf(run)).toBe('block_as_evidence');
-    expect(answerTrustHeading(run)).toBe(run.artifacts[0].title);
-    expect(simpleRunTitle(run)).toBe(run.artifacts[0].title);
+    expect(answerTrustHeading(run)).toBe('Answer from Metrics · via a certified saved query');
+    expect(simpleRunTitle(run)).toBe(answerTrustHeading(run));
+    expect(answerCardTrustTitle(run.artifacts[0].title)).toBe(answerTrustHeading(run));
     expect(answerTrustBadge(run)).toBe('From Metrics');
     expect(trustExplainer(run)).toMatch(/certified saved query as published/);
-    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('governed');
+    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('From Metrics');
   });
 
-  it('the same block with a reading that does not cover the question needs review, and still names the block', () => {
+  // V13: three labels everywhere (Certified, From Metrics, AI-generated); "needs review" was a fourth.
+  it('the same block with a reading that does not cover the question is AI-generated, and still names the block', () => {
     const run = answered('review_required', 'certified_block', 'Answer to review, from a certified saved query');
-    expect(answerTrustHeading(run)).toBe('Answer to review, from a certified saved query');
-    expect(simpleRunTitle(run)).toBe(run.artifacts[0].title);
-    expect(answerTrustBadge(run)).toBe('Needs review');
-    expect(trustExplainer(run)).not.toMatch(/AI-generated/);
-    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('certified saved query · needs review');
+    expect(answerTrustHeading(run)).toBe('AI-generated answer · via a certified saved query');
+    expect(simpleRunTitle(run)).toBe(answerTrustHeading(run));
+    expect(answerCardTrustTitle(run.artifacts[0].title)).toBe(answerTrustHeading(run));
+    expect(answerTrustBadge(run)).toBe('AI-generated');
+    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('AI-generated · via a certified saved query');
   });
 
-  it('governed definitions downgraded for coverage are not AI-generated either', () => {
+  it('governed definitions downgraded for coverage use the same label and name their source', () => {
     const run = answered('review_required', 'semantic_metric', 'Answer to review, from governed definitions');
-    expect(answerTrustHeading(run)).toBe(run.artifacts[0].title);
-    expect(answerTrustBadge(run)).toBe('Needs review');
+    expect(answerTrustHeading(run)).toBe('AI-generated answer · from Metrics definitions');
+    expect(answerCardTrustTitle(run.artifacts[0].title)).toBe(answerTrustHeading(run));
+    expect(answerTrustBadge(run)).toBe('AI-generated');
+  });
+
+  it('older card titles read in the same three labels', () => {
+    expect(answerCardTrustTitle('AI-drafted answer')).toBe('AI-generated answer');
+    expect(answerCardTrustTitle('Semantic answer')).toBe('Answer from Metrics');
+    expect(answerCardTrustTitle('Certified answer')).toBe('Certified answer');
+    expect(answerCardTrustTitle('Top 5 scorers')).toBe('Top 5 scorers');
   });
 
   it('only SQL the AI wrote is headed and badged AI-generated', () => {

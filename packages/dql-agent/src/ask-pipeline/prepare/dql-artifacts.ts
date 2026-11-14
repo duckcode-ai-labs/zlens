@@ -1,4 +1,5 @@
 import type { DqlArtifactReference } from '@zlens/core';
+import { withoutEnds } from '../../text-ends.js';
 import { renderSemanticDqlArtifact, semanticDqlArtifactName } from '../../semantic-bridge/compose.js';
 import { clipText } from '../vocabulary.js';
 import type { SemanticCompileRequest } from './types.js';
@@ -39,8 +40,14 @@ export function semanticAnswerArtifact(request: SemanticCompileRequest, reading:
   } as DqlArtifactReference;
 }
 
-const blockName = (reading: string, fallback: string) =>
-  (reading.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || fallback).replace(/^(\d)/, 'q_$1');
+// A name is cut between words, never inside one (V12: "count_of_regular_season_games_the_golden_state_w").
+const blockName = (reading: string, fallback: string) => {
+  const words = withoutEnds(reading.toLowerCase().replace(/[^a-z0-9]+/g, '_'), '_');
+  const head = words.slice(0, 65);
+  const lastBreak = head.lastIndexOf('_');
+  const cut = words.length <= 64 ? words : (lastBreak >= 0 ? head.slice(0, lastBreak) : head) || words.slice(0, 64);
+  return (cut || fallback).replace(/^(\d)/, 'q_$1');
+};
 
 const sqlBlockSource = (name: string, reading: string, sql: string) => [
   `block "${name}" {`,

@@ -6237,6 +6237,8 @@ export const api = {
       replacedBy?: string;
       deprecatedOn?: string;
       replacement?: { name: string; path: string } | null;
+      /** An automatic Ask draft nobody changed: kept out of pickers, removed by "Clear drafts". */
+      automaticDraft?: boolean;
     }>;
     /** Why the library could not be read; an empty library is not the same as a failed one. */
     error?: string;
@@ -6246,6 +6248,11 @@ export const api = {
     } catch (error) {
       return { blocks: [], error: error instanceof Error ? error.message : 'The saved query list could not be loaded.' };
     }
+  },
+
+  /** Removes the automatic Ask drafts nobody changed. Drafts a person edited or certified stay. */
+  async clearAskDrafts(): Promise<{ ok: boolean; removed: number; paths: string[]; kept: number }> {
+    return request('/api/blocks/ask-drafts/clear', { method: 'POST' });
   },
 
   async getApps(): Promise<{

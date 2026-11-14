@@ -33,7 +33,7 @@ export async function prepareExploratory(
   vocabulary: VocabularyIndex,
   deps: PrepareDeps,
   question: string,
-  context: { reason?: string; previous?: { sql: string; error: string } } = {},
+  context: { reason?: string; previous?: { sql: string; error: string }; /** The earlier question a follow-up with no reading continues. */ followUp?: string } = {},
 ): Promise<{ candidates: PreparedCandidate[]; refusals: PreparedRefusal[] }> {
   // A derived/offset/cumulative dbt metric is an engine-owned definition. The
   // semantic tier runs first; this lane is reached only when it did not answer
@@ -59,7 +59,7 @@ export async function prepareExploratory(
   }
   let drafted: Awaited<ReturnType<NonNullable<PrepareDeps['draftSql']>>>;
   try {
-    drafted = await deps.draftSql({ question, ...(intent ? { intent } : {}), vocabulary, ...(reason ? { reason } : {}), ...(context.previous ? { previous: context.previous } : {}) });
+    drafted = await deps.draftSql({ question, ...(intent ? { intent } : {}), vocabulary, ...(reason ? { reason } : {}), ...(context.previous ? { previous: context.previous } : {}), ...(context.followUp ? { followUp: context.followUp } : {}) });
   } catch (error) {
     return { candidates: [], refusals: [{ tier: 'exploratory', code: 'exploration_failed', message: `the SQL draft failed: ${error instanceof Error ? error.message : String(error)}`, repairable: false }] };
   }

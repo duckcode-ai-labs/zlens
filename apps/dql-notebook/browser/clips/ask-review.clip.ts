@@ -15,12 +15,12 @@ clip('ask-review', async ({ page, sample, director }) => {
   // The stores are shown by name, in the table and in the answer, never by their UUID keys.
   await expect(page.getByText('Philadelphia', { exact: true }).first()).toBeVisible();
   await expect(page.getByText('Brooklyn', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText(/Leading rows: (Philadelphia|Brooklyn) · /).first()).toBeVisible();
+  await expect(page.getByText(/rows, starting with (Philadelphia|Brooklyn) · /).first()).toBeVisible();
   await expect(page.getByText(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)).toHaveCount(0);
   await director.point(label);
   await director.beat(1400);
   director.poster();
-  const saved = page.getByText(/Saved for review as a draft saved query/).first();
+  const saved = page.getByText(/Saved as a draft saved query for review/).first();
   await expect(saved).toBeVisible();
   await director.point(saved, { x: 120, y: 8 });
   await director.beat(1600);

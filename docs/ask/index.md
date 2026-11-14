@@ -52,7 +52,7 @@ Other trust lines:
 | **Answer from Metrics** | Built from semantic metrics and dimensions. Not certified. |
 | **AI-generated answer** | AI wrote the SQL from your tables. Check it before relying on it. ZLens saves it as a draft saved query for review; see [Answers that need review](needs-review.md). |
 | **Needs clarification** | Ask needs one more detail. Answer the question it asks. |
-| **Couldn't run this query** or **No matching data** | Ask refused or found nothing, and says why. See [When Ask refuses](refusals.md). |
+| **Not in this data**, **No matching data** or **Couldn't run this query** | The data does not hold it, nothing matched, or the query could not run. Ask says why. See [When Ask refuses](refusals.md). |
 
 {{ video("ask1-labels") }}
 

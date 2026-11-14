@@ -82,14 +82,29 @@ export function answerTrustHeading(run: RunTrust & { status?: string; summary?: 
   if (isRefusedRun(run)) return askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : 'No answer';
   const source = answerSourceOf(run);
   if (run.trustState === 'certified') return 'Certified answer';
-  if (source === 'app_view') return run.trustState === 'governed' ? 'Answer from Metrics, in this App' : 'Answer from this App · needs review';
-  // A certified saved query served as evidence is not built from Metrics: the
-  // heading names its real source, as the answer card does.
-  if (run.trustState === 'governed' && source === 'block_as_evidence') return 'Answer from a certified saved query, not certified for this question';
+  // Three labels everywhere (Certified, From Metrics, AI-generated); a short hint names a source that is not
+  // the usual one for the label (V13: "needs review" and "answer to review" were a fourth and fifth name).
+  if (source === 'app_view') return run.trustState === 'governed' ? 'Answer from Metrics, in this App' : 'AI-generated answer · from this App';
+  // A certified saved query served as evidence is not certified for this question: the heading says so.
+  if (run.trustState === 'governed' && source === 'block_as_evidence') return 'Answer from Metrics · via a certified saved query';
   if (run.trustState === 'governed' || run.trustState === 'grounded') return 'Answer from Metrics';
-  if (source === 'block_as_evidence') return 'Answer to review, from a certified saved query';
-  if (source === 'governed_definitions') return 'Answer to review, from governed definitions';
+  if (source === 'block_as_evidence') return 'AI-generated answer · via a certified saved query';
+  if (source === 'governed_definitions') return 'AI-generated answer · from Metrics definitions';
   return 'AI-generated answer';
+}
+
+/**
+ * An answer card's title in the same three words. Runs saved before V13 carry the server's older titles
+ * ("AI-drafted answer", "Semantic answer", "Answer to review, from …").
+ */
+export function answerCardTrustTitle(title: string): string {
+  const trimmed = title.trim();
+  if (/^AI-drafted answer$/i.test(trimmed)) return 'AI-generated answer';
+  if (/^Semantic answer$/i.test(trimmed)) return 'Answer from Metrics';
+  if (/^Answer to review, from a certified saved query$/i.test(trimmed)) return 'AI-generated answer · via a certified saved query';
+  if (/^Answer to review, from governed definitions$/i.test(trimmed)) return 'AI-generated answer · from Metrics definitions';
+  if (/^Answer from a certified saved query, not certified for this question$/i.test(trimmed)) return 'Answer from Metrics · via a certified saved query';
+  return title;
 }
 
 /** The badge beside the heading: the same decision in one or two words. */
@@ -97,7 +112,5 @@ export function answerTrustBadge(run: RunTrust & { status?: string; summary?: st
   if (isRefusedRun(run)) return askNeedsAiProvider(run) ? 'Not answered' : 'Refused';
   if (run.trustState === 'certified') return 'Certified';
   if (run.trustState === 'governed' || run.trustState === 'grounded') return 'From Metrics';
-  const source = answerSourceOf(run);
-  if (source === 'app_view' || source === 'block_as_evidence' || source === 'governed_definitions') return 'Needs review';
   return 'AI-generated';
 }

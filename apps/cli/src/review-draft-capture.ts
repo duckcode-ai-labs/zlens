@@ -29,9 +29,34 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+/** Words that only mean something after an earlier answer: "What about 2009?", "Which of those…", "And for the Lakers?". */
+const FOLLOW_UP_WORDS = /^\s*(?:(?:what|how)\s+about|and|also|now|same|then|only)\b|\b(?:those|these|them|that one|the same|instead)\b/i;
+
+/**
+ * The question a draft is named and filed under. A follow-up ("What about
+ * 2009?") is named from what it answered, its reading, never from its own few
+ * words: those name nothing on their own, and the same words after another
+ * question would land in the same draft (new-user test V12: "about_2009").
+ */
+export function standaloneQuestionOf(run: Pick<AgentRun, 'question' | 'conversationBinding'>, payload: Record<string, unknown> | undefined): string {
+  const intent = record(payload?.askIntentV1);
+  const reading = text(intent?.reading)?.replace(/\s+/g, ' ').trim();
+  if (!reading) return run.question;
+  const sameWords = reading.toLowerCase().replace(/[\s?.!]+$/, '') === run.question.toLowerCase().replace(/\s+/g, ' ').replace(/[\s?.!]+$/, '').trim();
+  if (sameWords) return run.question;
+  const provenance = Object.values(record(intent?.provenance) ?? {});
+  const filters = Array.isArray(intent?.filters) ? intent!.filters as unknown[] : [];
+  const carried = run.conversationBinding === 'prior_result' || run.conversationBinding === 'task_dependency'
+    || provenance.some((source) => source === 'inherited' || source === 'prior_result')
+    || filters.some((filter) => { const source = record(filter)?.source; return source === 'inherited' || source === 'prior_result'; });
+  return carried || FOLLOW_UP_WORDS.test(run.question) ? reading : run.question;
+}
+
 /** The review-required answer a run produced, when it produced one worth keeping. */
 export function reviewRequiredAnswerOf(run: AgentRun): ReviewAnswer | null {
   if (run.status !== 'completed' && run.status !== 'needs_review') return null;
+  // A certified answer already is a saved query; nothing to review.
+  if (run.trustState === 'certified') return null;
   if (run.figuresWithheld) return null;
   for (const artifact of run.artifacts ?? []) {
     if (artifact.kind !== 'answer') continue;
@@ -49,7 +74,7 @@ export function reviewRequiredAnswerOf(run: AgentRun): ReviewAnswer | null {
     if (!sql) continue;
     const source = text(dql?.source);
     return {
-      question: run.question,
+      question: standaloneQuestionOf(run, payload),
       sql,
       ...(source ? { dqlArtifact: { source, ...(text(dql?.name) ? { name: text(dql?.name)! } : {}), ...(text(dql?.kind) ? { kind: text(dql?.kind)! } : {}) } } : {}),
       ...(text(payload.domain) ? { domain: text(payload.domain)! } : {}),

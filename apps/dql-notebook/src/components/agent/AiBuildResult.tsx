@@ -828,7 +828,7 @@ function BlockPicker({
     api.getBlockLibrary()
       .then((res) => {
         if (cancelled) return;
-        setBlocks(Array.isArray(res?.blocks) ? res.blocks.map((b) => ({ name: b.name, domain: b.domain, path: b.path })) : []);
+        setBlocks(Array.isArray(res?.blocks) ? res.blocks.filter((b) => !b.automaticDraft).map((b) => ({ name: b.name, domain: b.domain, path: b.path })) : []);
       })
       .catch(() => { if (!cancelled) setBlocks([]); })
       .finally(() => { if (!cancelled) setLoading(false); });

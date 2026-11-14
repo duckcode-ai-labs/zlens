@@ -99,6 +99,23 @@ export function formatRunMs(ms: number | undefined): string {
   return `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1_000)} s`;
 }
 
+/** "The check passed", "Both checks passed", "All 3 checks passed": never "All 2 checks passed" (claims check, V12). */
+export function checksPassedSentence(count: number): string {
+  return count === 1 ? 'The check passed.' : count === 2 ? 'Both checks passed.' : `All ${count} checks passed.`;
+}
+
+/**
+ * The number of checks an answer's badge says passed: the checks of the last attempt that "How it was answered"
+ * lists under "Checked before running", so the badge and the steps page say the same number (V12: the badge
+ * said 4, the steps page listed 3). Zero when any of them failed or the run lists none.
+ */
+export function passedCheckCount(explanation: RunExplanation | undefined): number {
+  const step = explanation?.steps.find((entry) => entry.kind === 'checks');
+  if (!step || step.outcome !== 'done') return 0;
+  const lastAttempt = Math.max(...step.checks.map((check) => check.attempt ?? 0));
+  return step.checks.filter((check) => (check.attempt ?? 0) === lastAttempt && check.passed).length;
+}
+
 /** The explanation of a pipeline trace (receipt plus the answer read from the saved run), or undefined for any other trace. */
 export function explanationForTrace(trace: Pick<AskTraceDataV1, 'runtimeReceiptV9' | 'runtimeAnswerV1' | 'envelope'>): RunExplanation | undefined {
   if (!trace.runtimeReceiptV9) return undefined;
@@ -258,14 +275,40 @@ function aiCallOf(value: unknown): RunAiCall | undefined {
   };
 }
 
+/**
+ * A detail that is only the host's own phase timings ("probe 164 ms · pack 1223 ms"): internal words a
+ * reader cannot use (new-user test V12). The step keeps its total time.
+ */
+export function isInternalTimingDetail(detail: string | undefined): boolean {
+  return Boolean(detail && /^\s*[a-z_]+ \d+(?:\.\d+)? ?ms(?:\s*·\s*[a-z_]+ \d+(?:\.\d+)? ?ms)*\s*$/i.test(detail));
+}
+
+/**
+ * A step's detail in a reader's words, or undefined when it holds only internal words: the host's phase timings,
+ * or the reading check's note to the AI ('"…" is modeled: warriors ppg …. Use these refs instead of reporting a
+ * gap'), which the steps page once showed as if the question were answered by those (new-user test V12).
+ */
+export function readerDetail(detail: string | undefined): string | undefined {
+  if (!detail || isInternalTimingDetail(detail)) return undefined;
+  let text = detail;
+  if (/\bis modeled:/.test(text)) {
+    text = /^no certified block or semantic metric answers this\b/i.test(text)
+      ? 'No certified saved query or semantic metric answers this, so the AI wrote the SQL from the tables.'
+      : text.split(/(?<=[.;])\s+/).filter((sentence) => !/\bis modeled:|\binstead of reporting a gap\b/.test(sentence)).join(' ').trim();
+  }
+  text = text.replace(/\bno certified block or semantic metric answers this\b/gi, 'no certified saved query or semantic metric answers this').replace(/\bcertified blocks?\b/gi, (word) => (/s$/i.test(word) ? 'certified saved queries' : 'certified saved query'));
+  return withoutConfigHints(text) || undefined;
+}
+
 function storyOf(value: unknown): RunStoryEntry | undefined {
   const entry = rec(value);
   if (!entry || typeof entry.title !== 'string' || typeof entry.at !== 'number') return undefined;
+  const detail = readerDetail(str(entry.detail));
   return {
     phase: str(entry.phase) ?? 'step',
     title: withoutConfigHints(entry.title),
     state: entry.state === 'missed' || entry.state === 'failed' ? entry.state : 'done',
-    ...(str(entry.detail) ? { detail: withoutConfigHints(str(entry.detail)!).slice(0, 2_000) } : {}),
+    ...(detail ? { detail: detail.slice(0, 2_000) } : {}),
     ...(num(entry.ms) !== undefined ? { ms: num(entry.ms) } : {}),
     at: entry.at,
   };
@@ -327,10 +370,15 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
   } else {
     // 1. Reading the question.
     const readFailed = failure?.stage === 'resolve';
+    // A reading that could not be made, after which the AI wrote the SQL from the question's words, is not "Done"
+    // (new-user test V12: "Read the question · Done" above "Could not read the question into governed fields").
+    const readMissed = readFailed ? undefined : story.find((entry) => entry.phase === 'read' && entry.state !== 'done' && /^(Could not read the question|Ran out of time to check the reading)/.test(entry.title));
     push({
-      id: 'read', kind: 'read', title: 'Read the question', outcome: readFailed ? 'failed' : 'done',
+      id: 'read', kind: 'read', title: 'Read the question', outcome: readFailed || readMissed ? 'failed' : 'done',
       ...(num(timings.resolve) !== undefined ? { ms: num(timings.resolve) } : {}),
-      reason: readFailed ? plainRefs(str(failure?.message) ?? 'The AI could not read the question.') : plainRefs(reading ?? 'Read the question.'),
+      reason: readFailed ? plainRefs(str(failure?.message) ?? 'The AI could not read the question.')
+        : readMissed ? `${/^Ran out of time/.test(readMissed.title) ? 'The AI model took too long to read the question' : 'The AI could not read the question into the project\'s fields'}, so the SQL was written from the question's words.`
+        : plainRefs(reading ?? 'Read the question.'),
       aiCalls: readCalls,
       story: story.filter((entry) => entry.phase === 'context' || entry.phase === 'read' || entry.phase === 'search'),
       notes: arr(receipt.grounding).map(str).filter((note): note is string => Boolean(note) && /^discovery:/.test(note!)).map((note) => plainRefs(note.replace(/^discovery:\s*/, ''))),
@@ -355,11 +403,16 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
         const answeredHere = executedTier === tier;
         const outcome: RunStepOutcome = answeredHere || servedAsPublished || last.outcome === 'prepared' ? 'done' : last.outcome === 'skipped' ? 'skipped' : 'refused';
         const refusal = refusalFor(tier);
+        // The certified tier's own refusal lists what IS modeled ("… is modeled: warriors ppg …"): its
+        // matcher's words, not a reason (new-user test V12). A plain sentence says what matters.
+        const certifiedMiss = tier === 'certified' && (!refusal || str(refusal.code) === 'no_certified_block' || /\bis modeled\b|no certified block/i.test(str(refusal.message) ?? ''));
         const reason = outcome === 'done'
           ? servedAsPublished ? 'A certified saved query was served as published.' : tier === 'certified' ? 'A certified saved query answers this question.' : tier === 'semantic' ? 'The semantic layer compiled this question.' : 'These tables answer this question.'
-          : outcome === 'skipped'
-            ? refusal ? plainReason(str(refusal.code), str(refusal.message)) : tier === 'certified' ? 'No certified saved query matches this question.' : 'Not needed: an earlier tier answered.'
-            : plainReason(str(refusal?.code), str(refusal?.message) ?? str(last.detail));
+          : certifiedMiss
+            ? 'No certified saved query matches this question.'
+            : outcome === 'skipped'
+              ? refusal ? plainReason(str(refusal.code), str(refusal.message)) : 'Not needed: an earlier tier answered.'
+              : plainReason(str(refusal?.code), str(refusal?.message) ?? str(last.detail));
         push({
           id: `tier-${tier}`, kind: tier as RunStepKind, title: TIER_TITLES[tier]!, outcome, reason,
           notes: [
@@ -413,7 +466,7 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
       const fixed = checks.filter((check) => !check.passed && (check.attempt ?? 0) < lastAttempt).length;
       push({
         id: 'checks', kind: 'checks', title: 'Checked before running', outcome: failedNow.length ? 'failed' : 'done',
-        reason: failedNow.length ? `${failedNow.length} check${failedNow.length === 1 ? '' : 's'} failed: ${failedNow[0]!.message || failedNow[0]!.label}` : fixed ? `All checks passed after ${fixed} failed check${fixed === 1 ? ' was' : 's were'} fixed.` : `All ${latest.length} check${latest.length === 1 ? '' : 's'} passed.`,
+        reason: failedNow.length ? `${failedNow.length} check${failedNow.length === 1 ? '' : 's'} failed: ${failedNow[0]!.message || failedNow[0]!.label}` : fixed ? `All checks passed after ${fixed} failed check${fixed === 1 ? ' was' : 's were'} fixed.` : checksPassedSentence(latest.length),
         checks,
       });
     }

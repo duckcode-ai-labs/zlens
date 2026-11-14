@@ -74,20 +74,21 @@ import {
 import { themes, type Theme, type ThemeMode } from '../../themes/notebook-theme';
 import { controlStyle } from '../../themes/control-tokens';
 import { AskComposerOptions } from './AskComposerOptions';
-import { ASK_NEEDS_AI_PROVIDER_HEADING, answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading, askNeedsAiProvider } from './answer-trust';
+import { ASK_NEEDS_AI_PROVIDER_HEADING, answerCardTrustTitle, answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading, askNeedsAiProvider } from './answer-trust';
 import { StructuredAnswerText } from './AgentAnswerCard';
 import { AppBuildProposalPanel, OPEN_IN_APP_STUDIO_LABEL, defaultProposalSelection, type AppBuildBriefEdits } from '../apps/AppBuildProposalPanel';
 import { openAppProposalInStudio } from '../apps/app-studio-handoff';
 import { ResultView } from '../output/ResultView';
 import { DraftReviewCard } from '../blocks/DraftReviewCard';
+import { draftNameFromPath, savedQueryNameFromQuestion } from '../blocks/block-types';
 import { SaveAsBlockModal } from '../modals/SaveAsBlockModal';
 import { BlockParameterControls, isRuntimeEditableParameter } from '../parameters/BlockParameterControls';
 export { deriveResultChartConfig } from '../output/ResultView';
 import type { QueryResult, AppSummary, CellChartConfig, Cell, BlockParameterDefinition, ExecutionTarget } from '../../store/types';
 import { useNotebook } from '../../store/NotebookStore';
-import { projectExamplePrompts } from './project-prompts';
+import { savedQueryPrompts, neutralPrompts, projectExamplePrompts, type ProjectPrompt } from './project-prompts';
 import { buildConversationContext } from './agentConversationContext';
-import { describeJoin, explainAskRun, explanationForTrace, isAskPipelineReceipt, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
+import { describeJoin, explainAskRun, explanationForTrace, isAskPipelineReceipt, OUTCOME_WORDS, passedCheckCount, readerDetail, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
 import { runContextLine, runContextSummary } from './run-context-summary';
 import { AskRunChecks, AskRunDataUsed, AskRunFlow } from './AskRunFlow';
 import { InvestigationFlow } from './InvestigationFlow';
@@ -343,7 +344,7 @@ const ROUTE_LABEL: Record<AgentRunRoute, string> = {
   conversation: 'Chat',
   certified_answer: 'Certified answer',
   semantic_answer: 'Answer from Metrics',
-  generated_answer: 'Generated answer',
+  generated_answer: 'AI-generated answer',
   research: 'Research plan',
   sql_cell: 'SQL cell',
   dql_block_draft: 'Saved query draft',
@@ -414,10 +415,20 @@ export function UnifiedAgentRunPanel({
       .catch(() => undefined);
     return undefined;
   }, [notebookDispatch, notebookState.semanticLayer.loading, notebookState.semanticLayer.metrics]);
-  const projectPrompts = useMemo(
+  const metricPrompts = useMemo(
     () => projectExamplePrompts(notebookState.semanticLayer.metrics ?? [], notebookState.semanticLayer.dimensions ?? [], notebookState.semanticLayer.timeDimensions ?? []),
     [notebookState.semanticLayer.metrics, notebookState.semanticLayer.dimensions, notebookState.semanticLayer.timeDimensions],
   );
+  // No metrics: the project's certified saved queries suggest what to ask (V12: NBA data was offered revenue,
+  // region, customer and order questions). Loaded once per page; a failure keeps the neutral questions.
+  const [queryPrompts, setQueryPrompts] = useState<ProjectPrompt[]>(() => cachedSavedQueryPrompts ?? []);
+  useEffect(() => {
+    if (examplePrompts || metricPrompts.length || cachedSavedQueryPrompts) return undefined;
+    let active = true;
+    void loadSavedQueryPrompts().then((prompts) => { if (active) setQueryPrompts(prompts); });
+    return () => { active = false; };
+  }, [examplePrompts, metricPrompts.length]);
+  const projectPrompts = metricPrompts.length ? metricPrompts : queryPrompts.length ? queryPrompts : neutralPrompts(Boolean(notebookPath));
   const t = themes[themeMode];
   // One clean composer everywhere: an auto-routed box — no mode chips. Capability
   // still varies server-side by `audience` (analyst keeps the
@@ -1124,7 +1135,7 @@ export function UnifiedAgentRunPanel({
       setBlockToSave({
         runId: run.id,
         source,
-        name: dqlArtifact?.name ?? `${run.question.slice(0, 48).trim() || 'saved_answer'}`,
+        name: dqlArtifact?.name ?? savedQueryNameFromQuestion(run.question),
         dqlArtifact,
         question: run.question,
       });
@@ -1277,7 +1288,7 @@ export function UnifiedAgentRunPanel({
             </div>
             <span style={{ fontSize: 13.5, fontWeight: 650, color: t.textPrimary, whiteSpace: 'nowrap' }}>{title === 'AI Copilot' ? 'Ask your data' : title}</span>
             <div style={{ flex: 1 }} />
-            <span style={{ fontSize: 11, color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{reader ? 'Certified answers first, then approved metrics, then new SQL marked Needs review' : 'Certified first · semantic next · generated SQL last'}</span>
+            <span style={{ fontSize: 11, color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{reader ? 'Certified answers first, then From Metrics, then new SQL marked AI-generated' : 'Certified first · From Metrics next · AI-generated last'}</span>
           </div>
 
           <div ref={askScrollRef} data-testid="ask-thread-scroll" onScroll={onThreadScroll} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -1302,7 +1313,7 @@ export function UnifiedAgentRunPanel({
                   <div style={largeIconShellStyle(t)}><Sparkles size={20} /></div>
                   <div style={{ fontSize: 13.5, lineHeight: 1.5, maxWidth: 400, color: t.textSecondary }}>{emptyHint ?? DEFAULT_EMPTY_HINT}</div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 520 }}>
-                    {(examplePrompts ?? (projectPrompts.length ? projectPrompts : EXAMPLE_PROMPTS)).map((ex) => (
+                    {(examplePrompts ?? projectPrompts).map((ex) => (
                       <button key={ex.label} type="button" className="dql-hover dql-lift" onClick={() => { setInput(ex.prompt); requestAnimationFrame(() => inputRef.current?.focus()); }} style={suggestionChipStyle(t)}>{ex.label}</button>
                     ))}
                   </div>
@@ -1382,7 +1393,7 @@ export function UnifiedAgentRunPanel({
                   </button>
                 </div>
               </div>
-              <div style={{ textAlign: 'center', fontSize: 11, color: t.textMuted, marginTop: 8 }}>Each answer says what it is built on: certified, governed, or needs review.</div>
+              <div style={{ textAlign: 'center', fontSize: 11, color: t.textMuted, marginTop: 8 }}>Each answer says what it is built on: Certified, From Metrics, or AI-generated.</div>
             </div>
             )}
         </div>
@@ -1464,7 +1475,7 @@ export function UnifiedAgentRunPanel({
               {emptyHint ?? DEFAULT_EMPTY_HINT}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 520 }}>
-              {(examplePrompts ?? (projectPrompts.length ? projectPrompts : EXAMPLE_PROMPTS)).map((ex) => (
+              {(examplePrompts ?? projectPrompts).map((ex) => (
                 <button key={ex.label} type="button" className="dql-hover dql-lift" onClick={() => { setInput(ex.prompt); requestAnimationFrame(() => inputRef.current?.focus()); }} style={suggestionChipStyle(t)}>
                   {ex.label}
                 </button>
@@ -1573,13 +1584,22 @@ export function UnifiedAgentRunPanel({
   );
 }
 
-const DEFAULT_EMPTY_HINT = 'Ask a question. Each answer says what it is built on: certified, governed, or needs review. Use Research deeper on any answer to investigate what changed.';
-const EXAMPLE_PROMPTS: ExamplePrompt[] = [
-  { label: 'What is total revenue?', prompt: 'What is total revenue?' },
-  { label: 'Why is revenue down by region?', prompt: 'Why is revenue down by region?' },
-  { label: 'Top customers by revenue this quarter', prompt: 'Top customers by revenue this quarter' },
-  { label: 'How have orders trended over the last 6 months?', prompt: 'How have orders trended over the last 6 months?' },
-];
+const DEFAULT_EMPTY_HINT = 'Ask a question. Each answer says what it is built on: Certified, From Metrics, or AI-generated. Use Research deeper on any answer to investigate what changed.';
+// The project's certified saved queries as example questions, read once per page (see savedQueryPrompts).
+let cachedSavedQueryPrompts: ProjectPrompt[] | undefined;
+let pendingSavedQueryPrompts: Promise<ProjectPrompt[]> | undefined;
+function loadSavedQueryPrompts(): Promise<ProjectPrompt[]> {
+  pendingSavedQueryPrompts ??= Promise.resolve()
+    .then(() => api.getBlockLibrary())
+    .then((library) => {
+      const prompts = savedQueryPrompts(library.blocks ?? []);
+      if (!library.error) cachedSavedQueryPrompts = prompts;
+      return prompts;
+    })
+    .catch(() => [] as ProjectPrompt[])
+    .finally(() => { pendingSavedQueryPrompts = undefined; });
+  return pendingSavedQueryPrompts;
+}
 
 // ── Server-thread resume ─────────────────────────────────────────────────────
 
@@ -2034,7 +2054,7 @@ function askStoryStepOf(value: unknown): AskStoryStep | undefined {
     title: withoutConfigHints(record.title),
     state,
     at: record.at,
-    ...(typeof record.detail === 'string' && record.detail ? { detail: withoutConfigHints(record.detail) } : {}),
+    ...(typeof record.detail === 'string' && readerDetail(record.detail) ? { detail: readerDetail(record.detail)! } : {}),
     ...(typeof record.ms === 'number' ? { ms: record.ms } : {}),
   };
 }
@@ -2136,14 +2156,38 @@ export function AskStoryList({ steps, t, active }: { steps: AskStoryStep[]; t: T
   );
 }
 
+/**
+ * The steps a finished run's one-line summary counts and opens to. A run the Ask pipeline answered counts the
+ * steps "How it was answered" lists (read, sources, AI SQL, checks, warehouse, answer), so the two never
+ * disagree (V12: "11 steps" in the chat, 6 on the steps page). Other runs keep their own story.
+ */
+export function askRunSummarySteps(receipt: unknown, run?: Pick<AgentRun, 'artifacts' | 'evaluations' | 'status'>): AskStoryStep[] {
+  const story = askStoryStepsFromReceipt(receipt);
+  if (story.length === 0 || !isAskPipelineReceipt(receipt)) return story;
+  const explanation = explainAskRun({
+    receipt,
+    payload: run ? askRunAnswerPayload(run) : {},
+    ...(run?.evaluations ? { evaluations: run.evaluations } : {}),
+    ...(run?.status ? { status: run.status } : {}),
+  });
+  if (!explanation) return story;
+  return explanation.steps.map((step) => ({
+    phase: step.kind,
+    title: step.outcome === 'done' ? step.title : `${step.title}: ${OUTCOME_WORDS[step.outcome].toLowerCase()}`,
+    ...(step.reason ? { detail: step.reason } : {}),
+    state: step.outcome === 'done' ? 'done' as const : step.outcome === 'failed' ? 'failed' as const : 'missed' as const,
+    ...(step.ms !== undefined ? { ms: step.ms } : {}),
+    at: step.n,
+  }));
+}
+
 /** The kept story of a finished Ask run, collapsed to one line until opened. */
-export function AskRunStory({ receipt, t }: { receipt: unknown; t: Theme }): JSX.Element | null {
+export function AskRunStory({ receipt, t, run }: { receipt: unknown; t: Theme; run?: Pick<AgentRun, 'artifacts' | 'evaluations' | 'status'> }): JSX.Element | null {
   const [expanded, setExpanded] = useState(false);
-  const steps = askStoryStepsFromReceipt(receipt);
+  const steps = askRunSummarySteps(receipt, run);
   if (steps.length === 0) return null;
   const timings = receipt && typeof receipt === 'object' ? (receipt as { timings?: Record<string, number> }).timings : undefined;
   const total = typeof timings?.total === 'number' ? timings.total + (typeof timings.context === 'number' ? timings.context : 0) : undefined;
-  const missed = steps.filter((entry) => entry.state !== 'done').length;
   return (
     <div style={{ display: 'grid', gap: 7 }}>
       <button
@@ -2154,7 +2198,7 @@ export function AskRunStory({ receipt, t }: { receipt: unknown; t: Theme }): JSX
         style={{ display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: t.textMuted, fontSize: 11.5, fontFamily: t.font }}
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        {`${total !== undefined ? `Worked for ${formatStepDuration(total) || 'under a second'} · ` : ''}${steps.length} step${steps.length === 1 ? '' : 's'}${missed ? ` · ${missed} looked and missed` : ''}`}
+        {`${total !== undefined ? `Worked for ${formatStepDuration(total) || 'under a second'} · ` : ''}${steps.length} step${steps.length === 1 ? '' : 's'}`}
       </button>
       {expanded ? <div style={{ paddingLeft: 4 }}><AskStoryList steps={steps} t={t} /></div> : null}
     </div>
@@ -2485,7 +2529,8 @@ function RunCard({
   const hasResearchAction = run.nextActions.some((a) => a.route === 'research');
   const showResearchDeeper = isAnswer && pinnable && !hasResearchAction;
   const sourceArtifact = answerDqlArtifactFromRun(run);
-  const canSaveBlock = mayAuthorBlocks && pinnable && !sourceArtifact?.sourcePath && Boolean(sourceArtifact?.source ?? answerSqlFromRun(run));
+  // A certified answer already is a certified saved query: nothing to save or certify.
+  const canSaveBlock = run.trustState !== 'certified' && mayAuthorBlocks && pinnable && !sourceArtifact?.sourcePath && Boolean(sourceArtifact?.source ?? answerSqlFromRun(run));
   const startedAtMs = Date.parse(run.startedAt);
   const completedAtMs = Date.parse(run.completedAt);
   const elapsedSeconds = Number.isFinite(startedAtMs) && Number.isFinite(completedAtMs)
@@ -2574,7 +2619,7 @@ function RunCard({
 
       <CitedDocuments run={run} t={t} />
 
-      <AskRunStory receipt={run.diagnosticReceiptV9} t={t} />
+      <AskRunStory receipt={run.diagnosticReceiptV9} t={t} run={run} />
 
       {run.events.length > 0 || run.traceReference ? (
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2764,24 +2809,26 @@ export function askArtifactMeta(artifact: AgentRunArtifact, payload: Record<stri
   }
   const compilationFailure = askCompilationFailureKind(payload);
   const provenance = artifact.trustState === 'certified'
-    ? 'certified saved query'
+    ? 'Certified'
     : artifact.trustState === 'governed' || artifact.trustState === 'grounded'
-      ? 'governed'
+      ? 'From Metrics'
       : artifact.trustState === 'blocked'
         ? compilationFailure === 'semantic'
           ? 'semantic compilation failed'
           : compilationFailure === 'generic'
             ? 'compilation failed'
-            : 'blocked'
+            : askRunIsDataGap({ status: 'blocked', artifacts: [artifact] })
+              ? 'not in this data'
+              : 'blocked'
         // An investigation's figures can come from governed metrics; the report stays review-required.
         : artifact.kind === 'research_run' && investigationReportOf(payload)
           ? 'review required'
           : isAppViewPayload(payload)
-            ? 'from this App · needs review'
+            ? 'AI-generated · from this App'
             : answerSourceOfPayload(payload, artifact.trustState) === 'block_as_evidence'
-              ? 'certified saved query · needs review'
+              ? 'AI-generated · via a certified saved query'
               : answerSourceOfPayload(payload, artifact.trustState) === 'governed_definitions'
-                ? 'governed definitions · needs review'
+                ? 'AI-generated · from Metrics definitions'
                 : 'AI-generated';
   parts.push(provenance);
   return parts.join(' · ');
@@ -2861,7 +2908,7 @@ export function researchVerdictSummaryForRun(run: AgentRun): ResearchVerdictSumm
 
 function resultCardTitle(run: AgentRun, artifact: AgentRunArtifact): string {
   const generic = /^(?:certified|governed semantic|review-required|exploratory dbt-grounded) answer$/i.test(artifact.title.trim());
-  const source = generic ? run.question : artifact.title;
+  const source = generic ? run.question : answerCardTrustTitle(artifact.title);
   const clean = cleanPresentationText(source).replace(/[?.!]+$/, '').trim();
   if (!clean) return 'Answer result';
   const title = clean.charAt(0).toUpperCase() + clean.slice(1);
@@ -3120,15 +3167,35 @@ interface AskRunCardProps {
   onRepairedRun: (sourceRunId: string, repairedRun: AgentRun) => void;
 }
 
+/**
+ * A run that found the data does not hold what was asked (no payroll column, no rows for that player): a
+ * correct answer about the data, shown calmly, never as an error (new-user test V12: the payroll question read
+ * "Couldn't run this query" in red). A check that failed, a time-out or a warehouse error is not one.
+ */
+export function askRunIsDataGap(run: Pick<AgentRun, 'status' | 'artifacts'> & { summary?: string; answer?: string }): boolean {
+  if (run.status !== 'blocked' || askNeedsAiProvider(run as AgentRun)) return false;
+  return (run.artifacts ?? []).some((artifact) => {
+    const payload = payloadOf(artifact);
+    const gap = payload.gap && typeof payload.gap === 'object' ? payload.gap as { kind?: unknown; message?: unknown } : undefined;
+    if (gap?.kind !== 'not_modeled' && gap?.kind !== 'not_retrieved') return false;
+    const words = [payload.text, payload.answer, gap.message].filter((value): value is string => typeof value === 'string').join(' ');
+    return !/failed a check|ran out of time|time-?out|policy/i.test(words);
+  });
+}
+
 /** The heading a blocked run's card shows. The steps page leads with the same words. */
 export function askBlockedHeading(run: AgentRun): string {
-  return askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : askFailureOrigin(run) === 'no_data' ? 'No matching data' : 'Couldn’t run this query';
+  if (askNeedsAiProvider(run)) return ASK_NEEDS_AI_PROVIDER_HEADING;
+  if (askFailureOrigin(run) === 'no_data') return 'No matching data';
+  return askRunIsDataGap(run) ? 'Not in this data' : 'Couldn’t run this query';
 }
 
 export interface AskRunNoAnswer {
   kind: 'blocked' | 'cancelled' | 'clarify';
   heading: string;
   text?: string;
+  /** The data does not hold what was asked: an answer about the data, shown calmly (no error colour). */
+  dataGap?: boolean;
 }
 
 /**
@@ -3147,7 +3214,18 @@ export function askRunNoAnswer(run: AgentRun): AskRunNoAnswer | undefined {
   if (run.status !== 'blocked') return undefined;
   const answer = acceptedAskAnswer(run);
   const text = answer ? cleanAnswerText(withoutConfigHints(answer)) : cleanPresentationText(askFailureDetail(run) ?? '');
-  return { kind: 'blocked', heading: askBlockedHeading(run), ...(text ? { text } : {}) };
+  return { kind: 'blocked', heading: askBlockedHeading(run), ...(text ? { text } : {}), ...(askRunIsDataGap(run) ? { dataGap: true } : {}) };
+}
+
+/**
+ * How many checks an answer's badge says passed. A run the Ask pipeline answered counts the checks "How it was
+ * answered" lists for its last attempt, so the badge, the steps page and the Checks tab agree (V12: the badge
+ * said "4 checks passed" over a list of 3). Other runs count their passed evaluations.
+ */
+export function askAnswerPassedChecks(run: Pick<AgentRun, 'diagnosticReceiptV9' | 'artifacts' | 'evaluations' | 'status'>): number {
+  const receipt = askPipelineReceiptOf(run);
+  if (receipt) return passedCheckCount(explainAskRun({ receipt, payload: askRunAnswerPayload(run), evaluations: run.evaluations, status: run.status }));
+  return run.evaluations.filter((evaluation) => evaluation.severity === 'info').length;
 }
 
 /** The answer payload "How it was answered" reads: the artifact that carries the run's record, else the first. */
@@ -3212,6 +3290,8 @@ function AskRunCard(props: AskRunCardProps) {
   const blocked = run.status === 'blocked';
   const cancelled = run.status === 'cancelled' || run.stopReason === 'cancelled' || run.route === 'cancelled';
   const needsClarification = run.status === 'needs_clarification';
+  // The data does not hold what was asked: said calmly, as the answer it is.
+  const dataGap = blocked && askRunIsDataGap(run);
   // A clarify turn's `answer` IS the question being asked, and a blocked run's
   // `answer` is the business-language reason the loop wrote. Dropping both left
   // the user with a canned headline and nothing actionable underneath.
@@ -3249,7 +3329,7 @@ function AskRunCard(props: AskRunCardProps) {
   const primaryArtifact = inlineResultArtifacts[0] ?? chipArtifacts[0] ?? displayArtifacts[0];
   const researchArtifact = displayArtifacts.find((artifact) => artifact.kind === 'research_run');
   const researchVerdicts = researchVerdictSummaryForRun(run);
-  const passedChecks = researchVerdicts ? 0 : run.evaluations.filter((e) => e.severity === 'info').length;
+  const passedChecks = researchVerdicts ? 0 : askAnswerPassedChecks(run);
 
   // Reuse RunCard's action gating so the quiet row offers the same real actions.
   const pinnable = isAgentRunPinnable(run);
@@ -3259,7 +3339,8 @@ function AskRunCard(props: AskRunCardProps) {
   const hasResearchAction = run.nextActions.some((a) => a.route === 'research');
   const showResearchDeeper = isAnswer && pinnable && !hasResearchAction;
   const sourceArtifact = answerDqlArtifactFromRun(run);
-  const canSaveBlock = mayAuthorBlocks && pinnable && !sourceArtifact?.sourcePath && Boolean(sourceArtifact?.source ?? answerSqlFromRun(run));
+  // A certified answer already IS a certified saved query: nothing to save or certify (claims check, V12).
+  const canSaveBlock = !certified && mayAuthorBlocks && pinnable && !sourceArtifact?.sourcePath && Boolean(sourceArtifact?.source ?? answerSqlFromRun(run));
   const insertionPayload = (insertDqlActionLabel && onInsertDql) || (replaceDqlActionLabel && onReplaceDql)
     ? artifactReadyPayloadFromRun(run)
     : undefined;
@@ -3278,12 +3359,14 @@ function AskRunCard(props: AskRunCardProps) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
         {cancelled
           ? <Route size={14} color={t.textMuted} />
+          : dataGap
+          ? <Database size={14} color={t.textMuted} />
           : blocked
           ? <ShieldAlert size={14} color={t.error} />
           : certified
             ? <ShieldCheck size={14} color={t.success} />
             : <Sparkles size={14} color={t.accent} />}
-        <span style={{ fontSize: 12, fontWeight: 650, color: cancelled ? t.textMuted : blocked ? t.error : t.textSecondary }}>{outcomeLabel}</span>
+        <span style={{ fontSize: 12, fontWeight: 650, color: cancelled || dataGap ? t.textSecondary : blocked ? t.error : t.textSecondary }}>{outcomeLabel}</span>
         {certified && certifiedSource ? (
           <CertifiedBlockSource source={certifiedSource} t={t} />
         ) : certified && evidence[0] ? (
@@ -3367,7 +3450,7 @@ function AskRunCard(props: AskRunCardProps) {
               <ArtifactIcon kind={artifact.kind} />
             </span>
             <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-              <span style={{ fontSize: 12.5, fontWeight: 650, color: t.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cleanPresentationText(artifact.title)}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 650, color: t.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cleanPresentationText(answerCardTrustTitle(artifact.title))}</span>
               <span style={{ fontSize: 11, color: t.textMuted }}>{askArtifactMeta(artifact, payload)}</span>
             </span>
             <ChevronRight size={14} color={t.textMuted} style={{ flexShrink: 0, marginLeft: 6 }} />
@@ -3402,7 +3485,7 @@ function AskRunCard(props: AskRunCardProps) {
       <CitedDocuments run={run} t={t} />
 
       {/* What the run did, kept with the answer and replayable after a reload */}
-      <AskRunStory receipt={run.diagnosticReceiptV9} t={t} />
+      <AskRunStory receipt={run.diagnosticReceiptV9} t={t} run={run} />
 
       {/* RFC 0010 HH-9/HH-10: the host's review of this answer, or its actions for getting one. */}
       <HostAnswerActions run={run} t={t} />
@@ -3411,7 +3494,7 @@ function AskRunCard(props: AskRunCardProps) {
       {run.reviewDraft?.path ? (
         <div data-testid="ask-review-draft" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, color: t.textMuted, marginTop: -2, marginBottom: 4 }}>
           <span>
-            Saved for review as a draft saved query (not certified): <code style={{ fontFamily: t.fontMono, fontSize: 11 }}>{run.reviewDraft.path}</code>
+            Saved as a draft saved query for review (not certified): <code title={run.reviewDraft.path} style={{ fontFamily: t.fontMono, fontSize: 11, overflowWrap: 'anywhere' }}>{draftNameFromPath(run.reviewDraft.path)}</code>
             {run.reviewDraft.created ? '' : ` · asked ${run.reviewDraft.askedTimes} times`}
           </span>
           <button
@@ -5114,7 +5197,7 @@ function AskInspector({
   });
   const activeTab = tabs.some((x) => x.id === tab) ? tab : tabs[0].id;
 
-  const badgeLabel = cancelled ? 'Cancelled' : blocked ? 'Blocked' : certified ? 'Certified' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'From Metrics' : investigationReport ? 'Review required' : isAppViewPayload(payload) ? 'Needs review' : 'AI-generated';
+  const badgeLabel = cancelled ? 'Cancelled' : blocked ? 'Blocked' : certified ? 'Certified' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'From Metrics' : investigationReport ? 'Review required' : 'AI-generated';
   const badgeColor = cancelled ? 'var(--text-tertiary)' : blocked ? 'var(--status-error)' : certified ? 'var(--status-success)' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'var(--accent)' : 'var(--status-warning)';
   const badgeBg = cancelled ? 'var(--bg-3)' : blocked ? 'var(--status-error-bg)' : certified ? 'var(--status-success-bg)' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'var(--accent-dim)' : 'var(--status-warning-bg)';
 
@@ -5138,7 +5221,7 @@ function AskInspector({
       {/* Action row */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
         {pinnable ? <AddToAppButton run={run} t={t} appContext={appContext} onOpenApp={onOpenApp} /> : null}
-        {pinnable && mayAuthorBlocks ? (
+        {pinnable && mayAuthorBlocks && !certified ? (
           <button type="button" className="dql-hover" onClick={onSaveBlock} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 13px', borderRadius: 8, border: '1px solid var(--border-default)', background: 'var(--bg-2)', color: t.textSecondary, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: t.font }}>
             <Blocks size={13} /> Save as saved query
           </button>
@@ -5188,7 +5271,7 @@ function AskInspector({
           dqlArtifact?.source ? (
             <>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <span style={{ fontSize: 11, color: t.textMuted }}>Reusable governed artifact — save it as a saved query to certify.</span>
+                <span style={{ fontSize: 11, color: t.textMuted }}>{certified ? 'The certified saved query this answer ran.' : 'Save it as a saved query to review and certify it.'}</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {onInsertDql ? (
                     <button
