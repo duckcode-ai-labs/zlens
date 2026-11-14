@@ -360,7 +360,8 @@ jobs:
       # on first start with one connection that signs in with the service token and names no account.
       - name: first start inside Snowflake writes its connection
         run: |
-          session=$(mktemp -d) && echo ci-not-a-real-token > "$session/token" && chmod 644 "$session/token"
+          # Readable by the image's uid 1000, as Snowflake's /snowflake/session/token is (mktemp -d is 0700).
+          session=$(mktemp -d) && chmod 755 "$session" && echo ci-not-a-real-token > "$session/token" && chmod 644 "$session/token"
           docker volume create zlens-ci-first-start
           docker run --rm -v "$session:/snowflake/session:ro" -v zlens-ci-first-start:/workspace \
             -e SNOWFLAKE_HOST=example.snowflakecomputing.com -e ZLENS_SNOWFLAKE_WAREHOUSE=APP_WH \
