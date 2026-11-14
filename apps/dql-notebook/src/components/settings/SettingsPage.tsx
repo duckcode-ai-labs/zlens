@@ -246,13 +246,19 @@ export function ConnectionRuntimeSettings({
           {section === 'advanced' && (
             <>
               <section>
-                <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
-                <McpConnectionsEditor
-                  settings={mcpSettings}
-                  t={t}
-                  onChange={setMcpSettings}
-                  onStatus={setStatus}
-                />
+                {mcpSettings.noEgress || isSnowflakeApp() ? (
+                  <NoOutsideConnections t={t} />
+                ) : (
+                  <>
+                    <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
+                    <McpConnectionsEditor
+                      settings={mcpSettings}
+                      t={t}
+                      onChange={setMcpSettings}
+                      onStatus={setStatus}
+                    />
+                  </>
+                )}
               </section>
               <section style={{ marginTop: 22 }}>
                 <SectionTitle title="Runtime status" detail="Environment variables remain supported for Docker, CI, and shell-based setup." t={t} />
@@ -272,13 +278,19 @@ export function ConnectionRuntimeSettings({
             </summary>
             <div style={{ padding: '4px 16px 18px' }}>
               <section style={{ marginTop: 14 }}>
-                <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
-                <McpConnectionsEditor
-                  settings={mcpSettings}
-                  t={t}
-                  onChange={setMcpSettings}
-                  onStatus={setStatus}
-                />
+                {mcpSettings.noEgress || isSnowflakeApp() ? (
+                  <NoOutsideConnections t={t} />
+                ) : (
+                  <>
+                    <SectionTitle title="MCP servers and connectors" detail="Remote MCP servers can be attached to OpenAI and Claude SDK chat. OpenAI hosted connectors are OpenAI-only." t={t} />
+                    <McpConnectionsEditor
+                      settings={mcpSettings}
+                      t={t}
+                      onChange={setMcpSettings}
+                      onStatus={setStatus}
+                    />
+                  </>
+                )}
               </section>
 
               <section style={{ marginTop: 22 }}>
@@ -575,6 +587,21 @@ function McpConnectionsEditor({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Without internet access (ZLENS_NO_EGRESS, as in the ZLens app for Snowflake) nothing can be attached: no MCP
+ * server and no hosted connector. The server refuses them too, so the page matches what the install can do.
+ */
+function NoOutsideConnections({ t }: { t: Theme }) {
+  return (
+    <>
+      <SectionTitle title="Outside connections" detail="MCP servers and hosted connectors." t={t} />
+      <div role="note" style={{ border: '1px solid var(--border-subtle)', borderRadius: 10, background: t.cellBg, padding: '11px 13px', fontSize: 12.5, lineHeight: 1.55, color: t.textSecondary }}>
+        This install has no internet access, so it connects to no MCP servers or hosted connectors. Everything ZLens uses runs inside it.
+      </div>
+    </>
   );
 }
 

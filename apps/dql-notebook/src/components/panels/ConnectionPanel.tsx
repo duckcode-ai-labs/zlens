@@ -49,6 +49,7 @@ import {
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
 import { AppearanceSettings } from '../settings/AppearanceSettings';
+import { connectionValueText } from './connection-values';
 import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 export interface ConnectionInfo {
@@ -854,7 +855,7 @@ export function ConnectionPanel({
                     <div key={k} style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
                       <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.fontMono, minWidth: 70, flexShrink: 0 }}>{k}</span>
                       <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-                        {isSensitiveField(k) ? '••••••••' : String(v)}
+                        {isSensitiveField(k) ? '••••••••' : connectionValueText(v, snowflakeApp)}
                       </span>
                     </div>
                   ))}

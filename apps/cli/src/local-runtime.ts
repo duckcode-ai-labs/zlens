@@ -64,7 +64,7 @@ import {
 } from "./mixed-source-sql.js";
 import { resolveNpmInvocation } from './npm-runtime.js';
 import { allowedOllamaEndpoint, OLLAMA_ENDPOINT_REFUSED, savedOllamaEndpoint } from './ollama-endpoint.js';
-import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, NO_EGRESS_DBT_CLOUD_REASON, NO_EGRESS_METRICFLOW_REASON } from './deployment-locks.js';
+import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, NO_EGRESS_DBT_CLOUD_REASON, NO_EGRESS_METRICFLOW_REASON, noEgressRepositoryRefusal } from './deployment-locks.js';
 import { ZLENS_FAVICON_SVG } from './brand-page.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, withSnowflakeUser, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
@@ -15943,7 +15943,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (req.method === 'POST' && path === '/api/onboarding/dbt/preview') {
       const requestId = apiRequestId('onboarding-dbt-preview');
       try {
-        const preview = previewDbtOnboarding(await readJSON(req) as Record<string, unknown>);
+        const body = await readJSON(req) as Record<string, unknown>;
+        // Without internet access a dbt project is a folder on this install, never a Git repository to clone.
+        const offlineRefusal = noEgressRepositoryRefusal(body);
+        if (offlineRefusal) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'PERMISSION_DENIED', message: offlineRefusal, nextActions: ['Enter a project folder on this install.'] })));
+          return;
+        }
+        const preview = previewDbtOnboarding(body);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ requestId, ...preview }));
       } catch (error) {
@@ -15959,6 +15967,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       try {
         const applyStartedAt = Date.now();
         const body = await readJSON(req) as Record<string, unknown>;
+        const offlineRefusal = noEgressRepositoryRefusal(body);
+        if (offlineRefusal) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'PERMISSION_DENIED', message: offlineRefusal, nextActions: ['Enter a project folder on this install.'] })));
+          return;
+        }
         let preview;
         try {
           preview = previewDbtOnboarding(body);
@@ -20911,7 +20925,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
     if (req.method === 'GET' && path === '/api/settings/mcp') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ settings: listRemoteMcpSettings(projectRoot) }));
+      // Without internet access there is nothing to attach: the page says so instead of offering the forms.
+      res.end(serializeJSON({ settings: { ...listRemoteMcpSettings(projectRoot), ...(noEgress() ? { noEgress: true } : {}) } }));
       return;
     }
 
@@ -31104,6 +31119,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (req.method === 'POST' && path === '/api/semantic-layer/import') {
       try {
         const body = await readJSON(req);
+        const offlineRefusal = noEgressRepositoryRefusal(body);
+        if (offlineRefusal) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: offlineRefusal, code: 'PERMISSION_DENIED' }));
+          return;
+        }
         const provider = body.provider as 'dbt' | 'cubejs' | 'snowflake';
         if (provider !== 'dbt' && provider !== 'cubejs' && provider !== 'snowflake') {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -31207,6 +31228,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (req.method === 'POST' && path === '/api/semantic-layer/import-preview') {
       try {
         const body = await readJSON(req);
+        const offlineRefusal = noEgressRepositoryRefusal(body);
+        if (offlineRefusal) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: offlineRefusal, code: 'PERMISSION_DENIED' }));
+          return;
+        }
         const provider = body.provider as 'dbt' | 'cubejs' | 'snowflake';
         if (provider !== 'dbt' && provider !== 'cubejs' && provider !== 'snowflake') {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });

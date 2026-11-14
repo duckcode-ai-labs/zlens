@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
 import { startLocalServer } from './local-runtime.js';
-import { deploymentLockRefusal } from './deployment-locks.js';
+import { deploymentLockRefusal, noEgressRepositoryRefusal } from './deployment-locks.js';
+import { loadKnowledgeServers, loadRemoteMcpServers } from './llm/mcp-config.js';
 import { testDbtCloudSemanticConnection } from './dbt-cloud-semantic.js';
 import { dispatchNotifications } from './schedule/notifiers/index.js';
 
@@ -116,5 +117,70 @@ describe('an install with no internet access', () => {
     const log = join(projectRoot, '.dql/runs/notifications.log');
     expect(existsSync(log)).toBe(true);
     expect(readFileSync(log, 'utf-8')).toContain('revenue');
+  });
+
+  it('reads no Git repository and reaches no Git remote; local Git work is unaffected', () => {
+    const offline = { ZLENS_NO_EGRESS: '1' };
+    for (const route of ['/api/git/remote', '/api/git/remote/connect-own', '/api/git/push', '/api/git/fetch', '/api/git/pull', '/api/git/review', '/api/git/review/open', '/api/git/send-as-branch']) {
+      expect(deploymentLockRefusal('POST', route, offline)).toMatch(/no internet access.*Git remote/);
+      expect(deploymentLockRefusal('POST', route, {})).toBeUndefined();
+    }
+    for (const local of ['/api/git/commit', '/api/git/stage', '/api/git/init', '/api/git/branch']) expect(deploymentLockRefusal('POST', local, offline)).toBeUndefined();
+    expect(deploymentLockRefusal('GET', '/api/git/remote', offline)).toBeUndefined();
+    expect(noEgressRepositoryRefusal({ repoUrl: 'https://github.com/org/analytics.git' }, offline)).toMatch(/cannot read a Git repository/);
+    expect(noEgressRepositoryRefusal({ projectDir: '.' }, offline)).toBeUndefined();
+    expect(noEgressRepositoryRefusal({ repoUrl: '  ' }, offline)).toBeUndefined();
+    expect(noEgressRepositoryRefusal({ repoUrl: 'https://github.com/org/analytics.git' }, {})).toBeUndefined();
+  });
+
+  it('the server refuses a Git repository for the dbt project and the semantic layer, and still previews a folder', async () => {
+    vi.stubEnv('ZLENS_NO_EGRESS', '1');
+    const { call } = await start();
+    for (const path of ['/api/onboarding/dbt/preview', '/api/onboarding/dbt/apply']) {
+      const refused = await call('POST', path, { repoUrl: 'https://github.com/org/analytics.git', fingerprint: 'x' });
+      expect(refused.status).toBe(403);
+      expect(JSON.stringify(refused.json)).toMatch(/cannot read a Git repository/);
+    }
+    for (const path of ['/api/semantic-layer/import', '/api/semantic-layer/import-preview']) {
+      const refused = await call('POST', path, { provider: 'dbt', repoUrl: 'https://github.com/org/analytics.git' });
+      expect(refused.status).toBe(403);
+      expect(refused.json.error).toMatch(/cannot read a Git repository/);
+    }
+    // A folder is not refused for being offline (this one is simply not a dbt project).
+    const folder = await call('POST', '/api/onboarding/dbt/preview', { projectDir: '.' });
+    expect(folder.status).not.toBe(403);
+    expect((await call('POST', '/api/git/push', {})).status).toBe(403);
+  });
+
+  it('attaches no MCP server or hosted connector: the page is told, saving is refused, saved ones are not used', async () => {
+    vi.stubEnv('ZLENS_NO_EGRESS', '1');
+    const { projectRoot, call } = await start();
+    expect(deploymentLockRefusal('POST', '/api/settings/mcp', { ZLENS_NO_EGRESS: '1' })).toMatch(/no MCP servers or hosted connectors/);
+    expect(deploymentLockRefusal('POST', '/api/settings/mcp', {})).toBeUndefined();
+    const settings = await call('GET', '/api/settings/mcp');
+    expect(settings.status).toBe(200);
+    expect(settings.json.settings.noEgress).toBe(true);
+    const save = await call('POST', '/api/settings/mcp', { entries: [{ kind: 'server', name: 'docs', url: 'https://mcp.example.com', enabled: true, trusted: true }] });
+    expect(save.status).toBe(403);
+    expect(save.json.error).toMatch(/no MCP servers/);
+    // A file saved before (or by hand) is ignored: nothing is handed to a provider or read by DQL's own client.
+    const { mkdirSync } = await import('node:fs');
+    const { dirname } = await import('node:path');
+    const { remoteMcpConfigPath } = await import('./llm/mcp-config.js');
+    const file = remoteMcpConfigPath(projectRoot);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({
+      servers: [
+        { name: 'chat', url: 'https://mcp.example.com', enabled: true, trusted: true },
+        { name: 'wiki', url: 'https://wiki.example.com/mcp', enabled: true, trusted: true, use: ['knowledge'] },
+      ],
+      connectors: [{ name: 'drive', connectorId: 'connector_googledrive', enabled: true, trusted: true }],
+    }));
+    expect(loadRemoteMcpServers(projectRoot, 'anthropic').servers).toEqual([]);
+    expect(loadRemoteMcpServers(projectRoot, 'openai').servers).toEqual([]);
+    expect(loadKnowledgeServers(projectRoot).servers).toEqual([]);
+    vi.stubEnv('ZLENS_NO_EGRESS', '0');
+    expect(loadRemoteMcpServers(projectRoot, 'anthropic').servers.map((server) => server.name)).toEqual(['chat']);
+    expect(loadKnowledgeServers(projectRoot).servers.map((server) => server.id)).toEqual(['wiki']);
   });
 });

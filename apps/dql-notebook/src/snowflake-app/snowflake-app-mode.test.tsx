@@ -120,3 +120,14 @@ describe('words for the app for Snowflake', () => {
     expect(text).not.toMatch(/this machine|this computer/);
   });
 });
+
+describe('connection details in Settings › Database', () => {
+  it('never shows a raw ${...} template', async () => {
+    const { connectionValueText } = await import('../components/panels/connection-values');
+    expect(connectionValueText('${SNOWFLAKE_ACCOUNT}', true)).toBe('Set by Snowflake');
+    expect(connectionValueText('${SNOWFLAKE_HOST}', true)).toBe('Set by Snowflake');
+    expect(connectionValueText('${SNOWFLAKE_ACCOUNT}', false)).toBe('From SNOWFLAKE_ACCOUNT in the environment');
+    expect(connectionValueText('NBA', true)).toBe('NBA');
+    expect(connectionValueText(42, false)).toBe('42');
+  });
+});

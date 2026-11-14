@@ -189,7 +189,8 @@ listings, shares or external access integrations.
   the Configurations tab. There is no other way in.
 - **Internet.** None. The app asks for no external access integration, and ZLens runs with downloads,
   installs and update checks turned off: everything it runs is in the app's image, and it loads no code or
-  models at run time. It calls no outside service (no dbt Cloud; no Slack, email or webhook deliveries).
+  models at run time. It calls no outside service (no dbt Cloud, no Git repository, no MCP servers or
+  hosted connectors; no Slack, email or webhook deliveries).
   Nothing is sent to the app's provider.
 - **Your data.** ZLens reads table and column descriptions and runs read-only queries, as the app, on only
   the database you granted, with its own warehouse. Every query carries a `QUERY_TAG` and shows in your `QUERY_HISTORY`.

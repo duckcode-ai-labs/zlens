@@ -4171,6 +4171,8 @@ export interface RemoteMcpSettings {
   path: string;
   entries: RemoteMcpEntry[];
   warnings: string[];
+  /** The install has no internet access (ZLENS_NO_EGRESS): no MCP server or hosted connector can be attached. */
+  noEgress?: boolean;
 }
 
 export interface AgentMemory {
