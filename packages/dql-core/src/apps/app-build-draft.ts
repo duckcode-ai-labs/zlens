@@ -244,18 +244,78 @@ export type AppBuildDraftOperation =
 /** The longest App name drawn from a description; the author can rename it. */
 export const APP_NAME_FROM_GOAL_MAX = 60;
 
+/** Words a name never ends on: a name cut after one reads as a sentence cut off ("… did in"). */
+const NAME_TAIL_WORDS = new Set([
+  'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'from', 'for', 'with', 'by', 'and', 'or', 'but', 'as', 'did', 'do',
+  'does', 'how', 'what', 'which', 'who', 'each', 'every', 'per', 'vs', 'versus', 'their', 'its', 'our', 'my', 'your',
+  'is', 'are', 'was', 'were', 'that', 'than', 'into', 'over', 'across', 'between', 'about', 'see', 'show', 'shown',
+]);
+/** How a request starts before it says what it is about: "Help a Warriors fan see how …", "Show me …". */
+const NAME_LEAD_INS = [
+  /^(?:please\s+)?help\s+(?:\S+\s+){0,4}?(?:see|understand|track|follow|know|check|review|explore|monitor|compare|find)\s+/i,
+  /^(?:please\s+)?(?:show|give|tell)\s+(?:me|us|them)\s+/i,
+  /^(?:please\s+)?show\s+/i,
+  /^(?:please\s+)?(?:build|create|make|design)\s+(?:me\s+|us\s+)?(?:a|an)\s+(?:\S+\s+){0,2}?(?:dashboard|app|page|report|view)\s+(?:that\s+shows|showing|for|of|about|on|with|to\s+(?:show|see|track))\s+/i,
+  /^I\s+(?:want|need|would\s+like)\s+(?:to\s+)?(?:see|know|track|understand|follow)\s+/i,
+  /^(?:how|what|which|where|when|who)\s+/i,
+  /^(?:the|a|an)\s+/i,
+];
+
+/** The text without any of these characters at its end. A loop, not a regular expression: linear on any input. */
+function trimEndOf(text: string, characters: string): string {
+  let end = text.length;
+  while (end > 0 && (characters.includes(text[end - 1]!) || /\s/.test(text[end - 1]!))) end -= 1;
+  return text.slice(0, end);
+}
+
+/** Where a long line's first clause ends: ":", ";", ". ", " – ", or ", with" and the like; -1 when it has none. */
+function firstClauseEnd(line: string): number {
+  const ends = [line.indexOf(':'), line.indexOf(';'), line.indexOf('. '), line.indexOf(' – '), line.indexOf(' — '), line.indexOf(' - ')];
+  const comma = /, (?=(?:with|showing|including|and|so|plus)\b)/.exec(line);
+  if (comma) ends.push(comma.index);
+  const found = ends.filter((index) => index > 0);
+  return found.length ? Math.min(...found) : -1;
+}
+
+/** The name's words, never ending on a word that needs more after it, nor on a comma or a colon. */
+function withoutDanglingTail(text: string): string {
+  const words = trimEndOf(text, ',;:.-–—').split(' ');
+  while (words.length > 1 && NAME_TAIL_WORDS.has(words[words.length - 1]!.toLowerCase().replace(/[^a-z]/g, ''))) words.pop();
+  return trimEndOf(words.join(' '), ',;:.-–—(');
+}
+
 /**
- * An App name from what the App is for: the first line of the description,
- * at most 60 characters, cut at a word where it can be. A whole paragraph is
- * not a name.
+ * An App name from what the App is for: a full short title, never a sentence cut off (V12: "Help a Warriors
+ * fan see how the Golden State Warriors did in"). The first line of the description, at most 60 characters:
+ * its first clause when the line is longer, without the request's lead-in ("Help a Warriors fan see how
+ * the"), "did in each season" read as "by season", and never ending on a word like "in" or "the".
  */
 export function appNameFromGoal(goal: string | undefined | null, max = APP_NAME_FROM_GOAL_MAX): string {
-  const firstLine = String(goal ?? '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
-  if (firstLine.length <= max) return firstLine;
-  const cut = firstLine.slice(0, max + 1);
-  const atWord = cut.lastIndexOf(' ');
-  const name = (atWord >= Math.floor(max / 2) ? cut.slice(0, atWord) : firstLine.slice(0, max)).replace(/[\s,;:.\-–—]+$/, '');
-  return name;
+  // Bounded: a name is read from the first 1,000 characters of a description.
+  const firstLine = String(goal ?? '').slice(0, 1000).split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  if (!firstLine) return '';
+  let name = firstLine;
+  // A long line is named by its first clause: what comes before ": the details".
+  if (name.length > max) {
+    const end = firstClauseEnd(name);
+    const clause = end > 0 ? name.slice(0, end).trim() : name;
+    if (clause.split(' ').length >= 2) name = clause;
+  }
+  for (const leadIn of NAME_LEAD_INS) {
+    const rest = name.replace(leadIn, '');
+    if (rest !== name && rest.split(' ').length >= 2) name = rest;
+  }
+  name = name
+    .replace(/\b(?:did|do|does|performed|perform|fared|went|are\s+doing|is\s+doing|have\s+done|has\s+done)\s+(?:in\s+|over\s+|across\s+|during\s+)?(?:each|every)\s+(season|year|month|quarter|week|day|game)\b/i, 'by $1')
+    .replace(/ (?:from|between) (\d{4}) (?:to|and|through|-|–) (\d{4})\b/i, ', $1–$2');
+  name = trimEndOf(name, '.!?');
+  if (name.length > max) {
+    const cut = name.slice(0, max + 1);
+    const atWord = cut.lastIndexOf(' ');
+    name = atWord >= Math.floor(max / 2) ? cut.slice(0, atWord) : name.slice(0, max);
+  }
+  name = withoutDanglingTail(name);
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 export function createAppBuildDraft(input: {

@@ -73,6 +73,11 @@ export interface CellChartConfig {
   orientation?: 'vertical' | 'horizontal';
   /** Measures whose values are drawn as labels on their marks. */
   labelColumns?: string[];
+  /**
+   * `auto`: a bar chart with few bars writes each value on its bar unless its style says otherwise (App tiles,
+   * V12: "the regular-season figure is only a bar").
+   */
+  valueLabels?: 'auto';
   /** Extra measures shown in the tooltip. */
   tooltipColumns?: string[];
   /** A quiet last line in every tooltip, e.g. "Certified · Orders Dataset". */

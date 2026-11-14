@@ -63,6 +63,8 @@ const LIGHT: Tokens = { text: '#1a1a1a', muted: '#6b6e76', grid: '#f0eee9', axis
 const DARK: Tokens = { text: '#e6e8ee', muted: '#9aa0ae', grid: '#1e2330', axis: '#2c3240', surface: '#161a23', tooltip: '#1c212d', band: 'rgba(43,179,169,0.12)' };
 const FONT = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const UNAVAILABLE = '—';
+/** The most bars (categories × series) whose values an App chart writes on its own. */
+export const AUTO_VALUE_LABEL_MAX_BARS = 24;
 
 /**
  * The ECharts option for one chart, built only from the result, the chart
@@ -173,7 +175,9 @@ function cartesianOption(
   const horizontal = config?.orientation && !isLine ? config.orientation === 'horizontal' : !isLine && !timeAxis;
   const categoryLabels = categories.map((value) => formatCategoryLabel(value, labelCol, 16));
 
-  const labelsMode = style.labels ?? 'none';
+  // An App's bar chart with few bars writes each value on its bar, unless its style chose labels (V12).
+  const autoLabels = !style.labels && config?.valueLabels === 'auto' && !isLine && categories.length * series.length <= AUTO_VALUE_LABEL_MAX_BARS;
+  const labelsMode = style.labels ?? (autoLabels ? 'all' : 'none');
   const lastIndex = categories.length - 1;
   const labelColumns = new Set(config?.labelColumns ?? []);
   const seriesOptions = series.map((entry, seriesIndex) => {
@@ -214,7 +218,8 @@ function cartesianOption(
         show: false,
         color: tokens.text,
         fontSize: 11,
-        position: (isLine ? 'top' : horizontal ? 'right' : 'top') as 'top' | 'right',
+        // A segment under another one in a stack has its value inside it, not on top of the next.
+        position: (isLine ? 'top' : stacked && !topOfStack ? 'inside' : horizontal ? 'right' : 'top') as 'top' | 'right' | 'inside',
         formatter: (params: { value: unknown }) => seriesFormat(Number(params.value)),
       },
     };

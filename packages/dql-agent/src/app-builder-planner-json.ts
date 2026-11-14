@@ -35,9 +35,11 @@ export function readPlannerJson(raw: string | undefined): PlannerJsonRead | unde
     if (looksLikeBrief(value)) return { value, truncated: false };
     fallback ??= value;
   }
-  // Cut off at the token limit: close the first object after its last complete value.
-  const start = text.indexOf('{');
-  if (start >= 0) {
+  // Cut off at the token limit: close the brief's object after its last complete value. The brief starts at
+  // the first object that opens with one of its keys; a sentence before it may hold braces of its own.
+  const briefStart = /\{\s*"(?:frame|requirements|components|pages)"\s*:/.exec(text)?.index;
+  const starts = Array.from(new Set([briefStart, text.indexOf('{')].filter((start): start is number => start !== undefined && start >= 0)));
+  for (const start of starts) {
     const closed = closeTruncatedJson(stripFence(text.slice(start)));
     const value = closed ? parseObject(closed) : undefined;
     if (value && looksLikeBrief(value)) return { value, truncated: true };

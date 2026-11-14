@@ -5,7 +5,7 @@ import type { AppBuildProposal, AppStudioBuildDraft } from '../../api/client';
 import { notebookStoreApi } from '../../store/NotebookStore';
 import { DARK } from '../../themes/notebook-theme';
 import { AppBuildProposalPanel, OPEN_IN_APP_STUDIO_LABEL } from './AppBuildProposalPanel';
-import { appStudioAiDataResume, openAppProposalInStudio } from './app-studio-handoff';
+import { appStudioAiDataResume, isEmptyAiDraft, openAppProposalInStudio } from './app-studio-handoff';
 import { appStudioUncoveredRequirements } from './app-studio-ai-plan';
 
 /** One AI engine for Apps (design D9): Ask and MCP builds open in App Studio at the AI Data step. */
@@ -77,6 +77,20 @@ describe('App Studio opens an AI draft with no pages built at the AI Data step',
     expect(appStudioAiDataResume(draft({ baseApp: { appId: 'sales', fingerprint: 'sha256:x' } }))).toBeNull();
     expect(appStudioAiDataResume(withTile(draft(), 'ask-123'))).toBeNull();
     expect(appStudioAiDataResume(draft({ state: 'project_published' }))).toBeNull();
+  });
+});
+
+// V12: every Describe with AI try that did not plan stayed in the Apps list as an empty App.
+describe('a Describe with AI draft left empty is not kept', () => {
+  it('is empty with only its intro and no data, and not once it has data, a tile or a second page, or is an edit', () => {
+    const empty = withTile(draft({ sources: [] }), 'template-introduction');
+    expect(isEmptyAiDraft(empty)).toBe(true);
+    expect(isEmptyAiDraft(draft({ sources: [] }))).toBe(true);
+    expect(isEmptyAiDraft(draft())).toBe(false);
+    const page = empty.pages[0]!;
+    expect(isEmptyAiDraft({ ...empty, pages: [{ ...page, layout: { ...page.layout, items: [...page.layout.items, { i: 'wins', x: 0, y: 2, w: 6, h: 3, viz: { type: 'bar' }, sourceId: 'app:block:nba:wins', query: { dimensions: [], measures: [{ measure: 'WINS' }] } }] } }] } as AppStudioBuildDraft)).toBe(false);
+    expect(isEmptyAiDraft({ ...empty, pages: [page, { ...page, id: 'details' }] } as AppStudioBuildDraft)).toBe(false);
+    expect(isEmptyAiDraft({ ...empty, baseApp: { appId: 'sales', fingerprint: 'sha256:x' } } as AppStudioBuildDraft)).toBe(false);
   });
 });
 

@@ -77,6 +77,22 @@ describe('buildVizOption (RFC 0008 step 4)', () => {
     expect(data[2]).toMatchObject({ value: 1.86, label: { show: true } });
   });
 
+  // V12: the tester's App drew "Regular Season" as a bare bar; its value was nowhere on the page.
+  it('writes each value on its bar in an App chart with few bars, unless its style chose labels', () => {
+    const app = buildVizOption({ chartType: 'bar', result: regions, themeMode: 'paper', config: { chart: 'bar', valueLabels: 'auto' } })!;
+    expect(series(app.option)[0].data).toEqual([1.86, 1.22, 0.78].map((value) => ({ value, label: { show: true } })));
+    // Not in other charts, not when the style says none, and not over many bars.
+    expect(series(buildVizOption({ chartType: 'bar', result: regions, themeMode: 'paper', config: { chart: 'bar' } })!.option)[0].data).toEqual([1.86, 1.22, 0.78]);
+    expect(series(buildVizOption({ chartType: 'bar', result: regions, themeMode: 'paper', config: { chart: 'bar', valueLabels: 'auto', style: { labels: 'none' } } })!.option)[0].data).toEqual([1.86, 1.22, 0.78]);
+    const many: QueryResult = { columns: ['day', 'n'], rows: Array.from({ length: 30 }, (_, index) => ({ day: `d${index}`, n: index })), rowCount: 30, executionTime: 1 };
+    expect(series(buildVizOption({ chartType: 'bar', result: many, themeMode: 'paper', config: { chart: 'bar', valueLabels: 'auto', maxItems: 50 } })!.option)[0].data[3]).toBe(3);
+    // A stack writes a lower segment's value inside it.
+    const stacked: QueryResult = { columns: ['season', 'regular', 'playoffs'], rows: [{ season: '2015', regular: 73, playoffs: 15 }], rowCount: 1, executionTime: 1 };
+    const [lower, upper] = series(buildVizOption({ chartType: 'stacked-bar', result: stacked, themeMode: 'paper', config: { chart: 'stacked-bar', valueLabels: 'auto' } })!.option);
+    expect([lower.label.position, upper.label.position]).toEqual(['inside', 'right']);
+    expect(lower.data[0]).toMatchObject({ value: 73, label: { show: true } });
+  });
+
   it('stacks series with rounding only on the top segment', () => {
     const result: QueryResult = {
       columns: ['quarter', 'web', 'app'],

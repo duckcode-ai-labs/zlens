@@ -52,6 +52,14 @@ describe('reading the App Builder planner reply', () => {
     expect(closeTruncatedJson('not json')).toBeUndefined();
   });
 
+  it('closes a cut-off brief after a sentence with braces and quotes of its own (V12)', () => {
+    const full = JSON.stringify(brief, null, 2);
+    const cut = `I read the cards {"sales", "nba"} and the request "wins by season" first.\n${full.slice(0, full.indexOf('"rationale"') + 14)}`;
+    const read = readPlannerJson(cut);
+    expect(read?.truncated).toBe(true);
+    expect(read?.value.requirements).toEqual(brief.requirements);
+  });
+
   it('reads nothing from a reply with no object', () => {
     expect(readPlannerJson('')).toBeUndefined();
     expect(readPlannerJson('not json')).toBeUndefined();

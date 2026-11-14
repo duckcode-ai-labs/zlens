@@ -104,7 +104,7 @@ import { CertifyReviewDialog } from './builder/CertifyReviewDialog';
 import { CertifyJoinDialog } from './builder/CertifyJoinDialog';
 import { certifyWords, type CertifyWords } from './builder/certify-words';
 import { useHostUi } from '../../host/host-ui';
-import { appStudioAiDataResume } from './app-studio-handoff';
+import { appStudioAiDataResume, isEmptyAiDraft } from './app-studio-handoff';
 import {
   FIELD_TILES_OFF_MESSAGE,
   appDataItems,
@@ -551,7 +551,7 @@ function AppStudioAiActivitySurface({
         <strong id="studio-ai-activity-title">{voice === 'keywords' ? appStudioPlannerWords('keywords').errorTitle : 'The source proposal needs another try'}</strong>
         {/* Plain words; the server's code stays under Technical details (new-user test V8, item 4). */}
         <small role="alert">{studioErrorWords(activity.error ?? 'App Studio could not prepare the source proposal.').message}</small>
-        {activity.error && studioErrorWords(activity.error).technical ? <details className="studio-error-technical"><summary>Technical details</summary><code>{activity.error}</code></details> : null}
+        {activity.error && studioErrorWords(activity.error).technical ? <details className="studio-error-technical"><summary>Technical details</summary><code>{studioErrorWords(activity.error).technical}</code></details> : null}
         <span className="studio-ai-activity-actions">{onReturn ? <button type="button" onClick={onReturn}>Back to source review</button> : null}<button type="button" className="primary" onClick={onRetry}>{appStudioPlannerWords(voice).retryLabel}</button></span>
       </>}
     </div>
@@ -650,6 +650,8 @@ export function AppStudioV2({
   const [aiPlanFallback, setAiPlanFallback] = useState<string | null>(null);
   /** Counts AI plan requests; a reply to an older one (left with Pick data myself) is ignored. */
   const aiPlanSequenceRef = useRef(0);
+  /** The Describe with AI draft this visit created or resumed; removed on leaving while it is still empty. */
+  const createdAiDraftIdRef = useRef<string | null>(null);
   const [sourceFeedback, setSourceFeedback] = useState<AppStudioSourceFeedback | null>(null);
   const [undoStack, setUndoStack] = useState<AppStudioBuildDraft[]>([]);
   const [redoStack, setRedoStack] = useState<AppStudioBuildDraft[]>([]);
@@ -823,6 +825,8 @@ export function AppStudioV2({
         // or a "Describe with AI" draft left early) opens at the AI Data step.
         const aiResume = appStudioAiDataResume(selected);
         if (aiResume) {
+          // Left again with nothing in it, it is removed like a new one (V12: Continue on an empty copy only planned it again).
+          if (!selected.baseApp) createdAiDraftIdRef.current = selected.id;
           setPrompt(aiResume.prompt);
           setStage('data');
           setAiDataFlow(true);
@@ -1087,6 +1091,7 @@ export function AppStudioV2({
       });
       setDraft(result.draft);
       setName(result.draft.name);
+      if (mode === 'ai' && !baseAppId) createdAiDraftIdRef.current = result.draft.id;
       setActivePageId(result.draft.pages[0]?.id ?? 'overview');
       setStage(initialStudioStage({ mode, resumingDraft: false, editingPublishedApp: Boolean(baseAppId) }));
       setAiDataFlow(mode === 'ai' && !baseAppId);
@@ -1284,7 +1289,23 @@ export function AppStudioV2({
   const latestDraftRef = useRef(draft);
   latestDraftRef.current = draft;
   // Back hands the library the draft as it is now: a new App is listed at once (round 3).
-  const goBack = () => onBack(latestDraftRef.current);
+  /**
+   * Leaving App Studio. A Describe with AI draft this visit made that still holds nothing (its plan failed or was
+   * never applied) is removed on the way out, to the trash: an empty App is not left in the list, where its
+   * Continue would plan it again (V12: eight such Apps with one name).
+   */
+  const goBack = () => {
+    const current = latestDraftRef.current;
+    if (current && createdAiDraftIdRef.current === current.id && isEmptyAiDraft(current)) {
+      createdAiDraftIdRef.current = null;
+      aiPlanSequenceRef.current += 1;
+      void api.deleteAppBuild(current.id, current.revision, current.proposalHash)
+        .catch(() => undefined)
+        .finally(() => onBack(null));
+      return;
+    }
+    onBack(current);
+  };
   // A tile just added, or the tile being built, is scrolled into view (round 3):
   // the author may be at the bottom of the page while it lands near the top.
   const pendingRevealRef = useRef<string | null>(null);
@@ -5397,6 +5418,8 @@ export function StudioTilePreview({
     ...(tile.viz.style ? { style: tile.viz.style, ...(tile.viz.style.palette ? { colorPalette: tile.viz.style.palette } : {}) } : {}),
     // So do its shelves (RFC 0009): axes, series, labels and tooltip.
     ...encodedChartConfig(tile),
+    // Values on the bars when there are few, as the reader shows them (V12).
+    valueLabels: 'auto',
   } as CellChartConfig;
   const shownResult = encodedTileResult(tile, run.result);
   // Above 50 categories a bar chart draws the top 25 until the author asks for all.

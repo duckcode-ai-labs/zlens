@@ -61,6 +61,17 @@ export function sourceSwitchWords(title: string, after: 'certified' | 'refresh')
 /** What App Studio says when Describe with AI could not plan an App (new-user test V8, item 4). */
 export const AI_PLAN_FAILED_WORDS = 'AI couldn’t plan this App this time. Pick the data yourself, or try AI again.';
 
+/** What App Studio says when the AI took longer than Describe with AI waits (V12: about 2 minutes, then a code). */
+export const AI_PLAN_TIMEOUT_WORDS = 'AI took too long to plan this App. Pick the data yourself, or try AI again.';
+
+/** Shown while Describe with AI is still planning after a while: a plan on Snowflake Cortex can take a minute or more. */
+export const AI_PLAN_STILL_WORKING_WORDS = 'Still planning. AI can take a minute or two here; ZLens stops waiting after 2 minutes.';
+
+/** An error's own words without its codes ("APP_BUILD_…:"), for Technical details. */
+export function withoutErrorCodes(text: string): string {
+  return text.replace(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+:\s*/g, '').replace(/\bthe configured App Builder provider\b/gi, 'the AI').trim();
+}
+
 export interface StudioErrorWords {
   /** One plain sentence a person can act on. */
   message: string;
@@ -69,6 +80,20 @@ export interface StudioErrorWords {
   /** Offer Refresh: the draft on screen is older than the saved one. */
   refresh?: boolean;
 }
+
+/** Technical details with no code in them (V12: Describe with AI showed "APP_BUILD_PLANNER_OUTPUT_INVALID: …"). */
+type PlainTechnical = (raw: string) => string | undefined;
+const PLAIN_TECHNICAL: Array<[RegExp, PlainTechnical]> = [
+  [/APP_BUILD_PLANNER_OUTPUT_INVALID/, () => 'The AI answered, but its reply was not a plan ZLens could read.'],
+  [/APP_BUILD_PLANNER_TIMEOUT/, (raw) => {
+    const seconds = /longer than (\d+) s/.exec(raw)?.[1];
+    return seconds ? `The AI did not answer within ${Math.round(Number(seconds) / 60) >= 2 ? `${Math.round(Number(seconds) / 60)} minutes` : `${seconds} seconds`}.` : 'The AI did not answer in time.';
+  }],
+  [/APP_BUILD_PLANNER_PROVIDER_FAILED/, (raw) => {
+    const reason = withoutErrorCodes(raw.replace(/^[\s\S]*?did not return a build brief\.\s*/, ''));
+    return reason ? `The AI provider said: ${reason}` : undefined;
+  }],
+];
 
 const STUDIO_ERROR_WORDS: Array<[RegExp, Omit<StudioErrorWords, 'technical'>]> = [
   [/APP_BUILD_(?:REVISION|PROPOSAL|PREVIEW_RECEIPT)_CONFLICT/, { message: CHANGED_IN_ANOTHER_TAB, refresh: true }],
@@ -84,6 +109,7 @@ const STUDIO_ERROR_WORDS: Array<[RegExp, Omit<StudioErrorWords, 'technical'>]> =
   [/APP_BUILD_(?:SOURCE|TILE)_NOT_IN_PROPOSAL/, { message: 'That AI suggestion changed. Review it again before adding it.' }],
   // Describe with AI (new-user test V8, item 4): never an error code on screen.
   [/APP_BUILD_PLANNER_OUTPUT_INVALID/, { message: AI_PLAN_FAILED_WORDS }],
+  [/APP_BUILD_PLANNER_TIMEOUT/, { message: AI_PLAN_TIMEOUT_WORDS }],
   [/APP_BUILD_PLANNER_PROVIDER_FAILED/, { message: 'The AI provider didn’t answer, so AI couldn’t plan this App. Pick the data yourself, or try AI again.' }],
 ];
 
@@ -96,7 +122,11 @@ const STUDIO_ERROR_WORDS: Array<[RegExp, Omit<StudioErrorWords, 'technical'>]> =
 export function studioErrorWords(raw: string): StudioErrorWords {
   const text = raw.trim();
   for (const [pattern, words] of STUDIO_ERROR_WORDS) {
-    if (pattern.test(text)) return { ...words, technical: text };
+    if (!pattern.test(text)) continue;
+    const plain = PLAIN_TECHNICAL.find(([code]) => code.test(text));
+    if (!plain) return { ...words, technical: text };
+    const technical = plain[1](text);
+    return technical ? { ...words, technical } : { ...words };
   }
   const coded = text.match(/^(.*?)\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+):\s*(.+)$/s);
   if (coded) {

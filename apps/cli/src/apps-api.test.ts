@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -46,6 +46,9 @@ import {
   appReadmeSourceData,
   rebindPublishedBlockPlaceholders,
   writeStoredAppBuildDraft,
+  removeEmptyAppCopies,
+  appIntroForReaders,
+  loadStoredAppBuildDraft,
 } from './apps-api.js';
 
 const tempDirs: string[] = [];
@@ -430,7 +433,7 @@ describe('Apps command center API helpers', () => {
       goal: 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders.\nA page for a sales manager.',
       authoringMode: 'ai',
     });
-    expect(draft.name).toBe('A weekly revenue dashboard: revenue by month, the top');
+    expect(draft.name).toBe('Weekly revenue dashboard');
     expect(draft.name.length).toBeLessThanOrEqual(60);
     expect(draft.frame.goal).toContain('A page for a sales manager.');
   });
@@ -485,14 +488,26 @@ describe('Apps command center API helpers', () => {
     const v8 = createStoredAppBuildDraft(root, { name: 'Warriors seasons', goal: 'Warriors seasons', authoringMode: 'ai' });
     publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, v8));
     const v8Edit = createStoredAppBuildDraft(root, { baseAppId: v8.appId, authoringMode: 'manual' });
-    // What V11 wrote: a new App's draft with the published App's id and name.
-    const collided = { ...createStoredAppBuildDraft(root, { name: 'Something else', authoringMode: 'ai' }), appId: v8.appId, name: 'Warriors seasons' };
+    // What V11 wrote: a new App's draft with the published App's id and name, holding the AI's tile.
+    const made = createStoredAppBuildDraft(root, { name: 'Something else', authoringMode: 'ai' });
+    const addTile: AppBuildDraftOperation[] = [{ type: 'add_tile', pageId: made.pages[0]!.id, tile: { i: 'wins', x: 0, y: 0, w: 6, h: 3, title: 'Wins by season', text: { markdown: 'Wins by season' }, viz: { type: 'text' } } }];
+    const withTile = applyAppBuildDraftOperations(made, made.revision, addTile);
+    writeStoredAppBuildDraft(root, withTile, { expectedRevision: made.revision, operations: addTile });
+    const collided = { ...withTile, appId: v8.appId, name: 'Warriors seasons' };
     const collidedStored = { ...collided, proposalHash: appBuildDraftHash({ ...collided, proposalHash: undefined }) };
+    // And an empty one: a try that never planned. It is not made an App (V12: six such "(2)"–"(7)" Apps).
+    const shell = { ...createStoredAppBuildDraft(root, { name: 'Empty try', goal: 'Warriors seasons by year', authoringMode: 'ai', template: 'operational_dashboard' }), appId: v8.appId, name: 'Warriors seasons' };
     const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
-    try { storage.saveAppBuildDraft(collidedStored); } finally { storage.close(); }
+    try {
+      storage.saveAppBuildDraft(collidedStored);
+      storage.saveAppBuildDraft({ ...shell, proposalHash: appBuildDraftHash({ ...shell, proposalHash: undefined }) });
+    } finally { storage.close(); }
 
     const listed = await invokeAppsApi(root, '/api/app-builds', 'GET', {});
     const drafts = (listed.payload as { drafts: AppBuildDraft[] }).drafts;
+    expect(drafts.some((draft) => draft.id === shell.id)).toBe(false);
+    expect(loadStoredAppBuildDraft(root, shell.id)).toBeNull();
+    expect(drafts.filter((draft) => /Warriors seasons \(\d+\)/.test(draft.name)).map((draft) => draft.id)).toEqual([collided.id]);
     expect(drafts.find((draft) => draft.id === collided.id)).toMatchObject({ appId: `${v8.appId}-2`, name: 'Warriors seasons (2)', revision: collided.revision + 1 });
     expect(drafts.find((draft) => draft.id === v8Edit.id)).toMatchObject({ appId: v8.appId, revision: v8Edit.revision, proposalHash: v8Edit.proposalHash });
     // Saved: the next list reads the same, and the moved draft can be published as its own App.
@@ -500,6 +515,73 @@ describe('Apps command center API helpers', () => {
     const moved = again.drafts.find((draft) => draft.id === collided.id)!;
     expect(moved).toMatchObject({ appId: `${v8.appId}-2`, revision: collided.revision + 1 });
     expect(publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, moved)).app.id).toBe(`${v8.appId}-2`);
+  });
+
+  // V12 report, Part 2 step 4: the upgrade showed "Help a Warriors fan see how the Golden State Warriors did in (2)"
+  // to "(7)", then (8) and (9) from two new tries. Only (6) held tiles (the V11 AI draft); (9) got a tile later.
+  // The empty ones restarted AI planning on Continue.
+  it('moves the empty "(n)" copies V12 made to the trash on upgrade, and keeps every copy with a tile or an edit', () => {
+    const root = createProject();
+    const v8Name = 'Help a Warriors fan see how the Golden State Warriors did in';
+    const v8Goal = 'Help a Warriors fan see how the Golden State Warriors did in each season from 2014 to 2018: regular-season wins and losses, and playoff wins, shown separately.';
+    const v8 = createStoredAppBuildDraft(root, { name: v8Name, goal: v8Goal, authoringMode: 'ai', template: 'operational_dashboard' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, v8));
+    const v8Edit = createStoredAppBuildDraft(root, { baseAppId: v8.appId, authoringMode: 'manual' });
+    // A copy as V12 stored it: the stock intro of the time, saved without an edit.
+    const copy = (n: number) => {
+      const made = createStoredAppBuildDraft(root, { name: `${v8Name} (${n})`, goal: v8Goal, authoringMode: 'ai', template: 'operational_dashboard' });
+      const page = made.pages[0]!;
+      const stock = { ...made, pages: [{ ...page, layout: { ...page.layout, items: page.layout.items.map((item) => ({ ...item, text: { markdown: `# ${v8Name}\n\nMonitor current performance, changes, and the details that require action.` } })) } }], revision: made.revision + 1 };
+      const stored = { ...stock, proposalHash: appBuildDraftHash({ ...stock, proposalHash: undefined }) };
+      const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+      try { storage.saveAppBuildDraft(stored); } finally { storage.close(); }
+      return stored;
+    };
+    const edit = (draft: AppBuildDraft, operations: AppBuildDraftOperation[]) => {
+      const next = applyAppBuildDraftOperations(draft, draft.revision, operations);
+      writeStoredAppBuildDraft(root, next, { expectedRevision: draft.revision, operations });
+      return next;
+    };
+    const copies = new Map([2, 3, 4, 5, 6, 7, 8, 9].map((n) => [n, copy(n)]));
+    const aiTile = (id: string) => ({ i: id, x: 0, y: 2, w: 6, h: 3, title: 'Warriors Wins by Season and Game Type', text: { markdown: 'Wins by season and game type' }, viz: { type: 'text' as const } });
+    edit(copies.get(6)!, [{ type: 'add_tile', pageId: copies.get(6)!.pages[0]!.id, tile: aiTile('ai-wins') }]);
+    edit(copies.get(9)!, [{ type: 'add_tile', pageId: copies.get(9)!.pages[0]!.id, tile: aiTile('certified-wins') }]);
+    // An edit with no tile (a renamed page) keeps a copy too.
+    const renamed = copies.get(7)!;
+    edit(renamed, [{ type: 'upsert_page', page: { ...renamed.pages[0]!, metadata: { ...renamed.pages[0]!.metadata, title: 'Seasons' } } }]);
+
+    const moved = removeEmptyAppCopies(root);
+    expect(moved.sort()).toEqual([2, 3, 4, 5, 8].map((n) => `${v8Name} (${n})`));
+    for (const n of [2, 3, 4, 5, 8]) expect(loadStoredAppBuildDraft(root, copies.get(n)!.id)).toBeNull();
+    for (const n of [6, 7, 9]) expect(loadStoredAppBuildDraft(root, copies.get(n)!.id)).not.toBeNull();
+    // The App they were copied from, published and with its own draft, is as it was.
+    expect(loadStoredAppBuildDraft(root, v8Edit.id)).toMatchObject({ appId: v8.appId, revision: v8Edit.revision });
+    expect(existsSync(join(root, 'apps', v8.appId, 'dql.app.json'))).toBe(true);
+    // In the trash, not gone: each can be restored.
+    const trash = join(root, '.dql', 'local', 'trash', 'app-drafts');
+    const recoveries = readdirSync(trash).map((dir) => JSON.parse(readFileSync(join(trash, dir, 'recovery.json'), 'utf-8')) as { draft: AppBuildDraft });
+    expect(recoveries.map((recovery) => recovery.draft.id).sort()).toEqual([2, 3, 4, 5, 8].map((n) => copies.get(n)!.id).sort());
+    // A second start finds nothing more to move.
+    expect(removeEmptyAppCopies(root)).toEqual([]);
+  });
+
+  it('opens a described App with an intro in the author\'s words, not a stock sentence (V12)', () => {
+    const root = createProject();
+    const goal = 'Help a Warriors fan see how the Golden State Warriors did in each season from 2014 to 2018: regular-season wins and losses, and playoff wins, shown separately.';
+    const draft = createStoredAppBuildDraft(root, { goal, authoringMode: 'ai', template: 'operational_dashboard' });
+    expect(draft.name).toBe('Golden State Warriors by season, 2014–2018');
+    expect(draft.pages[0]!.layout.items[0]!.text?.markdown).toBe(`# Golden State Warriors by season, 2014–2018\n\n${goal}`);
+    // No description: the template's sentence, until the page has tiles to say what it shows.
+    const manual = createStoredAppBuildDraft(root, { name: 'Warriors 2016 scoring', goal: 'A dashboard of live, checked numbers', authoringMode: 'manual', template: 'operational_dashboard' });
+    const intro = manual.pages[0]!.layout.items[0]!.text!;
+    expect(intro.markdown).toContain('Monitor current performance');
+    // A reader of a page with that stock sentence (the tester's V9 App) reads what the page shows instead.
+    const page = { metadata: { description: 'A dashboard of live, checked numbers' }, layout: { items: [{ text: intro, title: 'Intro' }, { title: 'POINTS PER GAME by game type' }, { title: 'POINTS PER GAME by game type' }, { title: 'Regular season wins' }] } };
+    expect(appIntroForReaders(intro, page).markdown).toBe('# Warriors 2016 scoring\n\nThis page shows POINTS PER GAME by game type and Regular season wins.');
+    expect(appIntroForReaders(intro, { ...page, metadata: { description: 'How the Warriors scored in the 2016 regular season and playoffs' } }).markdown)
+      .toBe('# Warriors 2016 scoring\n\nHow the Warriors scored in the 2016 regular season and playoffs.');
+    // An intro someone wrote is shown as written.
+    expect(appIntroForReaders({ markdown: '# Mine\n\nMy words.' }, page).markdown).toBe('# Mine\n\nMy words.');
   });
 
   it('keeps the unified manual draft local until atomic Publish to Project', () => {
@@ -2864,7 +2946,8 @@ describe('Apps command center API helpers', () => {
         { id: 'orders-kpi', title: 'Order count', sourceId: source.sourceId, requirementIds: ['orders'], role: 'kpi', view: 'kpi', rationale: 'Count', query: { dimensions: [], measures: [{ measure: 'order_count' }] } },
         // This valid revenue query cannot cover the distinct order-count
         // requirement merely because the source card advertises both fields.
-        { id: 'wrong-coverage', title: 'Order count', sourceId: source.sourceId, requirementIds: ['orders'], role: 'kpi', view: 'kpi', rationale: 'Wrong', query: { dimensions: [], measures: [{ measure: 'revenue' }] } },
+        // (A table, so it is not a repeat of the Revenue KPI, which would be dropped: V12.)
+        { id: 'wrong-coverage', title: 'Order count', sourceId: source.sourceId, requirementIds: ['orders'], role: 'kpi', view: 'table', rationale: 'Wrong', query: { dimensions: [], measures: [{ measure: 'revenue' }] } },
       ],
       pages: [
         { id: 'overview', title: 'Overview', componentIds: ['revenue-kpi', 'regional-revenue', 'wrong-coverage'], sections: [{ id: 'kpis', title: 'Key metrics', kind: 'kpi_band', componentIds: ['revenue-kpi', 'wrong-coverage'] }, { id: 'trend', title: 'Regional performance', kind: 'insight', componentIds: ['regional-revenue'] }] },

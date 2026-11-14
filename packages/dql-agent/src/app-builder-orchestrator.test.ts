@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, APP_BUILDER_TRUNCATED_PICKED_NOTE, deterministicDatasetQuery, plainPlannerText, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
+import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, APP_BUILDER_TRUNCATED_PICKED_NOTE, deterministicDatasetQuery, plainPlannerText, plannerTileQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
 import { savedQueryResultDescriptor, type AppBuildRequirement, type DatasetDescriptor } from '@zlens/core';
 
@@ -372,8 +372,10 @@ describe('App Builder orchestrator', () => {
     });
 
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(brief.components.map((component) => component.id)).toEqual(['revenue-kpi', 'monthly-revenue', 'customer-revenue', 'forged-margin', 'revenue-not-margin']);
-    expect(brief.components.map((component) => component.sourceId)).toEqual([candidate.sourceId, candidate.sourceId, candidate.sourceId, candidate.sourceId, candidate.sourceId]);
+    // "Revenue is not margin" shows the same numbers as the Revenue KPI: it is one tile (V12), which still does not claim margin.
+    expect(brief.components.map((component) => component.id)).toEqual(['revenue-kpi', 'monthly-revenue', 'customer-revenue', 'forged-margin']);
+    expect(brief.components.map((component) => component.sourceId)).toEqual([candidate.sourceId, candidate.sourceId, candidate.sourceId, candidate.sourceId]);
+    expect(brief.components.find((component) => component.id === 'revenue-kpi')?.requirementIds).toEqual(['revenue-kpi']);
     expect(brief.components.find((component) => component.id === 'monthly-revenue')?.query).toEqual({
       dimensions: [{ field: 'order_date', timeGrain: 'month' }], measures: [{ measure: 'revenue' }],
     });
@@ -381,7 +383,6 @@ describe('App Builder orchestrator', () => {
       dimensions: [], measures: [{ measure: 'margin' }],
     });
     expect(brief.components.find((component) => component.id === 'forged-margin')?.requirementIds).toEqual(['profit-margin']);
-    expect(brief.components.find((component) => component.id === 'revenue-not-margin')?.requirementIds).toEqual([]);
     expect(complete.mock.calls[0]?.[0].user).not.toContain(candidate.sourceRevision);
     expect(complete.mock.calls[0]?.[0].user).not.toContain('contractFingerprint');
   });
@@ -748,6 +749,120 @@ describe('AI plan for the V11 retest: splits, a dropped part of the request, and
       query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] },
     })]);
     expect(picked.warnings).toContain(APP_BUILDER_TRUNCATED_PICKED_NOTE);
+  });
+});
+
+describe('Describe with AI on Cortex (V12 retest: 0 of 3 plans, and plans that lost every tile query)', () => {
+  // The tester's saved queries: "Team Wins By Season" (every team, regular season) and "Warriors Wins By Game Type".
+  const teamWinsId = 'app:block:nba:team-wins-by-season';
+  const byGameTypeId = 'app:block:nba:warriors-wins-by-game-type';
+  const savedQuery = (sourceId: string, title: string, columns: Array<{ name: string; type: string }>, groupBy: string[]): AppSourceCatalogRecord => ({
+    ...source(sourceId, title, 'draft'),
+    domain: 'nba',
+    capabilities: {
+      measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [],
+      dataset: savedQueryResultDescriptor({
+        sourceId, sourceRevision: `sha256:${title}`, savedQuery: title, qualifiedId: `nba::block::${title}`,
+        lifecycle: 'draft', certified: false, typesFrom: 'probe', columns, groupBy,
+      })!,
+    },
+  });
+  const teamWins = savedQuery(teamWinsId, 'team_wins_by_season', [{ name: 'TEAM', type: 'VARCHAR' }, { name: 'SEASON', type: 'BIGINT' }, { name: 'WINS', type: 'BIGINT' }, { name: 'LOSSES', type: 'BIGINT' }], ['TEAM', 'SEASON']);
+  const byGameType = savedQuery(byGameTypeId, 'warriors_wins_by_game_type', [{ name: 'SEASON', type: 'BIGINT' }, { name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'WINS', type: 'BIGINT' }], ['SEASON', 'GAME_TYPE']);
+  const prompt = 'Help a Warriors fan see how the Golden State Warriors did in each season from 2014 to 2018: regular-season wins and losses, and playoff wins, shown separately.';
+  const requirements = [
+    { id: 'R1', question: 'How many regular-season wins and losses did the Warriors have each season from 2014 to 2018?', role: 'trend', required: true, measures: ['WINS', 'LOSSES'], dimensions: ['SEASON'], filters: ['TEAM', 'SEASON'] },
+    { id: 'R2', question: 'How many playoff wins did the Warriors have each season from 2014 to 2018?', role: 'trend', required: true, measures: ['WINS'], dimensions: ['SEASON', 'GAME_TYPE'], filters: ['GAME_TYPE', 'SEASON'] },
+  ];
+  const plan = (reply: unknown, input: Partial<Parameters<typeof planAppBuildBrief>[0]> = {}) => planAppBuildBrief({
+    prompt,
+    candidates: [teamWins, byGameType],
+    requiredSourceIds: [],
+    sourcePolicy: 'include_review_required',
+    complete: async () => (typeof reply === 'string' ? reply : JSON.stringify(reply)),
+    ...input,
+  });
+
+  it('reads the tile queries Cortex wrote with strings and "equals", so the tiles keep their filters and cover the request', async () => {
+    // What Cortex sent on the stand-in project (V12 build): every query refused for its shape, every tile a gap.
+    const brief = await plan({
+      frame: { goal: 'Warriors seasons 2014-2018' },
+      requirements,
+      components: [
+        { id: 'C1', title: 'Warriors Regular Season Wins & Losses by Season', sourceId: teamWinsId, requirementIds: ['R1'], role: 'trend', view: 'bar', rationale: 'Wins and losses per season.',
+          query: { measures: ['WINS', 'LOSSES'], dimensions: ['SEASON'], filters: [{ field: 'TEAM', op: 'equals', value: 'Warriors' }, { field: 'SEASON', op: 'between', value: [2014, 2018] }] } },
+        { id: 'C2', title: 'Warriors Playoff Wins by Season', sourceId: byGameTypeId, requirementIds: ['R2'], role: 'trend', view: 'bar', rationale: 'Playoff wins per season.',
+          query: { measures: ['WINS'], dimensions: ['SEASON'], filters: [{ field: 'GAME_TYPE', op: 'equals', value: 'Playoffs' }, { field: 'SEASON', operator: '>=', value: 2014 }] } },
+      ],
+      pages: [{ id: 'P1', title: 'Warriors seasons', componentIds: ['C1', 'C2'], sections: [] }],
+    });
+    expect(brief.components.map((component) => [component.id, component.query, component.requirementIds])).toEqual([
+      ['C1', { dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }, { measure: 'LOSSES' }], filters: [{ field: 'TEAM', op: 'eq', values: ['Warriors'] }, { field: 'SEASON', op: 'between', values: [2014, 2018] }] }, ['R1']],
+      ['C2', { dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }], filters: [{ field: 'GAME_TYPE', op: 'eq', values: ['Playoffs'] }, { field: 'SEASON', op: 'gte', values: [2014] }] }, ['R2']],
+    ]);
+    expect(brief.warnings.filter((warning) => /doesn't answer|covers only part/.test(warning)), brief.warnings.join(' | ')).toEqual([]);
+  });
+
+  it('keeps requirements and tiles whose role, view or filters are in other words, and a filter met by a split', async () => {
+    // V12 "Try AI again": "did not return grounded requirements" when every role read as something else.
+    const brief = await plan({
+      requirements: [
+        { ...requirements[1], role: 'comparison', filters: ['GAME_TYPE = Playoffs', 'SEASON between 2014 and 2018'] },
+      ],
+      components: [
+        { id: 'C1', title: 'Warriors Wins by Season and Game Type', sourceId: byGameTypeId, requirementIds: ['R2'], role: 'comparison', view: 'stacked_bar', rationale: 'Wins split by game type.',
+          query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] } },
+      ],
+    });
+    expect(brief.requirements[0]).toMatchObject({ id: 'R2', role: 'breakdown', filters: ['GAME_TYPE', 'SEASON'] });
+    expect(brief.components).toEqual([expect.objectContaining({ id: 'C1', role: 'breakdown', view: 'bar', requirementIds: ['R2'] })]);
+    expect(brief.warnings.filter((warning) => /doesn't answer|covers only part/.test(warning)), brief.warnings.join(' | ')).toEqual([]);
+    expect(plannerTileQuery({ measures: [{ name: 'WINS', aggregation: 'sum' }], groupBy: 'SEASON', filters: [{ column: 'TEAM', operator: 'in', values: ['Warriors', 'Lakers'] }], sql: 'select 1' }))
+      .toEqual({ dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }], filters: [{ field: 'TEAM', op: 'in', values: ['Warriors', 'Lakers'] }], sql: 'select 1' });
+  });
+
+  it('plans one tile for each thing it shows: a repeat is dropped and its questions move to the tile kept', async () => {
+    // V12: the tester's App showed "Max POINTS PER GAME" beside "POINTS PER GAME"; a plan here showed wins by season three times.
+    const bySeason = { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] };
+    const brief = await plan({
+      requirements: [requirements[1], { id: 'R3', question: 'How have the Warriors\' wins trended season by season?', role: 'trend', required: true, measures: ['WINS'], dimensions: ['SEASON'], filters: [] }],
+      components: [
+        { id: 'C1', title: 'Warriors Wins by Season', sourceId: byGameTypeId, requirementIds: ['R3'], role: 'trend', view: 'bar', rationale: 'Trend.', query: bySeason },
+        { id: 'C2', title: 'Wins: Regular Season vs Playoffs by Season', sourceId: byGameTypeId, requirementIds: ['R2'], role: 'breakdown', view: 'bar', rationale: 'Split.', query: bySeason },
+        { id: 'C3', title: 'Wins by season (exact)', sourceId: byGameTypeId, requirementIds: ['R2'], role: 'detail', view: 'table', rationale: 'The numbers.', query: bySeason },
+      ],
+    });
+    expect(brief.components.map((component) => [component.id, component.requirementIds])).toEqual([['C1', ['R3', 'R2']], ['C3', ['R2']]]);
+  });
+
+  it('asks again only when the first reply came back quickly, and stops waiting after its time with plain reasons', async () => {
+    // V12: two asks of about 62 s each, both unreadable, then a code after 2 minutes.
+    let clock = 0;
+    const slowUnreadable = vi.fn(async () => { clock += 62_000; return 'I will now plan the App: {first the seasons}'; });
+    await expect(plan(undefined, { complete: slowUnreadable, now: () => clock })).rejects.toThrow('APP_BUILD_PLANNER_OUTPUT_INVALID');
+    expect(slowUnreadable).toHaveBeenCalledTimes(1);
+
+    // A reply cut off before its tiles, after a slow first ask: its questions get data whose fields answer them.
+    clock = 0;
+    const cut = JSON.stringify({ requirements: [requirements[1]] }).slice(0, -1) + ', "components": [{"id": "C1", "title": "Warriors Wi';
+    const slowCut = vi.fn(async () => { clock += 62_000; return cut; });
+    const picked = await plan(undefined, { complete: slowCut, now: () => clock });
+    expect(slowCut).toHaveBeenCalledTimes(1);
+    expect(picked.components).toEqual([expect.objectContaining({ sourceId: byGameTypeId, requirementIds: ['R2'] })]);
+    expect(picked.warnings).toContain(APP_BUILDER_TRUNCATED_PICKED_NOTE);
+
+    // A reply that never comes: a plain time-out within the plan's time, not a wait without end.
+    const never = vi.fn(() => new Promise<string>(() => undefined));
+    await expect(plan(undefined, { complete: never, timeBudgetMs: 20 })).rejects.toThrow(/^APP_BUILD_PLANNER_TIMEOUT: the AI took longer than 0 s/);
+  });
+
+  it('tells the planner where the JSON starts, which keys come first, and the exact tile query shape', async () => {
+    const complete = vi.fn(async () => JSON.stringify({ requirements, components: [] }));
+    await plan(undefined, { complete });
+    const system = complete.mock.calls[0]![0].system;
+    expect(system).toContain('Start the reply with { and end it with }');
+    expect(system).toContain('requirements, components, pages, frame');
+    expect(system).toContain('{"dimensions":[{"field":"SEASON"}],"measures":[{"measure":"WINS"}],"filters":[{"field":"GAME_TYPE","op":"eq","values":["Playoffs"]}]}');
   });
 });
 

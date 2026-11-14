@@ -536,10 +536,25 @@ describe('appNameFromGoal', () => {
     const long = 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders. A page for a sales manager.';
     const name = appNameFromGoal(long);
     expect(name.length).toBeLessThanOrEqual(60);
-    expect(name).toBe('A weekly revenue dashboard: revenue by month, the top');
+    expect(name).toBe('Weekly revenue dashboard');
     expect(appNameFromGoal('x'.repeat(80))).toHaveLength(60);
     expect(appNameFromGoal('')).toBe('');
     expect(appNameFromGoal(undefined)).toBe('');
+  });
+
+  // V12: Describe with AI named the tester's Apps "Help a Warriors fan see how the Golden State Warriors did in".
+  it('is a full short title, never a sentence cut off', () => {
+    const v12 = 'Help a Warriors fan see how the Golden State Warriors did in each season from 2014 to 2018: regular-season wins and losses, and playoff wins, shown separately.';
+    expect(appNameFromGoal(v12)).toBe('Golden State Warriors by season, 2014–2018');
+    expect(appNameFromGoal('Help a Warriors fan see how the Golden State Warriors did in each season')).toBe('Golden State Warriors by season');
+    expect(appNameFromGoal('Show me revenue by month')).toBe('Revenue by month');
+    const cut = appNameFromGoal('Build a dashboard that shows revenue by region for the sales team and the trend of orders over the past twelve months');
+    expect(cut.length).toBeLessThanOrEqual(60);
+    expect(cut).toBe('Revenue by region for the sales team and the trend of orders');
+    for (const goal of [v12, 'Track the Lakers top rebounders in 2009 and compare them with the Celtics over the same seasons']) {
+      expect(appNameFromGoal(goal)).not.toMatch(/\b(?:in|the|of|to|and|from|did)$/i);
+    }
+    expect(appNameFromGoal('Warriors 2016 scoring')).toBe('Warriors 2016 scoring');
   });
 
   it('is the draft name when no name was given; a given name wins', () => {

@@ -106,6 +106,8 @@ export function mergeDashboardTileChartConfig(
     title: options.title ?? base?.title ?? item.title,
     colorPalette: options.colorPalette ?? item.viz.style?.palette ?? base?.colorPalette ?? 'dql',
     ...(item.viz.style ? { style: item.viz.style } : {}),
+    // Values on the bars of an App chart with few bars (V12), unless its style says otherwise.
+    valueLabels: 'auto',
   };
 }
 

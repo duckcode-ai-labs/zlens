@@ -98,6 +98,9 @@ export const APP_STUDIO_V2_STYLES = `
 .dql-studio-v2-loading small { color:var(--text-tertiary); font-size:13px; line-height:1.55; }
 .dql-studio-v2-loading > div > button { margin-top:7px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); padding:8px 12px; font-size:13px; font-weight:600; }
 .studio-ai-activity-label { min-height:18px; color:var(--accent) !important; font-size:14px !important; font-weight:600; }
+/* "Still planning…" appears after 30 s of a running plan (V12: plans on Cortex take a minute or more). */
+.data-step-slow { display:block; margin-top:6px; opacity:0; animation:data-step-slow-in .3s ease 30s forwards; }
+@keyframes data-step-slow-in { to { opacity:1; } }
 .studio-ai-activity-actions { display:flex; justify-content:center; flex-wrap:wrap; gap:7px; }
 .dql-studio-v2-loading .studio-ai-activity-actions > button { margin-top:7px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); padding:8px 12px; font-size:13px; font-weight:600; }
 .dql-studio-v2-loading .studio-ai-activity-actions > button.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-fg); }

@@ -82,3 +82,12 @@ export async function openAppProposalInStudio(input: {
   input.onOpenApp?.(result.draft.appId, undefined, result.draft.id);
   return { ok: true, draftId: result.draft.id, appId: result.draft.appId, name: result.draft.name };
 }
+
+/**
+ * A new App's draft that holds nothing yet: no data, and no tile but text (the template's intro) on at most one
+ * page. Describe with AI leaves one behind when its plan fails or is never applied (V12).
+ */
+export function isEmptyAiDraft(draft: Pick<AppStudioBuildDraft, 'baseApp' | 'sources' | 'pages'>): boolean {
+  if (draft.baseApp || (draft.sources ?? []).length > 0 || (draft.pages ?? []).length > 1) return false;
+  return (draft.pages ?? []).every((page) => (page.layout?.items ?? []).every((item) => Boolean(item.text) && !item.sourceId && !item.query));
+}
