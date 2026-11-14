@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { kpiRowsAreAverages, mergeDashboardTileChartConfig, normalizeDashboardChartType, summarizeDashboardKpiResult } from './dashboard-chart-config';
 import { autoLayoutDashboardItems } from './dashboard-layout';
 import { formatDashboardValue } from './dashboard-format';
-import { prepareStakeholderItems } from './dashboard-presentation';
+import { isRepeatedResultStakeholderTile, prepareStakeholderItems } from './dashboard-presentation';
 import { CHART_TYPE_OPTIONS } from '../output/ChartOutput';
 
 async function dashboardHelpers() {
@@ -526,6 +526,35 @@ describe('Dashboard visualization vocabulary and icons (UI-004)', () => {
     // The client has no renderer for these, so `table` is the honest fallback.
     expect(normalizeDashboardChartType('pivot')).toBe('table');
     expect(normalizeDashboardChartType('map')).toBe('table');
+  });
+});
+
+// V12: "Warriors 2016 scoring" showed "Max POINTS PER GAME by game type" beside "POINTS PER GAME by game type".
+describe('A reader sees a chart of the same numbers once', () => {
+  const ok = (columns: string[], rows: Array<Record<string, unknown>>) => ({ status: 'ok', result: { columns, rows, rowCount: rows.length, executionTime: 1 } });
+  const items = [
+    { i: 'intro', x: 0, y: 0, w: 12, h: 2, text: { markdown: '# Warriors 2016 scoring' }, viz: { type: 'text' } },
+    { i: 'max-ppg', x: 0, y: 2, w: 6, h: 4, sourceId: 'app:block:nba:ppg', title: 'Max POINTS PER GAME by game type', viz: { type: 'bar' } },
+    { i: 'ppg', x: 6, y: 2, w: 6, h: 4, block: { blockId: 'warriors_ppg_regular_vs_playoffs_2016' }, title: 'POINTS PER GAME by game type', viz: { type: 'bar' } },
+    { i: 'ppg-table', x: 0, y: 6, w: 12, h: 3, sourceId: 'app:block:nba:ppg', title: 'Points per game', viz: { type: 'table' } },
+    { i: 'wins', x: 0, y: 9, w: 6, h: 3, sourceId: 'app:block:nba:wins', title: 'Wins by game type', viz: { type: 'bar' } },
+  ];
+  const results = new Map<string, unknown>([
+    ['max-ppg', ok(['GAME_TYPE', 'max_points_per_game'], [{ GAME_TYPE: 'Playoffs', max_points_per_game: 119.2857142857 }, { GAME_TYPE: 'Regular Season', max_points_per_game: 115.8902439024 }])],
+    ['ppg', ok(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 115.8902439024 }, { GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }])],
+    ['ppg-table', ok(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }, { GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 115.8902439024 }])],
+    ['wins', ok(['GAME_TYPE', 'WINS'], [{ GAME_TYPE: 'Playoffs', WINS: 15 }, { GAME_TYPE: 'Regular Season', WINS: 67 }])],
+  ]);
+
+  it('hides the later chart whose rows are the same numbers, keeps a table of them, and closes the gap', () => {
+    const visible = prepareStakeholderItems(items as never, results as never, 12);
+    expect(visible.map((item) => item.i)).toEqual(['intro', 'max-ppg', 'ppg-table', 'wins']);
+    expect(isRepeatedResultStakeholderTile(items[2] as never, items as never, results as never)).toBe(true);
+    expect(isRepeatedResultStakeholderTile(items[4] as never, items as never, results as never)).toBe(false);
+    // Different numbers are never folded.
+    const other = new Map(results);
+    other.set('ppg', ok(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 110 }, { GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }]));
+    expect(prepareStakeholderItems(items as never, other as never, 12).map((item) => item.i)).toEqual(['intro', 'max-ppg', 'ppg', 'ppg-table', 'wins']);
   });
 });
 

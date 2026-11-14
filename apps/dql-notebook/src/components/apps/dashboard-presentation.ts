@@ -43,11 +43,45 @@ export function prepareStakeholderItems(
   const deduped = items.filter((item) => {
     return !isReviewRequiredAiPinStakeholderTile(item, tileResults.get(item.i))
       && !isRedundantStaticStakeholderTile(item, items, tileResults)
-      && !isDuplicateAiPinStakeholderTile(item, items, tileResults);
+      && !isDuplicateAiPinStakeholderTile(item, items, tileResults)
+      && !isRepeatedResultStakeholderTile(item, items, tileResults);
   });
   // The reader keeps the author's placement (RFC 0008 step 5). Hidden tiles
   // leave a gap, which settling closes; nothing is re-ranked.
   return settleGridLayout(deduped, cols);
+}
+
+/**
+ * A chart that shows exactly the numbers of a chart before it on the page (V12: the tester's "Warriors 2016
+ * scoring" showed "Max POINTS PER GAME by game type" beside "POINTS PER GAME by game type", the same two bars).
+ * A reader sees it once; the author still sees both while editing. A table beside a chart of the same numbers
+ * is kept: it is the exact figures, not a repeat.
+ */
+export function isRepeatedResultStakeholderTile(
+  item: DashboardLayoutItem,
+  items: DashboardLayoutItem[],
+  tileResults: Map<string, DashboardRunTile>,
+): boolean {
+  if (item.text || item.aiPin) return false;
+  const fingerprint = shownNumbersFingerprint(item, tileResults.get(item.i));
+  if (!fingerprint) return false;
+  const index = items.findIndex((candidate) => candidate.i === item.i);
+  return items.some((candidate, candidateIndex) => candidateIndex < index
+    && !candidate.text
+    && !candidate.aiPin
+    && shownNumbersFingerprint(candidate, tileResults.get(candidate.i)) === fingerprint);
+}
+
+/** The rows a tile shows, as values in column order whatever the columns are called, and whether it is a table. */
+function shownNumbersFingerprint(item: DashboardLayoutItem, tile?: DashboardRunTile): string | null {
+  if (tile?.status !== 'ok' || !tile.result) return null;
+  const rows = tile.result.rows ?? [];
+  const columns = tile.result.columns?.length ? tile.result.columns : Object.keys(rows[0] ?? {});
+  if (!rows.length || columns.length < 1 || !rows.some((row) => columns.some((column) => typeof row[column] === 'number'))) return null;
+  const value = (raw: unknown) => typeof raw === 'number' ? Number(raw.toPrecision(10)).toString() : canonicalStakeholderValue(raw);
+  const tuples = rows.map((row) => columns.map((column) => value(row[column])).join('\u0001')).sort();
+  const shape = item.viz?.type === 'table' ? 'table' : 'chart';
+  return `${shape}\u0002${columns.length}\u0002${tuples.join('\u0003')}`;
 }
 
 function isReviewRequiredAiPinStakeholderTile(item: DashboardLayoutItem, tile?: DashboardRunTile): boolean {

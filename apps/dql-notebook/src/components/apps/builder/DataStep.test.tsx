@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { AI_TRY_AGAIN, DataStep, PICK_DATA_MYSELF, type DataStepAiProps } from './DataStep';
-import { AI_PLAN_FAILED_WORDS } from '../app-studio-words';
+import { AI_PLAN_FAILED_WORDS, AI_PLAN_STILL_WORKING_WORDS, AI_PLAN_TIMEOUT_WORDS } from '../app-studio-words';
+import { StudioErrorBanner } from './studio-ui';
 import { DataPanel } from './DataPanel';
 import { AddDataBrowser, RemoveDataButton } from './AddDataBrowser';
 import { appDataItems, appDataSourceFromCandidate } from './app-data';
@@ -302,6 +303,25 @@ describe('AI Data step (design D3, AI path)', () => {
     expect(visible.join(' ')).not.toContain('APP_BUILD_PLANNER_OUTPUT_INVALID');
     expect(textOf(alert.props.children)).toContain(AI_PLAN_FAILED_WORDS);
     expect(markup).toContain('<summary>Technical details</summary>');
+    // V12: the code showed under Technical details. Not even there now, in the banner or the step.
+    expect(markup).not.toMatch(/APP_BUILD_|configured App Builder provider/);
+    expect(markup).toContain('The AI answered, but its reply was not a plan ZLens could read.');
+    const banner = renderToStaticMarkup(<StudioErrorBanner error={error} />);
+    expect(banner).not.toContain('APP_BUILD_');
+    expect(banner).toContain(AI_PLAN_FAILED_WORDS);
+  });
+
+  it('says plainly when AI took too long, and that it is still planning after a while (V12)', () => {
+    const timedOut = renderAi(aiProps({ status: 'error', activityError: 'APP_BUILD_PLANNER_TIMEOUT: the AI took longer than 120 s to plan this App.' })).markup;
+    expect(timedOut).toContain(AI_PLAN_TIMEOUT_WORDS);
+    expect(timedOut).toContain('The AI did not answer within 2 minutes.');
+    expect(timedOut).not.toContain('APP_BUILD_');
+    const provider = renderAi(aiProps({ status: 'error', activityError: 'APP_BUILD_PLANNER_PROVIDER_FAILED: the configured App Builder provider did not return a build brief. claude: 502 upstream' })).markup;
+    expect(provider).toContain('The AI provider said: claude: 502 upstream');
+    expect(provider).not.toContain('APP_BUILD_');
+    // While it plans, the step has a "still planning" line its style shows after 30 s.
+    const running = renderAi(aiProps({ status: 'running', model: undefined, pickedSources: [] })).markup;
+    expect(running).toContain(`<small class="data-step-slow">${AI_PLAN_STILL_WORKING_WORDS}</small>`);
   });
 
   it('keeps Pick data myself available while AI plans and after it failed, with Add to App and Build pages never disabled by a failure (new-user test V8, item 4)', () => {

@@ -693,6 +693,8 @@ import {
   prepareAppAutopilotChange,
   proposeAppAiBuild,
   recommendVisualization,
+  removeEmptyAppCopies,
+  appIntroForReaders,
   type AppBuildGeneratedAnswer,
   type AppAutopilotIntent,
   type AppContextEnvelopeV1,
@@ -5349,6 +5351,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // First, before any store opens and migrates itself forward: when another
   // ZLens version last opened this project, copy its state aside (upgrade-backups.ts).
   backUpOnVersionChange(projectRoot, runtimeVersion);
+  // Upgrade step (V13): the empty "… (2)"–"(n)" copies V12 made of one App go to the trash; anything with a tile or an edit stays.
+  try {
+    const moved = removeEmptyAppCopies(projectRoot);
+    if (moved.length) console.log(`ZLens: moved ${moved.length} empty copies of an App to the trash (${moved.join(', ')}). Nothing in them was made by anyone.`);
+  } catch (error) {
+    console.warn(`ZLens: could not check for empty App copies: ${error instanceof Error ? error.message : String(error)}`);
+  }
   // RFC 0010 HH-3/HH-4: with host query hooks, every statement the server
   // sends to a warehouse runs as the person's connection and passes the row
   // policy first — this one executor is the only path. With any host, a
@@ -23311,7 +23320,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               tileType: 'text',
               title: item.title,
               viz: item.viz,
-              text: item.text,
+              // A template's stock intro reads as the page's own (V12).
+              text: appIntroForReaders(item.text, loaded.dashboard),
             });
             continue;
           }

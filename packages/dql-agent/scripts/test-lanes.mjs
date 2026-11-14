@@ -209,10 +209,14 @@ const EXPECTED_TEST_FILES = 198;
 // 2878 with a slow reading keeping time for the SQL and saying when it ran out of time, a clause written as a
 // question asked as written (ask-pipeline/slow-reading.test.ts +4), and a stated name matched by either of its
 // parts (prepare/sql-checks.test.ts +1; V12).
-const EXPECTED_TESTS = 2878;
+// 2884 with Describe with AI reading the tile queries Cortex writes in other shapes, keeping near-word roles and
+// views, planning one tile for each thing it shows, waiting at most its time and asking again only after a quick
+// first reply, and telling the planner the exact JSON (app-builder-orchestrator.test.ts +5), and a cut-off brief
+// read after a sentence with braces of its own (app-builder-planner-json.test.ts +1; V12).
+const EXPECTED_TESTS = 2884;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2797.
+// The ordinary lane's share is the difference: 2803.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

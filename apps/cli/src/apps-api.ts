@@ -517,7 +517,20 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         return rebound;
       });
       // A new App's draft that took another App's id before V12 hid that App's own draft: it becomes its own App.
-      const drafts = separateNewAppDrafts(projectRoot, rebound, (draft, expectedRevision) => storage.saveAppBuildDraft(draft, { expectedRevision }));
+      const drafts = separateNewAppDrafts(
+        projectRoot,
+        rebound,
+        (draft, expectedRevision) => storage.saveAppBuildDraft(draft, { expectedRevision }),
+        (draft) => {
+          if (!isEmptyNewAppShell(draft, storage.listAppBuildOperations(draft.id).length)) return false;
+          try {
+            deleteStoredAppBuildDraft(projectRoot, draft);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      );
       sendJson(res, 200, { ok: true, drafts });
     } finally {
       storage.close();
@@ -7863,7 +7876,7 @@ export function createStoredAppBuildDraft(
     APP_SOURCE_POLICY,
     options,
   );
-  const pages = published.pages.length ? published.pages : [applyAppStudioTemplate(blankPage, template, name)];
+  const pages = published.pages.length ? published.pages : [applyAppStudioTemplate(blankPage, template, name, cleanString(input.goal))];
   const draft = createAppBuildDraft({
     id,
     appId,
@@ -8192,17 +8205,68 @@ export function addAskResultToAppBuildDraft(
   }
 }
 
+/** Descriptions App Studio sends when the author wrote none: not what the App is for. */
+const PLACEHOLDER_GOALS = new Set(['a dashboard of live, checked numbers', 'edit this governed app']);
+
+/**
+ * An App's intro in the author's own words (V12: every App opened with "Monitor current performance, changes,
+ * and the details that require action."): the description they gave, at most two sentences, or undefined when
+ * they gave none.
+ */
+export function appIntroFromGoal(goal: string): string | undefined {
+  const text = goal.replace(/\s+/g, ' ').trim();
+  if (!text || PLACEHOLDER_GOALS.has(text.toLowerCase()) || (/^create\s/i.test(text) && text.split(' ').length <= 6)) return undefined;
+  const sentences = text.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [text];
+  let intro = sentences.slice(0, 2).join('').trim();
+  if (intro.length > 320) {
+    const cut = intro.slice(0, 320);
+    intro = `${cut.slice(0, Math.max(cut.lastIndexOf(' '), 160)).replace(/[\s,;:]+$/, '')}…`;
+  }
+  intro = intro.charAt(0).toUpperCase() + intro.slice(1);
+  return /[.!?…]$/.test(intro) ? intro : `${intro}.`;
+}
+
+/**
+ * A template's stock intro as a reader sees it (V12: "Monitor current performance, changes, and the details that
+ * require action." on the tester's Apps): the page's own description when it has one, else what the page shows.
+ * An intro anyone wrote is shown as written.
+ */
+export function appIntroForReaders<T extends { markdown?: string }>(
+  text: T,
+  page: { metadata?: { description?: string }; layout: { items: Array<{ text?: unknown; title?: string }> } },
+): T {
+  const markdown = text.markdown ?? '';
+  const heading = /^#[^\n]*\n*/.exec(markdown)?.[0] ?? '';
+  const body = markdown.slice(heading.length).trim();
+  if (!(STOCK_INTRO_SENTENCES as readonly string[]).includes(body)) return text;
+  const description = page.metadata?.description?.trim() ?? '';
+  const own = description && !(STOCK_INTRO_SENTENCES as readonly string[]).includes(description) ? appIntroFromGoal(description) : undefined;
+  const seen = new Set<string>();
+  const titles = page.layout.items.flatMap((item) => {
+    const title = !item.text && typeof item.title === 'string' ? item.title.trim() : '';
+    const key = title.toLowerCase();
+    if (!title || seen.has(key)) return [];
+    seen.add(key);
+    return [title];
+  }).slice(0, 4);
+  const listed = titles.length <= 1 ? titles.join('') : `${titles.slice(0, -1).join(', ')} and ${titles.at(-1)}`;
+  const replacement = own ?? (listed ? `This page shows ${listed}.` : '');
+  return { ...text, markdown: `${heading}${replacement}`.trim() };
+}
+
 function applyAppStudioTemplate(
   page: DashboardDocument,
   template: 'executive_brief' | 'operational_dashboard' | 'investigation' | 'blank',
   appName: string,
+  goal?: string,
 ): DashboardDocument {
   if (template === 'blank') return page;
-  const intro = template === 'executive_brief'
-    ? `# ${appName}\n\nState the decision this brief supports, then add governed evidence below.`
+  const own = goal && goal.trim() !== appName.trim() ? appIntroFromGoal(goal) : undefined;
+  const intro = `# ${appName}\n\n${own ?? (template === 'executive_brief'
+    ? STOCK_INTRO_SENTENCES[0]
     : template === 'operational_dashboard'
-      ? `# ${appName}\n\nMonitor current performance, changes, and the details that require action.`
-      : `# ${appName}\n\nDocument the question, findings, caveats, and evidence for this investigation.`;
+      ? STOCK_INTRO_SENTENCES[1]
+      : STOCK_INTRO_SENTENCES[2])}`;
   const items: DashboardGridItem[] = [{
     i: 'template-introduction', x: 0, y: 0, w: 12, h: 2,
     title: template === 'investigation' ? 'Investigation question' : 'Intro',
@@ -8292,6 +8356,8 @@ export function separateNewAppDrafts(
   projectRoot: string,
   drafts: AppBuildDraft[],
   save: (draft: AppBuildDraft, expectedRevision: number) => void,
+  /** A collided draft that holds nothing (an empty shell): moved to the trash instead of made an App (V12). */
+  discard?: (draft: AppBuildDraft) => boolean,
 ): AppBuildDraft[] {
   const project = projectAppIdentities(projectRoot);
   const appIds = new Set(Array.from(project.appIds, (appId) => appId.toLowerCase()));
@@ -8301,13 +8367,19 @@ export function separateNewAppDrafts(
     .sort((left, right) => Date.parse(left.createdAt ?? '') - Date.parse(right.createdAt ?? '') || left.id.localeCompare(right.id));
   const claimed = new Set(unpublished.filter((draft) => draft.baseApp).map((draft) => draft.appId.toLowerCase()));
   const renamed = new Map<string, AppBuildDraft>();
+  const discarded = new Set<string>();
   for (const draft of newApps) {
     const key = draft.appId.toLowerCase();
     if (!appIds.has(key) && !claimed.has(key)) {
       claimed.add(key);
       continue;
     }
-    const others = unpublished.filter((other) => other.id !== draft.id).map((other) => renamed.get(other.id) ?? other);
+    // V12: six empty tries became six Apps "… (2)"–"(7)", each restarting AI on Continue. An empty one is not an App.
+    if (discard?.(draft)) {
+      discarded.add(draft.id);
+      continue;
+    }
+    const others = unpublished.filter((other) => other.id !== draft.id && !discarded.has(other.id)).map((other) => renamed.get(other.id) ?? other);
     const identity = uniqueNewAppIdentity(draft.name || draft.appId, {
       appIds: [...project.appIds, ...others.map((other) => other.appId)],
       names: [...project.names, ...others.map((other) => other.name)],
@@ -8322,7 +8394,69 @@ export function separateNewAppDrafts(
     claimed.add(identity.appId.toLowerCase());
     renamed.set(draft.id, next);
   }
-  return drafts.map((draft) => renamed.get(draft.id) ?? draft);
+  return drafts.filter((draft) => !discarded.has(draft.id)).map((draft) => renamed.get(draft.id) ?? draft);
+}
+
+/** The sentences the App templates used to start an App's intro with: placeholders, not what the App is for. */
+export const STOCK_INTRO_SENTENCES = [
+  'State the decision this brief supports, then add governed evidence below.',
+  'Monitor current performance, changes, and the details that require action.',
+  'Document the question, findings, caveats, and evidence for this investigation.',
+] as const;
+
+/** Whether a text tile is still an intro a template wrote: a heading, then the description or a stock sentence. */
+function isTemplateIntro(markdown: string, goal: string | undefined): boolean {
+  const body = markdown.replace(/^#[^\n]*\n*/, '').trim();
+  if (!body) return true;
+  if ((STOCK_INTRO_SENTENCES as readonly string[]).includes(body)) return true;
+  const fromGoal = goal ? appIntroFromGoal(goal) : undefined;
+  return Boolean(fromGoal && body === fromGoal);
+}
+
+/**
+ * An empty shell: a new App's draft (never published, no published App behind it) that holds nothing anyone
+ * made. It has no data, no tile but the template's intro, at most one page, and no edit was ever saved to it.
+ * Describe with AI made one for every try that did not plan (V12). Anything with a tile, data or an edit is
+ * never one.
+ */
+export function isEmptyNewAppShell(draft: AppBuildDraft, editCount: number): boolean {
+  if (draft.baseApp || draft.state === 'project_published' || editCount > 0) return false;
+  if ((draft.sources ?? []).length > 0 || (draft.pages ?? []).length > 1) return false;
+  return (draft.pages ?? []).every((page) => (page.layout?.items ?? []).every((item) => (
+    Boolean(item.text) && !item.query && !item.sourceId && !item.block && isTemplateIntro(item.text?.markdown ?? '', draft.frame?.goal)
+  )));
+}
+
+/**
+ * Upgrade step (V13): the empty copies "… (2)", "(3)" … that V12 made of one App are moved to the trash. A copy
+ * goes only when it is an empty shell (see isEmptyNewAppShell) and another App or draft has its name, numbered
+ * or not. A copy with a tile, data or an edit stays, as does the App it was copied from. Returns the names moved.
+ */
+export function removeEmptyAppCopies(projectRoot: string): string[] {
+  const storage = openAppStorage(projectRoot);
+  let shells: AppBuildDraft[] = [];
+  let names: string[] = [];
+  try {
+    const drafts = storage.listAppBuildDrafts();
+    names = [...projectAppIdentities(projectRoot).names, ...drafts.map((draft) => draft.name)];
+    shells = drafts.filter((draft) => /\s\(\d+\)$/.test(draft.name ?? '') && isEmptyNewAppShell(draft, storage.listAppBuildOperations(draft.id).length));
+  } finally {
+    storage.close();
+  }
+  const baseName = (name: string) => name.replace(/\s+\(\d+\)$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const moved: string[] = [];
+  for (const shell of shells) {
+    const base = baseName(shell.name);
+    const siblings = names.filter((name) => name !== shell.name && baseName(name) === base);
+    if (siblings.length === 0) continue;
+    try {
+      deleteStoredAppBuildDraft(projectRoot, shell);
+      moved.push(shell.name);
+    } catch {
+      // Left as it is; the next start tries again.
+    }
+  }
+  return moved;
 }
 
 export function writeStoredAppBuildDraft(

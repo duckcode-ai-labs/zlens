@@ -1,4 +1,5 @@
 import type {
+  TileFilterOperator,
   AppBuildClarification,
   AppBuildFrame,
   AppBuildRequirement,
@@ -143,6 +144,37 @@ export interface PlanAppBuildBriefInput {
   domain?: string;
   audience?: string;
   complete?: AppBuilderPlannerCompletion;
+  /** How long planning may wait for the AI in all, in ms (default APP_BUILDER_PLANNER_BUDGET_MS). */
+  timeBudgetMs?: number;
+  /** The clock (tests). */
+  now?: () => number;
+}
+
+/**
+ * The longest Describe with AI waits for the AI's plan (V12: about 2 minutes of "Looking…", then a code). On
+ * Cortex one plan takes 36-85 s, so this is one slow plan with room to spare, then a plain "took too long".
+ */
+export const APP_BUILDER_PLANNER_BUDGET_MS = 120_000;
+/**
+ * The AI is asked a second time only when its first reply came back within this time and the plan's time
+ * allows it: on a slow provider a second ask doubles the wait (V12: 123-128 s for two asks, both unreadable).
+ */
+export const APP_BUILDER_RETRY_WITHIN_MS = 45_000;
+const APP_BUILDER_RETRY_MIN_MS = 30_000;
+
+class AppBuilderPlannerTimeout extends Error {}
+
+/** A planner call that waits at most `limitMs`; past it, the reply is not waited for. */
+async function withinPlannerTime<T>(work: Promise<T>, limitMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new AppBuilderPlannerTimeout()), Math.max(0, limitMs));
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
@@ -181,17 +213,23 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
   }
 
   const userPrompt = appBuilderUserPrompt(input, candidates);
-  const ask = async (retry: boolean): Promise<string | AppBuilderPlannerCompletionResult | undefined> => {
+  const now = input.now ?? Date.now;
+  const startedAt = now();
+  const budgetMs = input.timeBudgetMs ?? APP_BUILDER_PLANNER_BUDGET_MS;
+  const ask = async (retry: boolean, limitMs: number): Promise<string | AppBuilderPlannerCompletionResult | undefined> => {
     try {
-      return await input.complete!({
+      return await withinPlannerTime(input.complete!({
         system: appBuilderSystemPrompt(),
         user: retry ? `${userPrompt}\n\n${APP_BUILDER_RETRY_NOTE}` : userPrompt,
-      });
+      }), limitMs);
     } catch (error) {
+      if (error instanceof AppBuilderPlannerTimeout) {
+        throw new Error(`APP_BUILD_PLANNER_TIMEOUT: the AI took longer than ${Math.round(budgetMs / 1000)} s to plan this App.`);
+      }
       throw new Error(`APP_BUILD_PLANNER_PROVIDER_FAILED: the configured App Builder provider did not return a build brief. ${error instanceof Error ? error.message : String(error)}`);
     }
   };
-  let completion = await ask(false);
+  let completion = await ask(false, budgetMs);
   // A host hook that finds no configured provider declines with undefined.
   // That is "no planner configured", not a malformed answer: plan offline.
   if (completion === undefined) {
@@ -212,8 +250,14 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     new Set(read.requirements.map((requirement) => requirement.id)),
     new Map(read.requirements.map((requirement) => [requirement.id, requirement])),
   ).length : 0;
-  if (!reply.parsed || reply.requirements.length === 0 || (reply.truncated && usableComponents(reply) === 0)) {
-    const second = await ask(true);
+  const firstMs = now() - startedAt;
+  const mayAskAgain = firstMs <= APP_BUILDER_RETRY_WITHIN_MS && budgetMs - firstMs >= APP_BUILDER_RETRY_MIN_MS;
+  if (mayAskAgain && (!reply.parsed || reply.requirements.length === 0 || (reply.truncated && usableComponents(reply) === 0))) {
+    // A second ask that runs out of time leaves the first reply as it was.
+    const second = await ask(true, budgetMs - firstMs).catch((error: unknown) => {
+      if (error instanceof Error && error.message.startsWith('APP_BUILD_PLANNER_TIMEOUT') && reply.parsed && reply.requirements.length > 0) return undefined;
+      throw error;
+    });
     if (second !== undefined) {
       const retried = readPlannerReply(second);
       // The second reply is kept unless it reads worse than the first.
@@ -235,15 +279,15 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     : appBuilderPlannerProviderId(completion?.providerId);
   const allowedIds = new Set(candidates.map((candidate) => candidate.sourceId));
   const requirementIds = new Set(requirements.map((requirement) => requirement.id));
-  const plannedComponents = normalizeComponents(
+  const plannedComponents = withoutRepeatedComponents(normalizeComponents(
     parsed.components,
     candidatesById,
     requirementIds,
     new Map(requirements.map((requirement) => [requirement.id, requirement])),
-  );
+  ));
   // A plan cut short with no tile still has its questions: each gets the candidate whose fields answer it.
   const components = plannedComponents.length === 0 && truncated
-    ? componentsForRequirements(requirements, candidates)
+    ? withoutRepeatedComponents(componentsForRequirements(requirements, candidates))
     : plannedComponents;
   const frame = normalizeFrame(parsed.frame, prompt, input.audience);
   // A part of the request the plan never mentions is a gap, not silently dropped (V11: "wins and losses"; losses never appeared).
@@ -282,6 +326,46 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     candidateSourceIds: candidates.map((candidate) => candidate.sourceId),
     warnings: truncated ? [plannedComponents.length === 0 && components.length > 0 ? APP_BUILDER_TRUNCATED_PICKED_NOTE : APP_BUILDER_TRUNCATED_NOTE] : [],
   }, candidates, requiredSourceIds), candidates, parsed);
+}
+
+/** What a tile shows: its data, its query, and whether it is a table or a chart, whatever its title. */
+function componentShowsKey(component: AppBuilderPlannedComponent): string {
+  const query = component.query;
+  const shape = component.view === 'table' || component.role === 'detail' || component.role === 'evidence' ? 'table' : 'chart';
+  if (!query) return `${component.sourceId}\u0000as-is\u0000${shape}`;
+  const sorted = <T>(items: T[] | undefined, key: (item: T) => string) => (items ?? []).map(key).sort();
+  return JSON.stringify([
+    component.sourceId,
+    sorted(query.dimensions, (dimension) => `${dimension.field.toLowerCase()}:${dimension.timeGrain ?? ''}`),
+    sorted(query.measures, (measure) => measure.measure.toLowerCase()),
+    sorted(query.filters, (filter) => JSON.stringify([filter.field.toLowerCase(), filter.op, filter.values ?? []])),
+    sorted(query.calculations, (calculation) => JSON.stringify(calculation)),
+    query.detail === true,
+    query.limit ?? null,
+    shape,
+  ]);
+}
+
+/**
+ * One tile for each thing the plan shows (V12: the tester's App showed "Max POINTS PER GAME" beside "POINTS PER
+ * GAME", the same numbers twice; a plan listed "Warriors Wins by Season" as a bar, a total and a table). A
+ * repeat is dropped and the questions it answered move to the tile that stays.
+ */
+function withoutRepeatedComponents(components: AppBuilderPlannedComponent[]): AppBuilderPlannedComponent[] {
+  const kept: AppBuilderPlannedComponent[] = [];
+  const byKey = new Map<string, number>();
+  for (const component of components) {
+    const key = componentShowsKey(component);
+    const index = byKey.get(key);
+    if (index === undefined) {
+      byKey.set(key, kept.length);
+      kept.push(component);
+      continue;
+    }
+    const first = kept[index]!;
+    kept[index] = { ...first, requirementIds: Array.from(new Set([...first.requirementIds, ...component.requirementIds])) };
+  }
+  return kept;
 }
 
 function uniqueRequirementId(preferred: string, taken: Set<string>): string {
@@ -704,10 +788,13 @@ function candidateSatisfiesStructuredRequirement(
   // revenue source into false margin coverage.
   // A question that asks for a split by values ("regular season vs playoffs")
   // names no field for it: the requirement's declared grouping stands (V11).
+  // A filter is named by its value, never its field ("the Warriors" for TEAM,
+  // "2014 to 2018" for SEASON), and only narrows the rows (V12).
+  // So is a grouping the requirement also filters on ("playoff wins" by SEASON and GAME_TYPE, filtered to playoffs).
+  const filtered = new Set(requirement.filters.map((field) => field.toLowerCase()));
   if (!capabilityValuesMatch([
     ...requirement.measures,
-    ...(asksForValueSplit(requirement.question) ? [] : requirement.dimensions),
-    ...requirement.filters,
+    ...(asksForValueSplit(requirement.question) ? [] : requirement.dimensions.filter((dimension) => !filtered.has(dimension.toLowerCase()))),
   ], [requirement.question])) return false;
 
   // A declared measure is decisive: generic words in titles or descriptions
@@ -1067,20 +1154,26 @@ function inferRequirementRole(question: string, index: number): AppBuilderCompon
 }
 
 function appBuilderSystemPrompt(): string {
+  // The reply is read as JSON (V12: Describe with AI failed 3 of 3 with "did not return valid JSON" on Cortex,
+  // and the plans it did read lost every tile query to strings in place of objects). So the prompt says where
+  // the JSON starts, which keys come first (a reply cut off keeps its tiles), and the exact query shape.
   return [
     'You are the DQL App Builder planner. Produce one stateful analytical App build brief, not a prose answer.',
+    'Reply with exactly one JSON object and nothing else: no prose before or after it, no code fence. Start the reply with { and end it with }.',
+    'Write its keys in this order: requirements, components, pages, frame, filters, navigation, crossFilters, detailDrills.',
     'Use only sourceId values present in the supplied candidate cards. Never invent a source, field, capability, or trust state.',
     'Draft and review sources may be recommended, but their trust must not be upgraded.',
-    'Return JSON only with keys frame, requirements, components, pages, filters, navigation, crossFilters, and detailDrills.',
-    'frame: {goal, decision?, audience?, metrics[], dimensions[], grain?, timeRange?, comparison?, filters[], desiredOutput?, clarificationQuestions?}.',
-    'requirements: [{id, question, role, required, measures[], dimensions[], filters[], grain?}]. role is kpi, trend, breakdown, detail, narrative, or evidence.',
-    'components: [{id, title, sourceId, query?, requirementIds[], role, view, style?, rationale}]. query is a TileQuery using only the approved Dataset fields on that source card. view is kpi, line, bar, or table.',
+    'requirements: [{id, question, role, required, measures[], dimensions[], filters[], grain?}]. role is kpi, trend, breakdown, detail, narrative, or evidence. measures, dimensions and filters are exact field names from the cards; filters lists only the fields the data must be filtered on, and is [] when the data is already limited to what is asked.',
+    'components: [{id, title, sourceId, query, requirementIds[], role, view, style?, rationale}]. view is kpi, line, bar, or table. rationale is one short sentence.',
+    'query uses only the approved Dataset fields and measures on that source card, in exactly this shape: {"dimensions":[{"field":"SEASON"}],"measures":[{"measure":"WINS"}],"filters":[{"field":"GAME_TYPE","op":"eq","values":["Playoffs"]}]}. dimensions and measures are arrays of objects, never of strings; a KPI has "dimensions":[]. op is eq, neq, in, not_in, gt, gte, lt, lte, between, or contains, and values is always an array ("between" takes [from, to]). Filter only on a value the request or the card names; for a name, use contains with its most telling word ("Warriors"), since the stored value may be shorter or longer.',
     'style is optional chart styling: {labels?: none|last|all, format?: number|compact|currency|percent, sort?: none|asc|desc, stack?: boolean, referenceLines?: [{value, label?}], bands?: [{from, to, label?}]}. Add a reference line or band only for a target or threshold the user stated; never invent one.',
     'pages: [{id, title, componentIds[], sections:[{id,title,kind,componentIds[]}]}]. section kind is exec_summary, kpi_band, insight, or appendix. Every component must appear on one page.',
+    'frame: {goal, decision?, audience?, metrics[], dimensions[], grain?, timeRange?, comparison?, filters[], desiredOutput?, clarificationQuestions?}, each value short.',
+    'filters, navigation, crossFilters and detailDrills are [] unless the request asks for a filter, linked charts or a drill.',
     'filters: [{id,label,field,scope,pageId?,componentIds[]}]. field must be one exact approved physical Dataset field for every named component; scope is page or app.',
     'navigation: [{fromComponentId,toPageId}]. crossFilters: [{fromComponentId,fromField,toComponentId,toField}], where fromField is an exact selected dimension output and toField is an exact approved physical target field on the same page.',
     'detailDrills: [{pageId,componentId,fields[]}], where every field is an exact approved physical Dataset field. Never write SQL, joins, source revisions, results, or trust claims.',
-    'Prefer the fewest components that cover the request. Ask a clarification only when a material choice cannot be made from supplied evidence.',
+    'Prefer the fewest components that cover the request, at most 6, and never two that show the same numbers. Prefer data already limited to what the request names over adding filters. Ask a clarification only when a material choice cannot be made from supplied evidence.',
   ].join('\n');
 }
 
@@ -1171,7 +1264,7 @@ function normalizeRequirements(value: unknown): AppBuildRequirement[] {
       required: record.required !== false,
       measures: stringArray(record.measures),
       dimensions: stringArray(record.dimensions),
-      filters: stringArray(record.filters),
+      filters: plannerFilterFields(record.filters),
       ...(stringValue(record.grain) ? { grain: stringValue(record.grain) } : {}),
     }];
   });
@@ -1200,7 +1293,7 @@ function normalizeComponents(
       .map((requirementId) => requirementsById.get(requirementId))
       .find((requirement): requirement is AppBuildRequirement => Boolean(requirement));
     const query = candidate.capabilities.dataset
-      ? normalizedDatasetQuery(record.query, candidate.capabilities.dataset, primaryRequirement, role)
+      ? normalizedDatasetQuery(plannerTileQuery(record.query), candidate.capabilities.dataset, primaryRequirement, role)
       : undefined;
     // A Dataset card must always carry a validated, field-level query. Do not
     // fall back to a legacy block tile when its governed descriptor cannot
@@ -1369,8 +1462,10 @@ export function datasetPlannedQueryCoversRequirement(query: TileQuery, requireme
     const field = datasetPhysicalFields(descriptor).find((candidate) => sameDatasetName(selected, candidate.name, candidate.qualifiedId));
     return Boolean(field && sameDatasetName(required, field.name, field.qualifiedId));
   }))) return false;
-  if (requirement.filters.length > 0 && !requirement.filters.every((required) => (query.filters ?? []).some((filter) => {
-    const field = datasetPhysicalFields(descriptor).find((candidate) => sameDatasetName(filter.field, candidate.name, candidate.qualifiedId));
+  // A filter the question asks for is met by filtering on that field, or by showing each of its values on
+  // its own (V12: "playoff wins" grouped by GAME_TYPE shows the playoff wins apart from the others).
+  if (requirement.filters.length > 0 && !requirement.filters.every((required) => selectedDimensions.some((selected) => {
+    const field = datasetPhysicalFields(descriptor).find((candidate) => sameDatasetName(selected, candidate.name, candidate.qualifiedId));
     return Boolean(field && sameDatasetName(required, field.name, field.qualifiedId));
   }))) return false;
   return true;
@@ -1449,8 +1544,11 @@ export function withAskedSplits(
   const measureWords = new Set(query.measures.flatMap((selection) => Array.from(deterministicWords(selection.measure))));
   const grouped = (current: TileQuery, field: (typeof fields)[number]) => current.dimensions.some((dimension) => sameDatasetName(dimension.field, field.name, field.qualifiedId));
   const asked: typeof fields = [];
+  // A field the tile keeps to one value is not split by: "playoff wins" filtered to Playoffs is one series.
+  const oneValue = (field: (typeof fields)[number]) => (query.filters ?? []).some((filter) => sameDatasetName(filter.field, field.name, field.qualifiedId)
+    && filter.op === 'eq' && (filter.values?.length ?? 0) === 1);
   const ask = (field: (typeof fields)[number] | undefined) => {
-    if (!field || grouped(query, field) || asked.includes(field)) return;
+    if (!field || grouped(query, field) || asked.includes(field) || oneValue(field)) return;
     if (Array.from(deterministicWords(field.name)).every((word) => measureWords.has(word))) return;
     asked.push(field);
   };
@@ -1598,13 +1696,116 @@ function inferView(candidate: AppSourceCatalogRecord, index: number): AppBuilder
   return 'table';
 }
 
+/**
+ * A role in the planner's own words: the six roles, and the near words a model uses for them ("comparison",
+ * "chart", "table", "metric"). A requirement or tile with a near word is kept, not dropped (V12: "did not return
+ * grounded requirements" when every role read as something else).
+ */
+const PLANNER_ROLE_WORDS: Record<string, AppBuilderComponentRole> = {
+  kpi: 'kpi', metric: 'kpi', headline: 'kpi', number: 'kpi', total: 'kpi', summary: 'kpi',
+  trend: 'trend', time_series: 'trend', timeseries: 'trend', over_time: 'trend',
+  breakdown: 'breakdown', comparison: 'breakdown', compare: 'breakdown', chart: 'breakdown', split: 'breakdown', ranking: 'breakdown', distribution: 'breakdown',
+  detail: 'detail', table: 'detail', list: 'detail', details: 'detail',
+  narrative: 'narrative', text: 'narrative', insight: 'narrative',
+  evidence: 'evidence',
+};
+
 function appRole(value: unknown): AppBuilderComponentRole | undefined {
-  return value === 'kpi' || value === 'trend' || value === 'breakdown' || value === 'detail'
-    || value === 'narrative' || value === 'evidence' ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  return PLANNER_ROLE_WORDS[value.trim().toLowerCase().replace(/[\s-]+/g, '_')];
 }
 
+/** A view in the planner's own words: "stacked_bar", "column" and "bar_chart" are bars, "area" a line, "metric" a KPI. */
 function appView(value: unknown): AppBuilderComponentView | undefined {
-  return value === 'kpi' || value === 'line' || value === 'bar' || value === 'table' ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+  const word = value.trim().toLowerCase();
+  if (word === 'kpi' || /^(?:metric|number|kpi[_ -]?card|big[_ -]?number|scorecard)$/.test(word)) return 'kpi';
+  if (/^(?:line|area)(?:[_ -]?chart)?$/.test(word)) return 'line';
+  if (/^(?:(?:stacked|grouped|horizontal)[_ -]?)?(?:bar|column)s?(?:[_ -]?chart)?$/.test(word) || word === 'chart') return 'bar';
+  if (/^(?:table|grid|detail|pivot)(?:[_ -]?table)?$/.test(word)) return 'table';
+  return undefined;
+}
+
+const PLANNER_FILTER_OPERATORS: Record<string, TileFilterOperator> = {
+  eq: 'eq', '=': 'eq', '==': 'eq', equals: 'eq', equal: 'eq', is: 'eq',
+  neq: 'neq', ne: 'neq', '!=': 'neq', '<>': 'neq', not_equals: 'neq', not_equal: 'neq',
+  in: 'in', not_in: 'not_in', 'not in': 'not_in',
+  gt: 'gt', '>': 'gt', gte: 'gte', '>=': 'gte', lt: 'lt', '<': 'lt', lte: 'lte', '<=': 'lte',
+  between: 'between', contains: 'contains', like: 'contains', ilike: 'contains',
+};
+
+/**
+ * A tile query in the shape the planner wrote it, read as a TileQuery (V12: Cortex wrote
+ * `"measures": ["WINS"]` and `{"op": "equals", "value": "Playoffs"}`, so every AI tile query was refused and
+ * replaced by one with no filters). Field names, measures and values are kept exactly as written: this only
+ * fixes the shape, and the query is validated against the source's approved fields as before.
+ */
+export function plannerTileQuery(raw: unknown): unknown {
+  const record = objectValue(raw);
+  if (!record) return raw;
+  const name = (item: unknown, ...keys: string[]): string | undefined => {
+    if (typeof item === 'string') return stringValue(item);
+    const object = objectValue(item);
+    return object ? keys.map((key) => stringValue(object[key])).find(Boolean) : undefined;
+  };
+  const list = (value: unknown): unknown[] => Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+  const dimensions = list(record.dimensions ?? record.groupBy ?? record.group_by).flatMap((item) => {
+    const field = name(item, 'field', 'name', 'dimension', 'column');
+    if (!field) return [];
+    const object = objectValue(item);
+    const timeGrain = object ? stringValue(object.timeGrain ?? object.grain) : undefined;
+    const alias = object ? stringValue(object.alias) : undefined;
+    return [{ field, ...(timeGrain ? { timeGrain } : {}), ...(alias ? { alias } : {}) }];
+  });
+  const measures = list(record.measures ?? record.metrics).flatMap((item) => {
+    const measure = name(item, 'measure', 'name', 'field', 'metric');
+    const alias = objectValue(item) ? stringValue(objectValue(item)!.alias) : undefined;
+    return measure ? [{ measure, ...(alias ? { alias } : {}) }] : [];
+  });
+  const filters = list(record.filters ?? record.where).flatMap((item) => {
+    const object = objectValue(item);
+    const field = object ? name(object, 'field', 'name', 'dimension', 'column') : undefined;
+    const opWord = object ? stringValue(object.op ?? object.operator) ?? (object.values !== undefined || object.value !== undefined ? 'eq' : undefined) : undefined;
+    const op = opWord ? PLANNER_FILTER_OPERATORS[opWord.toLowerCase()] : undefined;
+    if (!object || !field || !op) return [];
+    const supplied = object.values ?? object.value;
+    const values = Array.isArray(supplied)
+      ? supplied
+      : objectValue(supplied) && ('from' in objectValue(supplied)! || 'to' in objectValue(supplied)!)
+        ? [objectValue(supplied)!.from, objectValue(supplied)!.to]
+        : supplied === undefined ? undefined : [supplied];
+    return [{ field, op: op === 'eq' && values && values.length > 1 ? 'in' as const : op, ...(values ? { values } : {}) }];
+  });
+  const kept: Record<string, unknown> = { dimensions, measures };
+  if (filters.length) kept.filters = filters;
+  // A key that claims authority (a revision, SQL, trust) stays, so the query is refused as before.
+  for (const [key, value] of Object.entries(record)) {
+    if (/revision|sql|snapshot|trust|contract|fingerprint|binding|source/i.test(key)) kept[key] = value;
+  }
+  for (const key of ['calculations', 'rollups', 'having', 'comparison', 'detail', 'detailColumns', 'respectsGlobalFilters'] as const) {
+    if (record[key] !== undefined) kept[key] = record[key];
+  }
+  if (typeof record.limit === 'number' && Number.isInteger(record.limit) && record.limit > 0) kept.limit = record.limit;
+  const orderBy = list(record.orderBy).flatMap((item) => {
+    const object = objectValue(item);
+    const alias = object ? stringValue(object.alias ?? object.field) : undefined;
+    const direction = object ? stringValue(object.direction ?? object.dir ?? object.order)?.toLowerCase() : undefined;
+    return alias && (direction === 'asc' || direction === 'desc') ? [{ alias, direction }] : [];
+  });
+  if (orderBy.length) kept.orderBy = orderBy;
+  return kept;
+}
+
+/** A requirement's filter fields: "TEAM = Golden State Warriors" and `{field: "TEAM"}` both name TEAM. */
+function plannerFilterFields(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.flatMap((item) => {
+    const object = objectValue(item);
+    const text = object ? stringValue(object.field ?? object.name) : stringValue(item);
+    if (!text) return [];
+    const field = text.split(/\s*(?:=|!=|<>|>=|<=|>|<|\bbetween\b|\bin\b|\bcontains\b|\bis\b|:)\s*/i)[0]!.trim();
+    return field && /^[A-Za-z_][A-Za-z0-9_. ]*$/.test(field) ? [field] : [];
+  })));
 }
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {

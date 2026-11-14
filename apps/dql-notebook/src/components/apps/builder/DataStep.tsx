@@ -3,7 +3,7 @@ import { certifiedByLabel } from '../reader-trust';
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../../api/client';
 import { AddDataBrowser, RemoveDataButton, type AddDataBrowserProps } from './AddDataBrowser';
 import { StudioErrorBanner, humanize } from './studio-ui';
-import { studioErrorWords } from '../app-studio-words';
+import { AI_PLAN_STILL_WORKING_WORDS, studioErrorWords } from '../app-studio-words';
 import { appDataItems, openCanvasLabel, sourceOriginLabel, tilesUsingSource, trustLabel } from './app-data';
 import {
   appStudioBuildPagesLabel,
@@ -220,6 +220,8 @@ function AiDataStep({
         <strong>{model ? 'Updating the plan with your data' : 'Preparing the plan'}</strong>
         <ol aria-label={words.activityLabel}>{ai.activitySteps.map((step, index) => <li key={step} className={index === ai.activityIndex ? 'on' : index < ai.activityIndex ? 'done' : ''} aria-current={index === ai.activityIndex ? 'step' : undefined}>{step}</li>)}</ol>
         <small className="studio-ai-activity-label">{activityLabel}</small>
+        {/* A plan on Snowflake Cortex can take a minute or more: after 30 s the step says so, and how long ZLens waits (V12). Its style delays it. */}
+        <small className="data-step-slow">{AI_PLAN_STILL_WORKING_WORDS}</small>
       </div>
     </div> : null}
     {ai.status === 'error' ? <div className="data-step-activity error" role="alert">
