@@ -63,7 +63,7 @@ import {
   planMixedSourceSql,
 } from "./mixed-source-sql.js";
 import { resolveNpmInvocation } from './npm-runtime.js';
-import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason } from './deployment-locks.js';
+import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, NO_EGRESS_DBT_CLOUD_REASON, NO_EGRESS_METRICFLOW_REASON } from './deployment-locks.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
 import { LONG_REQUEST_PATH, answerLongRequest, handleLongRequestPoll } from './long-request.js';
@@ -20780,7 +20780,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           }
         } catch { /* Ollama not running — the UI says so rather than failing */ }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ catalog: EMBEDDING_MODEL_CATALOG, ollamaReachable: reachable, installed }));
+        res.end(serializeJSON({ catalog: EMBEDDING_MODEL_CATALOG, ollamaReachable: reachable, installed, ...(noEgress() ? { installable: false } : {}) }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
@@ -30693,7 +30693,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       try {
         const runtime = await getSemanticRuntimeStatus(projectRoot, { probeConfiguredCloud: true });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ ...getSemanticRuntimeSettings(projectRoot), runtime }));
+        res.end(serializeJSON({ ...getSemanticRuntimeSettings(projectRoot), runtime, ...(noEgress() ? { noEgress: true } : {}) }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
@@ -30708,6 +30708,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({
           job: metricFlowInstaller.latest(),
+          // No internet (an app inside Snowflake): MetricFlow is not offered (deployment-locks.ts refuses the install).
+          ...(noEgress() ? { installable: false, reason: NO_EGRESS_METRICFLOW_REASON } : {}),
           recommendedAdapter,
           supportedAdapters: ['duckdb', 'snowflake', 'bigquery', 'databricks', 'redshift', 'postgres', 'trino'],
           projectConfigured: existsSync(join(dbtProjectDir, 'dbt_project.yml')),
@@ -30775,6 +30777,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const preference = body.preference;
         if (preference !== 'auto' && preference !== 'native' && preference !== 'metricflow-cli' && preference !== 'dbt-cloud') {
           throw new Error('preference must be one of: auto, native, metricflow-cli, dbt-cloud');
+        }
+        if (preference === 'dbt-cloud' && noEgress()) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ ok: false, error: NO_EGRESS_DBT_CLOUD_REASON, code: 'PERMISSION_DENIED' }));
+          return;
         }
         const settings = saveSemanticRuntimePreference(projectRoot, preference);
         const runtime = await getSemanticRuntimeStatus(projectRoot, { probeConfiguredCloud: true });

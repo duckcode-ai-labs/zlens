@@ -44,6 +44,8 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
   const [cortex, setCortex] = useState<{ available: boolean; reason?: string; installDefault?: boolean }>({ available: false });
   const [installed, setInstalled] = useState<string[]>([]);
   const [ollamaReachable, setOllamaReachable] = useState(false);
+  // False on an install with no internet access (an app inside Snowflake): it downloads no models.
+  const [modelsInstallable, setModelsInstallable] = useState(true);
   const [active, setActive] = useState<{ id: string; semantic: boolean; reindexRequired: boolean }>({ id: '', semantic: false, reindexRequired: false });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,6 +66,7 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
       setCatalog(result.catalog);
       setInstalled(result.installed);
       setOllamaReachable(result.ollamaReachable);
+      setModelsInstallable(result.installable !== false);
     } catch { /* the panel still works without the live model list */ }
   }, []);
 
@@ -113,6 +116,7 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
     if (on) {
       if (!ollamaReachable) throw new Error('Ollama is not running on this computer. Start it, then turn this on.');
       if (!installed.includes(LOCAL_EMBEDDING_MODEL)) {
+        if (!modelsInstallable) throw new Error('This install has no internet access, so it does not download embedding models.');
         await api.installEmbeddingModel(LOCAL_EMBEDDING_MODEL, endpoint);
         await refreshModels(endpoint);
       }
@@ -294,6 +298,8 @@ export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
                     <button type="button" onClick={() => void save(provider, option.model)} disabled={busy !== null} style={button(selected)}>
                       {selected ? <><Check size={12} /> In use</> : 'Use this'}
                     </button>
+                  ) : !modelsInstallable ? (
+                    <span style={{ fontSize: 11, color: t.textMuted, whiteSpace: 'nowrap' }}>Not on this install</span>
                   ) : (
                     <button
                       type="button"

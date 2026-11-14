@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { noEgress } from '@zlens/connectors';
 import type { EffectiveDbtCloudSemanticSettings } from './semantic-runtime-settings.js';
 
 export interface DbtCloudSemanticQueryRequest {
@@ -241,6 +242,8 @@ async function graphqlRequest<T>(
   body: { query: string; variables?: Record<string, unknown> },
   fetchImpl: FetchLike,
 ): Promise<T> {
+  // An install with no internet access (an app inside Snowflake) never calls an outside service.
+  if (noEgress()) throw new Error('This install has no internet access (ZLENS_NO_EGRESS), so it cannot use the dbt Cloud Semantic Layer.');
   assertConfigured(settings);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('dbt Cloud Semantic Layer request timed out.')), 10_000);
