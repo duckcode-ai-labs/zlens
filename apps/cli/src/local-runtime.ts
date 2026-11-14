@@ -63,6 +63,7 @@ import {
   planMixedSourceSql,
 } from "./mixed-source-sql.js";
 import { resolveNpmInvocation } from './npm-runtime.js';
+import { allowedOllamaEndpoint, OLLAMA_ENDPOINT_REFUSED, savedOllamaEndpoint } from './ollama-endpoint.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, NO_EGRESS_DBT_CLOUD_REASON, NO_EGRESS_METRICFLOW_REASON } from './deployment-locks.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
@@ -20768,10 +20769,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // can offer names and an install button instead of a free-text field.
     if (req.method === 'GET' && path === '/api/settings/embeddings/models') {
       try {
-        const endpoint = (url.searchParams.get('endpoint') ?? 'http://127.0.0.1:11434').replace(/\/$/, '');
+        // Only Ollama on this computer or the saved endpoint: a request cannot point the server elsewhere.
+        const endpoint = allowedOllamaEndpoint(url.searchParams.get('endpoint'), savedOllamaEndpoint(projectRoot));
         let installed: string[] = [];
         let reachable = false;
         try {
+          if (!endpoint) throw new Error(OLLAMA_ENDPOINT_REFUSED);
           const response = await fetch(`${endpoint}/api/tags`, { signal: AbortSignal.timeout(2500) });
           if (response.ok) {
             reachable = true;
@@ -20793,7 +20796,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       try {
         const body = (await readJSON(req).catch(() => ({}))) as { model?: unknown; endpoint?: unknown };
         const model = typeof body.model === 'string' ? body.model.trim() : '';
-        const endpoint = (typeof body.endpoint === 'string' && body.endpoint.trim() ? body.endpoint.trim() : 'http://127.0.0.1:11434').replace(/\/$/, '');
+        // Only Ollama on this computer or the saved endpoint: a request cannot point the server elsewhere.
+        const endpoint = allowedOllamaEndpoint(body.endpoint, savedOllamaEndpoint(projectRoot));
+        if (!endpoint) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: OLLAMA_ENDPOINT_REFUSED }));
+          return;
+        }
         const known = EMBEDDING_MODEL_CATALOG.ollama.some((entry) => entry.model === model);
         if (!known) {
           // Only ever pull a model we list: this shells out to a local daemon,
