@@ -895,6 +895,7 @@ function BlocksList({ t, search, domain, onDomainChange, onOpenBlock, onDeleteBl
   };
 
   const draftCount = filtered.filter((block) => blockDisplayStatus(String(block.status ?? 'draft'), block, hostProposes) !== 'certified').length;
+  const automaticDrafts = blocks.filter((block) => block.automaticDraft).length;
   const certifiedNames = new Set(blocks.filter((block) => block.status === 'certified').map((block) => block.name));
   const retry = <button type="button" onClick={() => setRetryKey((current) => current + 1)} style={{ marginLeft: 10, border: 'none', background: 'transparent', color: t.accent, cursor: 'pointer', fontSize: 11.5, fontWeight: 650, padding: 0, fontFamily: t.font }}>Retry</button>;
 
@@ -915,6 +916,7 @@ function BlocksList({ t, search, domain, onDomainChange, onOpenBlock, onDeleteBl
       summary={<>{filtered.length} {filtered.length === 1 ? 'saved query' : 'saved queries'}{draftCount ? ` · ${draftCount} draft${draftCount === 1 ? '' : 's'}` : ''} · {scopeLabel}</>}
       t={t}
     />
+    {onDeleteBlock && automaticDrafts > 0 ? <ClearAskDrafts count={automaticDrafts} onCleared={() => setRetryKey((current) => current + 1)} t={t} /> : null}
     {filtered.length === 0
       ? <EmptyNote text={search ? `No ${scopeLabel} saved queries match this search.` : selectedDomain ? `No saved queries in ${selectedDomain} yet.` : 'No saved queries yet.'} t={t} />
       : <BlockTree
@@ -937,6 +939,52 @@ function BlocksList({ t, search, domain, onDomainChange, onOpenBlock, onDeleteBl
         />}
     {publishError ? <div role="alert" style={{ padding: '8px 12px', fontSize: 11.5, color: t.error, fontFamily: t.font }}>{publishError}</div> : null}
   </div>;
+}
+
+/** The confirm sentence for "Clear drafts": how many go, and what stays. */
+export function clearAskDraftsPrompt(count: number): string {
+  return `Remove ${count} automatic draft${count === 1 ? '' : 's'}? Saved queries you edited or certified stay.`;
+}
+
+/**
+ * "Clear drafts": Ask saves a draft for each AI-generated answer, and they pile
+ * up (new-user test: 29 of 30 saved queries were automatic drafts). This
+ * removes the ones nobody changed, after one confirm. The server decides which.
+ */
+export function ClearAskDrafts({ count, onCleared, t, initialStep = 'idle' }: { count: number; onCleared: () => void; t: Theme; initialStep?: 'idle' | 'confirm' }) {
+  const [step, setStep] = useState<'idle' | 'confirm' | 'working'>(initialStep);
+  const [message, setMessage] = useState<string | null>(null);
+  const linkStyle: React.CSSProperties = { border: 'none', background: 'transparent', color: t.accent, cursor: 'pointer', fontSize: 11.5, fontWeight: 650, padding: 0, fontFamily: t.font };
+  const clear = async () => {
+    setStep('working');
+    setMessage(null);
+    try {
+      const result = await api.clearAskDrafts();
+      setMessage(result.removed === 0 ? 'No automatic drafts were removed.' : `Removed ${result.removed} automatic draft${result.removed === 1 ? '' : 's'}.`);
+      onCleared();
+    } catch (error) {
+      setMessage(`Couldn't remove the drafts: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setStep('idle');
+    }
+  };
+  return (
+    <div data-testid="clear-ask-drafts" style={{ padding: '4px 12px 6px', fontSize: 11.5, color: t.textMuted, fontFamily: t.font, display: 'grid', gap: 4 }}>
+      {step === 'confirm' ? (
+        <div role="alertdialog" aria-label="Clear automatic drafts" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: t.textSecondary }}>{clearAskDraftsPrompt(count)}</span>
+          <button type="button" onClick={() => void clear()} style={{ ...linkStyle, color: t.error }}>Remove</button>
+          <button type="button" onClick={() => setStep('idle')} style={linkStyle}>Cancel</button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+          <span>{count} automatic draft{count === 1 ? '' : 's'} from Ask</span>
+          <button type="button" disabled={step === 'working'} onClick={() => setStep('confirm')} style={linkStyle}>{step === 'working' ? 'Clearing…' : 'Clear drafts'}</button>
+        </div>
+      )}
+      {message ? <div role="status">{message}</div> : null}
+    </div>
+  );
 }
 
 function BlockTree({
@@ -1021,7 +1069,8 @@ export function BlockRow({ block, depth = 0, t, onOpen, onDelete, onPublish, pub
       <button type="button" onClick={onOpen} title={block.description || `${block.name} — open`} style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', textAlign: 'left', fontFamily: t.font }}>
         <Blocks size={14} color={t.textMuted} strokeWidth={1.75} style={{ flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{block.name}</span>
+          {/* The whole name, wrapped: cut at the edge, two drafts read the same ("many_points_did_lebron_james_sc…" twice). */}
+          <span style={{ fontSize: 12, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{block.name}</span>
           <span style={{ fontSize: 10.5, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[block.domain, editsCertified ? 'draft · edits to the certified saved query' : status === 'proposed' ? 'certification proposed' : status, status === 'deprecated' && (block.replacement?.name ?? block.replacedBy) ? `replaced by ${block.replacement?.name ?? block.replacedBy}` : null].filter(Boolean).join(' · ')}</span>
         </span>
       </button>

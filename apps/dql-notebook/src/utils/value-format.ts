@@ -25,6 +25,28 @@ const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
 const TIME_ONLY_RE = /^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?Z?$/;
 
+/**
+ * A column of identifiers by its name (GAME_ID, TEAM_ID, PLAYER_KEY, ZIP_CODE, playerId): its whole numbers are
+ * codes, never quantities, so they show as stored ("22100330", not "22,100,330": new-user test V12).
+ */
+const IDENTIFIER_NAME_RE = /(?:^|_)(?:id|key|code|uuid)$/i;
+
+export function isIdentifierColumn(column: string): boolean {
+  const name = column.trim().replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/[\s-]+/g, '_');
+  // A count of ids ("COUNT(DISTINCT PLAYER_ID)", "player_id_count") is a quantity.
+  if (/[()]/.test(name) || /(?:^|_)(?:count|total|sum|avg|average|num_of)(?:_|$)/i.test(name)) return false;
+  return IDENTIFIER_NAME_RE.test(name);
+}
+
+/** A whole-number value of an identifier column, as stored; undefined for anything else. */
+export function formatIdentifierValue(column: string, value: unknown): string | undefined {
+  if (!isIdentifierColumn(column)) return undefined;
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'number' && Number.isInteger(value)) return String(value);
+  if (typeof value === 'string' && /^\s*-?\d+\s*$/.test(value)) return value.trim();
+  return undefined;
+}
+
 function numericValue(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
@@ -100,6 +122,9 @@ export function formatDisplayValue(
   if (options.meta?.kind !== 'currency' && options.meta?.kind !== 'percent' && options.format !== 'currency' && options.format !== 'percent') {
     const year = formatYearValue(column, value);
     if (year !== undefined) return year;
+    // An identifier is a code: no thousands separator, no compact "22.1M".
+    const identifier = formatIdentifierValue(column, value);
+    if (identifier !== undefined) return identifier;
   }
   const numeric = numericValue(value);
   // Percentage points are a difference of percentages, never re-scaled.

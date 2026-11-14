@@ -960,7 +960,7 @@ function AnswerPanel({
         <div style={{ fontSize: 11.5, color: t.textMuted, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
           {[
             sourceTier ? formatBusinessTier(sourceTier) : null,
-            result ? `${(result.rowCount ?? result.rows.length).toLocaleString()} rows` : null,
+            result ? `${(result.rowCount ?? result.rows.length).toLocaleString()} ${(result.rowCount ?? result.rows.length) === 1 ? 'row' : 'rows'}` : null,
             evidence?.validation?.status === 'failed' ? 'needs review' : null,
             evidence?.execution?.status === 'failed' ? 'data check failed' : null,
           ]
@@ -975,7 +975,7 @@ function AnswerPanel({
       ) : (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {sourceTier && <Pill label={formatLabel(sourceTier)} t={t} />}
-          {result && <Pill label={`${(result.rowCount ?? result.rows.length).toLocaleString()} rows`} t={t} />}
+          {result && <Pill label={`${(result.rowCount ?? result.rows.length).toLocaleString()} ${(result.rowCount ?? result.rows.length) === 1 ? 'row' : 'rows'}`} t={t} />}
           {evidence?.validation?.status && <Pill label={`validation: ${evidence.validation.status}`} t={t} />}
           {evidence?.execution?.status && <Pill label={`execution: ${evidence.execution.status}`} t={t} />}
         </div>
@@ -1483,7 +1483,7 @@ function ResultPreview({ result, t, compact }: { result: QueryResult; t: Theme; 
         letterSpacing: '0.06em',
       }}>
         <span>Preview</span>
-        <span>{rows.length} of {(result.rowCount ?? result.rows.length).toLocaleString()} rows</span>
+        <span>{rows.length} of {(result.rowCount ?? result.rows.length).toLocaleString()} {(result.rowCount ?? result.rows.length) === 1 ? 'row' : 'rows'}</span>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>

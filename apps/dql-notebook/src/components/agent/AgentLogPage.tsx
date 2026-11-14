@@ -103,6 +103,7 @@ function RunSteps({ run, t }: { run: AgentRun; t: Theme }): JSX.Element {
 function outcomeWords(run: AgentRun, noAnswer: AskRunNoAnswer | undefined): string {
   if (noAnswer?.kind === 'cancelled') return 'Cancelled';
   if (noAnswer?.kind === 'clarify') return 'Needs clarification';
+  if (noAnswer?.dataGap) return 'Not in this data';
   if (noAnswer) return 'Blocked';
   if (run.trustState === 'certified') return 'Certified';
   if (run.trustState === 'governed' || run.trustState === 'grounded') return 'From Metrics';
@@ -112,7 +113,7 @@ function outcomeWords(run: AgentRun, noAnswer: AskRunNoAnswer | undefined): stri
 function Header({ run, t, noAnswer }: { run: AgentRun; t: Theme; noAnswer: AskRunNoAnswer | undefined }): JSX.Element {
   const totalMs = durationMs(run.startedAt, run.completedAt);
   const words = outcomeWords(run, noAnswer);
-  const tone = noAnswer?.kind === 'blocked' ? t.error : noAnswer ? t.textMuted : run.trustState === 'certified' ? t.success : t.accent;
+  const tone = noAnswer?.kind === 'blocked' && !noAnswer.dataGap ? t.error : noAnswer ? t.textMuted : run.trustState === 'certified' ? t.success : t.accent;
   return (
     <div style={{ marginBottom: 18 }}>
       <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8, lineHeight: 1.35 }}>{run.question}</div>
@@ -127,7 +128,7 @@ function Header({ run, t, noAnswer }: { run: AgentRun; t: Theme; noAnswer: AskRu
 }
 
 function WhyNoAnswer({ noAnswer, explanation, t }: { noAnswer: AskRunNoAnswer; explanation: RunExplanation | undefined; t: Theme }): JSX.Element {
-  const tone = noAnswer.kind === 'blocked' ? t.error : t.textMuted;
+  const tone = noAnswer.kind === 'blocked' && !noAnswer.dataGap ? t.error : t.textMuted;
   const steps = noAnswer.kind === 'blocked' ? stoppingSteps(explanation) : [];
   return (
     <section

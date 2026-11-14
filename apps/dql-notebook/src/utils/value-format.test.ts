@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatChartValue, formatDisplayValue, inferDisplayValueKind } from './value-format';
+import { formatChartValue, formatDisplayValue, inferDisplayValueKind, isIdentifierColumn } from './value-format';
 
 describe('semantic value formatting', () => {
   it('renders monetary measures consistently', () => {
@@ -31,6 +31,19 @@ describe('semantic value formatting', () => {
     expect(formatDisplayValue('SEASON', 2014, [], { meta: { kind: 'currency' } })).toBe('$2,014.00');
     expect(formatDisplayValue('WINS', 2014)).toBe('2,014');
     expect(formatDisplayValue('POINTS_PER_SEASON', 2014)).toBe('2,014');
+  });
+
+  // V12: GAME_ID read "22,100,330" in the Ask grid.
+  it('shows identifier columns as stored, with no thousands separator', () => {
+    expect(formatDisplayValue('GAME_ID', 22100330, [22100330])).toBe('22100330');
+    expect(formatDisplayValue('TEAM_ID', '1610612763')).toBe('1610612763');
+    expect(formatDisplayValue('playerId', 201939, [], { compact: true })).toBe('201939');
+    expect(formatDisplayValue('ZIP_CODE', 94105, [], { meta: { kind: 'number' } })).toBe('94105');
+    expect(formatChartValue('GAME_ID', 22100330)).toBe('22100330');
+    // A count of identifiers is a quantity.
+    expect(isIdentifierColumn('COUNT(DISTINCT PLAYER_ID)')).toBe(false);
+    expect(isIdentifierColumn('player_id_count')).toBe(false);
+    expect(formatDisplayValue('COUNT(DISTINCT PLAYER_ID)', 2611)).toBe('2,611');
   });
 
   it('formats years, months, dates, and timestamps by their semantic role', () => {

@@ -5,6 +5,7 @@ import { buildConversationContext, type ConversationThreadItem } from './agentCo
 import type { AgentRunEvent, AskTraceDataV1 } from '../../api/client';
 import { themes } from '../../themes/notebook-theme';
 import type * as UnifiedAgentRunPanelModule from './UnifiedAgentRunPanel';
+import { explainAskRun } from './ask-run-explanation';
 
 let resolveArtifactDqlView: typeof UnifiedAgentRunPanelModule.resolveArtifactDqlView;
 let artifactSqlDisclosureLabel: typeof UnifiedAgentRunPanelModule.artifactSqlDisclosureLabel;
@@ -46,6 +47,10 @@ let formatStepDuration: typeof UnifiedAgentRunPanelModule.formatStepDuration;
 let AskStoryList: typeof UnifiedAgentRunPanelModule.AskStoryList;
 let askStoryActiveLabel: typeof UnifiedAgentRunPanelModule.askStoryActiveLabel;
 let AskRunStory: typeof UnifiedAgentRunPanelModule.AskRunStory;
+let askRunSummarySteps: typeof UnifiedAgentRunPanelModule.askRunSummarySteps;
+let askAnswerPassedChecks: typeof UnifiedAgentRunPanelModule.askAnswerPassedChecks;
+let askRunIsDataGap: typeof UnifiedAgentRunPanelModule.askRunIsDataGap;
+let askBlockedHeading: typeof UnifiedAgentRunPanelModule.askBlockedHeading;
 let askPipelinePlanRows: typeof UnifiedAgentRunPanelModule.askPipelinePlanRows;
 let askRunCaptureWarning: typeof UnifiedAgentRunPanelModule.askRunCaptureWarning;
 let askFailureOriginTyped: typeof UnifiedAgentRunPanelModule.askFailureOrigin;
@@ -111,6 +116,10 @@ beforeAll(async () => {
     AskStoryList = module.AskStoryList;
     askStoryActiveLabel = module.askStoryActiveLabel;
     AskRunStory = module.AskRunStory;
+    askRunSummarySteps = module.askRunSummarySteps;
+    askAnswerPassedChecks = module.askAnswerPassedChecks;
+    askRunIsDataGap = module.askRunIsDataGap;
+    askBlockedHeading = module.askBlockedHeading;
     askPipelinePlanRows = module.askPipelinePlanRows;
     askRunCaptureWarning = module.askRunCaptureWarning;
     askFailureOriginTyped = module.askFailureOrigin;
@@ -1564,7 +1573,7 @@ describe('UnifiedAgentRunPanel DQL-first artifact display helpers', () => {
     expect(trustExplainer(fromApp('review_required'))).toBe('Read from this App’s current results. A tile it read needs review: check its source before relying on it.');
     expect(trustExplainer(fromApp('review_required'))).not.toContain('AI-generated');
     expect(trustExplainer(fromApp('certified'))).toBe('Read from this App’s current results; every tile it read runs a certified source.');
-    expect(askArtifactMeta(fromApp('review_required').artifacts[0], fromApp('review_required').artifacts[0].payload)).toContain('from this App · needs review');
+    expect(askArtifactMeta(fromApp('review_required').artifacts[0], fromApp('review_required').artifacts[0].payload)).toContain('AI-generated · from this App');
   });
 
   it('EXP-002 describes an exploratory answer as executed only when result evidence exists', () => {
@@ -1645,7 +1654,7 @@ describe('UnifiedAgentRunPanel DQL-first artifact display helpers', () => {
         rowCount: 10,
         executionTime: 2100,
       },
-    })).toBe('Table · 10 rows · 2.1s · certified saved query');
+    })).toBe('Table · 10 rows · 2.1s · Certified');
   });
 
   it('keeps the exact certified-title result visibly certified instead of relabeling it as generated', () => {
@@ -1664,7 +1673,7 @@ describe('UnifiedAgentRunPanel DQL-first artifact display helpers', () => {
       }],
     } as any;
     expect(trustExplainer(run)).toBe('Answered from a certified saved query.');
-    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('certified saved query');
+    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('Certified');
   });
 
   it('AGT-005/UI-012 labels a frozen semantic compiler failure as compile, never connection or AI-generated', () => {
@@ -2587,7 +2596,7 @@ describe('the story an Ask run tells while it works and keeps afterwards', () =>
     expect(markup).toContain('Working · 12 s');
   });
 
-  it('a finished run shows one line that opens its story: how long, how many steps, how many places it looked and missed', () => {
+  it('a finished run shows one line that opens its story: how long and how many steps', () => {
     const markup = renderToStaticMarkup(createElement(AskRunStory, {
       t: themes.light,
       receipt: { timings: { total: 20_000, context: 400 }, story: [
@@ -2596,8 +2605,61 @@ describe('the story an Ask run tells while it works and keeps afterwards', () =>
         { version: 1, phase: 'execute', title: 'Ran the AI-drafted query: 3 rows', state: 'done', at: 3 },
       ] },
     }));
-    expect(markup).toContain('Worked for 20 s · 3 steps · 1 looked and missed');
+    expect(markup).toContain('Worked for 20 s · 3 steps');
+    expect(markup).not.toContain('looked and missed');
     expect(renderToStaticMarkup(createElement(AskRunStory, { t: themes.light, receipt: {} }))).toBe('');
+  });
+
+  // V12: the chat said "11 steps · 3 looked and missed" over a "How it was answered" page of 6 steps.
+  it('an Ask pipeline run counts the steps "How it was answered" lists', () => {
+    const receipt = {
+      version: 1, dispatches: [{ purpose: 'intent:resolve', ms: 30_000 }, { purpose: 'intent:draft', ms: 3_000 }], tiers: [{ round: 97, tier: 'exploratory', outcome: 'prepared' }], refusals: [], candidates: [],
+      timings: { total: 40_000, context: 500, resolve: 30_000, schema_draft: 3_000 },
+      checks: [{ label: 'Read-only', passed: true, message: 'ok' }, { label: 'Stated values', passed: true, message: 'ok' }, { label: 'Kinds', passed: true, message: 'ok' }],
+      executed: { tier: 'exploratory', rowCount: 1, ms: 574 },
+      story: [
+        { version: 1, phase: 'context', title: 'Searched the project: 10 tables', detail: 'probe 164 ms · pack 1223 ms', state: 'done', at: 1 },
+        { version: 1, phase: 'read', title: 'Asked the AI to read the question', state: 'done', at: 2 },
+        { version: 1, phase: 'tier', title: 'Certified saved queries: no answer', state: 'missed', at: 3 },
+        { version: 1, phase: 'schema', title: 'Asking the AI to write SQL from the tables', state: 'done', at: 4 },
+        { version: 1, phase: 'schema', title: 'Drafted SQL over LOCAL_PLAYER_GAME_FACTS', state: 'done', at: 5 },
+        { version: 1, phase: 'execute', title: 'Ran the AI-drafted query: 1 row', state: 'done', at: 6 },
+      ],
+    };
+    const run = { artifacts: [{ id: 'a', kind: 'answer', title: 'AI-generated answer', trustState: 'review_required', payload: { askPipeline: receipt } }], evaluations: [
+      { id: 'context', label: 'Context', passed: true, severity: 'info', message: '' },
+      { id: 'pipeline-interpretation', label: 'Interpretation', passed: true, severity: 'info', message: '' },
+      { id: 'pipeline-preparation', label: 'AI-drafted SQL checks', passed: true, severity: 'info', message: '' },
+      { id: 'pipeline-execution-1', label: 'Execution proof', passed: true, severity: 'info', message: '' },
+    ], status: 'completed', diagnosticReceiptV9: receipt } as any;
+    const steps = askRunSummarySteps(receipt, run);
+    const explained = explainAskRun({ receipt, payload: { askPipeline: receipt }, evaluations: run.evaluations, status: 'completed' })!;
+    expect(steps).toHaveLength(explained.steps.length);
+    steps.forEach((step, index) => expect(step.title.startsWith(explained.steps[index]!.title)).toBe(true));
+    const markup = renderToStaticMarkup(createElement(AskRunStory, { t: themes.light, receipt, run }));
+    expect(markup).toContain(`Worked for 41 s · ${explained.steps.length} steps`);
+    expect(markup).not.toContain('looked and missed');
+    // The badge counts the checks the steps page lists (3), not every evaluation (4).
+    expect(askAnswerPassedChecks(run)).toBe(3);
+    expect(explained.steps.find((step) => step.kind === 'checks')?.reason).toBe('All 3 checks passed.');
+    // The host's own phase timings never reach a reader.
+    expect(JSON.stringify(explained.steps)).not.toContain('probe 164 ms');
+  });
+
+  // V12: the payroll question ("no column holds player salary") read "Couldn't run this query" in red.
+  it('a run that found the data does not hold what was asked is shown calmly, not as an error', () => {
+    const gapRun = (text: string, kind = 'not_modeled') => ({
+      status: 'blocked', trustState: 'blocked', route: 'generated_answer', artifacts: [{ id: 'g', kind: 'answer', title: 'No answer', trustState: 'blocked', payload: { kind: 'no_answer', text, answer: text, gap: { kind, message: text } } }], evaluations: [],
+    }) as any;
+    const payroll = gapRun('No query was run because the tables Ask searched do not hold it: No column in any listed table holds player salary or payroll data.');
+    expect(askRunIsDataGap(payroll)).toBe(true);
+    expect(askBlockedHeading(payroll)).toBe('Not in this data');
+    expect(askArtifactMeta(payroll.artifacts[0], payroll.artifacts[0].payload)).toContain('not in this data');
+    // A failed check or a run out of time is not an answer about the data.
+    expect(askRunIsDataGap(gapRun('No query was run because the AI-drafted SQL failed a check: it left out "2016".'))).toBe(false);
+    expect(askBlockedHeading(gapRun('No query was run because the AI-drafted SQL failed a check: it left out "2016".'))).toBe('Couldn’t run this query');
+    expect(askRunIsDataGap({ ...payroll, status: 'completed' })).toBe(false);
+    expect(askRunIsDataGap(gapRun('the query ran and found nothing', 'denied'))).toBe(false);
   });
 
   it('names what the run is waiting on from the last step it finished', () => {

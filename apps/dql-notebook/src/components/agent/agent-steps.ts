@@ -10,7 +10,7 @@
  */
 import type { AgentRun, AgentRunEvent } from '../../api/client';
 import type { MainView } from '../../store/types';
-import { plainRefs, withoutConfigHints, type RunExplanation, type RunStep } from './ask-run-explanation';
+import { plainRefs, readerDetail, withoutConfigHints, type RunExplanation, type RunStep } from './ask-run-explanation';
 
 export interface AgentStepRow {
   key: string;
@@ -113,7 +113,8 @@ function sentence(text: string, max = 160): string {
 export function agentStepLabel(event: AgentRunEvent, question?: string): Pick<AgentStepRow, 'label' | 'detail' | 'state'> | null {
   const step = askStepOf(event);
   if (step) {
-    const detail = typeof step.detail === 'string' ? withoutConfigHints(step.detail) : undefined;
+    // The host's own phase timings ("probe 164 ms · pack 1223 ms") are not a reader's words (V12).
+    const detail = typeof step.detail === 'string' ? readerDetail(step.detail) : undefined;
     return {
       label: withoutConfigHints(String(step.title)),
       // SQL has its own place in "How it was answered"; a row keeps to words.

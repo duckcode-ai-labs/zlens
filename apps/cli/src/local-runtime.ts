@@ -9,6 +9,8 @@ import {
   tableName,
   type PhysicalRelationBindingV1,
   setAgentToolGate,
+  automaticAskDraftState,
+  clearAutomaticAskDrafts,
 } from '@zlens/agent';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFileSync, execSync } from "node:child_process";
@@ -28088,6 +28090,29 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
+    // ── Clear automatic Ask drafts ───────────────────────────────────────
+    // Removes only the drafts Ask saved on its own that nobody changed since;
+    // the server decides which, never the request. Edited or certified drafts,
+    // and every saved query a person wrote, stay.
+    if (req.method === 'POST' && path === '/api/blocks/ask-drafts/clear') {
+      try {
+        const cleared = clearAutomaticAskDrafts(projectRoot);
+        const refreshOperation = cleared.removed.length ? scheduleProjectRefresh('ask-drafts-clear') : undefined;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({
+          ok: true,
+          removed: cleared.removed.length,
+          paths: cleared.removed,
+          kept: cleared.kept,
+          ...(refreshOperation ? { lineageRefresh: { status: 'queued', operationId: refreshOperation.id } } : {}),
+        }));
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
+      }
+      return;
+    }
+
     // ── Block library (list all blocks with metadata) ────────────────────
     if (req.method === 'GET' && path === '/api/blocks/library') {
       try {
@@ -28103,6 +28128,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           replacement?: { name: string; path: string } | null;
           /** Certified on the branch being served: under a host that certifies through review, not reviewed yet. */
           certificationProposed?: boolean;
+          /** An automatic Ask draft nobody changed: kept out of pickers, and removed by "Clear drafts". */
+          automaticDraft?: boolean;
         }> = [];
         const seen = new Set<string>();
         const servedBranch = hostHooks ? currentGitBranch(projectRoot) : undefined;
@@ -28164,6 +28191,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   ...(replacedByMatch ? { replacedBy: replacedByMatch[1] } : {}),
                   ...(deprecatedOnMatch ? { deprecatedOn: deprecatedOnMatch[1] } : {}),
                   ...(certificationProposed ? { certificationProposed } : {}),
+                  ...(/(^|\/)_drafts\//.test(relPath) && automaticAskDraftState(source, stat.mtimeMs) === 'untouched' ? { automaticDraft: true } : {}),
                 });
               } catch { /* skip unreadable files */ }
             }

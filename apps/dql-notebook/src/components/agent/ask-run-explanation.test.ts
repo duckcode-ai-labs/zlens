@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REFUSAL_SENTENCES, containsInternalCode, explainAskRun, isAskPipelineReceipt, plainReason, plainRefs, rowCountWords, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
+import { REFUSAL_SENTENCES, checksPassedSentence, containsInternalCode, explainAskRun, isAskPipelineReceipt, passedCheckCount, plainReason, plainRefs, readerDetail, rowCountWords, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
 
 const base = (overrides: Record<string, unknown>) => ({ version: 1, dispatches: [], tiers: [], candidates: [], refusals: [], story: [], timings: {}, ...overrides });
 
@@ -269,5 +269,30 @@ describe('config keys never reach a business reader (V11 tester)', () => {
     const read = explanation.steps.find((step) => step.kind === 'read')!;
     expect(read.story).toEqual([expect.objectContaining({ title: 'Did not look for "Boston" in stored values', detail: 'Searching stored values is not turned on for these tables, so the AI chose the field from its name and description.' })]);
     expect(JSON.stringify(explanation)).not.toMatch(/runtimeValueGrounding|searchSafeColumns|allowlisted/);
+  });
+
+  // V12 claims check and payroll page: "All 2 checks passed", "probe 164 ms · pack 1223 ms", and the certified tier
+  // saying the payroll question "is modeled: warriors ppg …".
+  it('says check counts in plain English and keeps internal words off the steps page', () => {
+    expect([1, 2, 3].map(checksPassedSentence)).toEqual(['The check passed.', 'Both checks passed.', 'All 3 checks passed.']);
+    expect(readerDetail('probe 164 ms · pack 1223 ms')).toBeUndefined();
+    expect(readerDetail('base 20 ms')).toBeUndefined();
+    expect(readerDetail('no certified block or semantic metric answers this ("player payroll in 2016" is modeled: warriors ppg regular vs playoffs 2016, player. Use warriors ppg instead of reporting a gap.)'))
+      .toBe('No certified saved query or semantic metric answers this, so the AI wrote the SQL from the tables.');
+    expect(readerDetail('Matched the certified block for this ranking.')).toBe('Matched the certified saved query for this ranking.');
+    const payroll = explainAskRun({
+      receipt: base({
+        tiers: [{ round: 0, tier: 'certified', outcome: 'refused' }],
+        refusals: [{ tier: 'certified', code: 'block_not_applicable', message: 'no certified block ("player payroll in 2016" is modeled: warriors ppg regular vs playoffs 2016, player)' }],
+        story: [{ version: 1, phase: 'context', title: 'Searched the project: 10 tables', detail: 'probe 164 ms · pack 1223 ms', state: 'done', at: 1 }],
+      }),
+      payload: { gap: { kind: 'not_modeled', message: 'No column holds player salary or payroll data' } },
+      status: 'blocked',
+    })!;
+    expect(payroll.steps.find((step) => step.kind === 'certified')?.reason).toBe('No certified saved query matches this question.');
+    expect(JSON.stringify(payroll)).not.toMatch(/is modeled|probe 164 ms/);
+    const answered = explainAskRun({ receipt: base({ checks: [{ label: 'A', passed: true }, { label: 'B', passed: true }], executed: { tier: 'exploratory', rowCount: 1 } }), payload: {}, status: 'completed' });
+    expect(passedCheckCount(answered)).toBe(2);
+    expect(answered?.steps.find((step) => step.kind === 'checks')?.reason).toBe('Both checks passed.');
   });
 });

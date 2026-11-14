@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, relative } from 'node:path';
 import { extractTablesFromSql, loadDomainPackageRegistry, type DqlArtifactFilter, type DqlArtifactOrderBy, type DqlArtifactReference } from '@zlens/core';
@@ -71,6 +71,43 @@ export function deriveGeneratedDraftSlug(question: string): string {
     .filter((token) => token.length > 0 && !STOPWORDS.has(token));
   const slug = tokens.join('_').slice(0, 60).replace(/_+$/, '');
   return slug || 'untitled_proposal';
+}
+
+/** Words a review draft's name drops: STOPWORDS, plus helper verbs and pronouns that say nothing about the data. */
+const REVIEW_DRAFT_FILLER = new Set([...STOPWORDS, 'did', 'does', 'he', 'she', 'they', 'them', 'him', 'his', 'her', 'its', 'been', 'being']);
+const REVIEW_DRAFT_SLUG_MAX = 80;
+
+/**
+ * The name of an Ask review draft, from the question it answers. It keeps
+ * "how" before many/much/often/long ("how_many_teams", never "many_teams":
+ * new-user test V7), and it is cut only between words, never inside one.
+ */
+export function deriveReviewDraftSlug(question: string): string {
+  const words = question
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+  const tokens = words.filter((word, index) => (word === 'how' && /^(many|much|often|long)$/.test(words[index + 1] ?? '')) || !REVIEW_DRAFT_FILLER.has(word));
+  let slug = '';
+  for (const token of tokens) {
+    const next = slug ? `${slug}_${token}` : token;
+    if (next.length > REVIEW_DRAFT_SLUG_MAX) break;
+    slug = next;
+  }
+  if (!slug && tokens[0]) slug = tokens[0].slice(0, REVIEW_DRAFT_SLUG_MAX);
+  return (slug || 'untitled_proposal').replace(/^(\d)/, 'q_$1');
+}
+
+/** A question as compared for "the same question": case, spacing, quotes and closing punctuation ignored. */
+export function normalizeDraftQuestion(question: string): string {
+  return question
+    .toLowerCase()
+    .replace(/[‘’`]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .replace(/[\s?.!;:,]+$/, '')
+    .trim();
 }
 
 /** Snake_case identifier rule the namer enforces: `^[a-z][a-z0-9_]*$`. */
@@ -242,7 +279,7 @@ export function upsertGeneratedDraft(
   }
 
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, renderGeneratedDraft({ ...rec, owner, answerFingerprint: fingerprint }, relativePath));
+  writeFileSync(filePath, withAutoDraftMark(renderGeneratedDraft({ ...rec, owner, answerFingerprint: fingerprint }, relativePath)));
   return {
     path: relativePath,
     askedTimes: 1,
@@ -381,7 +418,7 @@ export function upsertReviewRequiredAnswerDraft(
 ): ReviewRequiredAnswerDraft {
   const fingerprint = reviewAnswerFingerprint(rec.sql);
   const owner = rec.owner?.trim() || resolveLocalOwner(projectRoot, { persist: false });
-  const slug = deriveGeneratedDraftSlug(rec.question);
+  const slug = deriveReviewDraftSlug(rec.question);
   const proposedContractId = slug;
   const byFingerprint = findReviewDraftByFingerprint(projectRoot, fingerprint);
   if (byFingerprint) {
@@ -389,29 +426,197 @@ export function upsertReviewRequiredAnswerDraft(
   }
   const proposedDomain = rec.proposedDomain?.trim() || proposeAnswerDomain(projectRoot, rec.sql);
   const { filePath, relativePath } = resolveGeneratedDraftPath(projectRoot, { slug, proposedDomain });
-  if (existsSync(filePath)) {
-    return { path: relativePath, askedTimes: bumpAskedTimes(projectRoot, relativePath, owner), proposedContractId, created: false, fingerprint };
+  // THE SAME QUESTION KEEPS ONE DRAFT, wherever it was filed: a repeat whose
+  // tables propose another Domain, or a draft named before V13 changed the
+  // names, is the same question (new-user test V12: the same question saved
+  // twice). A draft nobody changed takes the newer answer; one a person
+  // edited keeps their work and only counts the ask.
+  // A saved query a person wrote under the same name is never taken over: the draft gets the next free name.
+  const atSlug = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : undefined;
+  const slugIsAskDraft = atSlug !== undefined && automaticAskDraftState(atSlug) !== undefined;
+  const sameQuestion = slugIsAskDraft ? relativePath : findReviewDraftByQuestion(projectRoot, rec.question);
+  if (sameQuestion) {
+    const existingPath = join(projectRoot, sameQuestion);
+    const existing = readFileSync(existingPath, 'utf-8');
+    if (automaticAskDraftState(existing, statSync(existingPath).mtimeMs) === 'untouched') {
+      const asked = existing.match(/asked_times\s*=\s*(\d+)/);
+      const previous = asked ? Number.parseInt(asked[1]!, 10) : 1;
+      const askedTimes = Number.isFinite(previous) ? previous + 1 : 2;
+      const firstAsked = existing.match(/first_asked\s*=\s*"([^"]*)"/)?.[1];
+      const keptSlug = sameQuestion.split('/').pop()!.replace(/\.dql$/, '');
+      const keptDomain = /^domains\/([^/]+)\//.exec(sameQuestion)?.[1] ?? proposedDomain;
+      let body = reviewDraftBody(rec, { slug: keptSlug, proposedContractId: keptSlug, proposedDomain: keptDomain, owner, fingerprint }, sameQuestion)
+        .replace(/asked_times\s*=\s*\d+/, `asked_times = ${askedTimes}`);
+      if (firstAsked) body = body.replace(/first_asked\s*=\s*"[^"]*"/, `first_asked = "${firstAsked}"`);
+      writeFileSync(existingPath, withAutoDraftMark(body));
+      return { path: sameQuestion, askedTimes, proposedContractId: keptSlug, created: false, fingerprint };
+    }
+    return { path: sameQuestion, askedTimes: bumpAskedTimes(projectRoot, sameQuestion, owner), proposedContractId, created: false, fingerprint };
   }
+  let freeSlug = slug;
+  let target = { filePath, relativePath };
+  for (let n = 2; existsSync(target.filePath); n += 1) {
+    freeSlug = `${slug}_${n}`;
+    target = resolveGeneratedDraftPath(projectRoot, { slug: freeSlug, proposedDomain });
+  }
+  const body = reviewDraftBody(rec, { slug: freeSlug, proposedContractId: freeSlug, proposedDomain, owner, fingerprint }, target.relativePath);
+  mkdirSync(dirname(target.filePath), { recursive: true });
+  writeFileSync(target.filePath, withAutoDraftMark(body));
+  return { path: target.relativePath, askedTimes: 1, proposedContractId: freeSlug, created: true, fingerprint };
+}
+
+function reviewDraftBody(
+  rec: ReviewRequiredAnswerDraftRecord,
+  draft: { slug: string; proposedContractId: string; proposedDomain?: string; owner: string; fingerprint: string },
+  relativePath: string,
+): string {
   const artifactSource = rec.dqlArtifact?.source?.trim();
   // The draft is named after its own id (the file name), not after the AI's
   // restatement of the question that named the transient artifact.
-  const body = artifactSource
+  return artifactSource
     ? stampGeneratedDqlArtifactDraft({
-        slug,
+        slug: draft.slug,
         question: rec.question,
-        proposedContractId,
-        proposedDomain,
+        proposedContractId: draft.proposedContractId,
+        proposedDomain: draft.proposedDomain,
         sourceQuestion: rec.question,
         dqlArtifact: {
           kind: (rec.dqlArtifact?.kind ?? 'sql_block'),
-          source: withProposedDomain(renameDraftBlock(forceDraftStatus(artifactSource), slug), proposedDomain),
+          source: withProposedDomain(renameDraftBlock(forceDraftStatus(artifactSource), draft.slug), draft.proposedDomain),
           ...(rec.dqlArtifact?.name ? { name: rec.dqlArtifact.name } : {}),
         } as GeneratedDraftSourceDqlArtifact,
-      }, relativePath, owner, { answerFingerprint: fingerprint, sourceRunId: rec.runId })
-    : renderGeneratedDraft({ slug, question: rec.question, proposedSql: rec.sql, proposedContractId, proposedDomain, owner, answerFingerprint: fingerprint, sourceRunId: rec.runId }, relativePath);
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, body);
-  return { path: relativePath, askedTimes: 1, proposedContractId, created: true, fingerprint };
+      }, relativePath, draft.owner, { answerFingerprint: draft.fingerprint, sourceRunId: rec.runId })
+    : renderGeneratedDraft({ slug: draft.slug, question: rec.question, proposedSql: rec.sql, proposedContractId: draft.proposedContractId, proposedDomain: draft.proposedDomain, owner: draft.owner, answerFingerprint: draft.fingerprint, sourceRunId: rec.runId }, relativePath);
+}
+
+// ── Automatic Ask drafts: which ones Ask wrote, and which nobody has changed ──
+
+/** The comment an automatic draft carries: a check over everything a person could change. */
+const AUTO_DRAFT_MARK = /^[ \t]*\/\/ Saved by Ask\. "Clear drafts" removes it while it is unchanged \(check ([0-9a-f]{16})\)\.[ \t]*\r?\n?/m;
+/** Lines Ask itself changes on a repeat, left out of the check. */
+const ASK_COUNTER_LINE = /^[ \t]*(?:asked_times|first_asked|last_asked)[ \t]*=.*\r?\n?/gm;
+
+function autoDraftCheck(content: string): string {
+  const stable = content
+    .replace(new RegExp(AUTO_DRAFT_MARK.source, 'gm'), '')
+    .replace(ASK_COUNTER_LINE, '')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim();
+  return createHash('sha256').update(stable).digest('hex').slice(0, 16);
+}
+
+/** The draft with its check, as Ask wrote it. */
+function withAutoDraftMark(content: string): string {
+  const without = content.replace(new RegExp(AUTO_DRAFT_MARK.source, 'gm'), '');
+  return `${insertBeforeFinalBrace(without, `\n  // Saved by Ask. "Clear drafts" removes it while it is unchanged (check ${autoDraftCheck(without)}).`)}\n`;
+}
+
+/**
+ * Whether a saved query is an automatic Ask draft, and whether anyone changed
+ * it since Ask last wrote it. `untouched`: Ask wrote it, it is still a draft,
+ * and nothing but Ask's own counters changed. `edited`: Ask wrote it and a
+ * person changed it since (their work, never cleared). Undefined: not an
+ * automatic Ask draft at all. A draft written before the check existed counts
+ * as unchanged only when its file was last written when Ask last stamped it.
+ */
+export function automaticAskDraftState(content: string, mtimeMs?: number): 'untouched' | 'edited' | undefined {
+  const askWritten = /^\s*answer_fingerprint\s*=\s*"/m.test(content) || (/^\s*asked_times\s*=/m.test(content) && /^\s*last_asked\s*=/m.test(content));
+  if (!askWritten) return undefined;
+  const status = /^\s*status\s*=\s*"([^"]+)"/m.exec(content)?.[1] ?? 'draft';
+  if (status !== 'draft') return 'edited';
+  const mark = AUTO_DRAFT_MARK.exec(content);
+  if (mark) return mark[1] === autoDraftCheck(content) ? 'untouched' : 'edited';
+  const lastAsked = Date.parse(/last_asked\s*=\s*"([^"]*)"/.exec(content)?.[1] ?? '');
+  if (mtimeMs === undefined || !Number.isFinite(lastAsked)) return 'edited';
+  return Math.abs(mtimeMs - lastAsked) <= 10_000 ? 'untouched' : 'edited';
+}
+
+export interface AutomaticAskDraft {
+  /** Project-relative path. */
+  path: string;
+  name: string;
+  askedTimes: number;
+  state: 'untouched' | 'edited';
+}
+
+function draftRoots(projectRoot: string): string[] {
+  const roots: string[] = [join(projectRoot, 'blocks', '_drafts')];
+  const domainsRoot = join(projectRoot, 'domains');
+  if (existsSync(domainsRoot)) {
+    for (const entry of readdirSync(domainsRoot, { withFileTypes: true })) {
+      if (entry.isDirectory()) roots.push(join(domainsRoot, entry.name, 'blocks', '_drafts'));
+    }
+  }
+  return roots;
+}
+
+function visitDraftFiles(projectRoot: string, visit: (relativePath: string, filePath: string) => boolean | void): void {
+  const walk = (dir: string, depth: number): boolean => {
+    if (depth > 4 || !existsSync(dir)) return false;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const child = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (walk(child, depth + 1)) return true;
+      } else if (entry.name.endsWith('.dql') && visit(relative(projectRoot, child).replaceAll('\\', '/'), child) === true) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const root of draftRoots(projectRoot)) if (walk(root, 0)) return;
+}
+
+/** Every automatic Ask draft in the project's drafts folders, with whether a person changed it. */
+export function listAutomaticAskDrafts(projectRoot: string): AutomaticAskDraft[] {
+  const drafts: AutomaticAskDraft[] = [];
+  visitDraftFiles(projectRoot, (relativePath, filePath) => {
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      const state = automaticAskDraftState(content, statSync(filePath).mtimeMs);
+      if (!state) return;
+      const asked = Number.parseInt(/asked_times\s*=\s*(\d+)/.exec(content)?.[1] ?? '1', 10);
+      drafts.push({ path: relativePath, name: /^\s*block\s+"([^"]+)"/m.exec(content)?.[1] ?? relativePath.split('/').pop()!.replace(/\.dql$/, ''), askedTimes: Number.isFinite(asked) ? asked : 1, state });
+    } catch { /* an unreadable file is not an automatic draft */ }
+  });
+  return drafts;
+}
+
+/**
+ * "Clear drafts": removes the automatic Ask drafts nobody changed, and only
+ * those. A draft a person edited or certified, and every saved query a person
+ * wrote, stays. Returns what was removed and how many Ask drafts were kept.
+ */
+export function clearAutomaticAskDrafts(projectRoot: string): { removed: string[]; kept: number } {
+  const removed: string[] = [];
+  let kept = 0;
+  for (const draft of listAutomaticAskDrafts(projectRoot)) {
+    if (draft.state !== 'untouched') { kept += 1; continue; }
+    try {
+      unlinkSync(join(projectRoot, draft.path));
+      removed.push(draft.path);
+    } catch { kept += 1; }
+  }
+  return { removed, kept };
+}
+
+/** The automatic draft already saved for this question (by its words, case and closing punctuation ignored). */
+export function findReviewDraftByQuestion(projectRoot: string, question: string): string | undefined {
+  const wanted = normalizeDraftQuestion(question);
+  if (!wanted) return undefined;
+  let found: string | undefined;
+  visitDraftFiles(projectRoot, (relativePath, filePath) => {
+    let content: string;
+    try { content = readFileSync(filePath, 'utf-8'); } catch { return; }
+    if (!automaticAskDraftState(content)) return;
+    const asked = [
+      /^\s*source_question\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(content)?.[1],
+      /\bexamples\s*=\s*\[\s*\{\s*question\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(content)?.[1],
+    ].filter((value): value is string => Boolean(value)).map((value) => normalizeDraftQuestion(value.replace(/\\"/g, '"').replace(/\\\\/g, '\\')));
+    if (asked.includes(wanted)) { found = relativePath; return true; }
+  });
+  return found;
 }
 
 /**

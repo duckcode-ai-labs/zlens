@@ -4,6 +4,7 @@ import { themes, type Theme, type ThemeMode } from '../../themes/notebook-theme'
 import type { QueryResult } from '../../store/types';
 import { inferColumnKind, type ColumnKind } from '../../utils/column-kind';
 import { formatDisplayValue } from '../../utils/value-format';
+import { readableColumnLabel } from '../../utils/column-label';
 import { useHostUi } from '../../host/host-ui';
 import { EXPORT_LABELS, type ExportFormat } from '../../api/exports';
 import {
@@ -34,6 +35,11 @@ interface TableOutputProps {
   onExport?: (format: ExportFormat) => Promise<unknown>;
   /** What an empty result says; an App tile says "No matching rows for these filters." */
   emptyMessage?: string;
+  /**
+   * Headers in words ("Playoff points 2016") instead of SQL names ("PLAYOFF_POINTS_2016"), for answers people
+   * read (Ask). The raw name stays in the tooltip and in every export. Notebook SQL cells keep raw names.
+   */
+  readableHeaders?: boolean;
 }
 
 const TONE_COLORS: Record<ConditionalTone, string> = {
@@ -162,7 +168,7 @@ export function tableRowCountLabel(input: { rangeStart: number; rangeEnd: number
   return `Showing ${rangeStart}–${rangeEnd} of ${loaded} ${loaded === 1 ? 'row' : 'rows'}`;
 }
 
-export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSize = 50, onRowClick, conditionalFormats, onExport, emptyMessage }: TableOutputProps) {
+export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSize = 50, onRowClick, conditionalFormats, onExport, emptyMessage, readableHeaders = false }: TableOutputProps) {
   const hosted = useHostUi().host;
   const [exportNote, setExportNote] = useState<string | null>(null);
   const serverExport = (format: ExportFormat) => {
@@ -383,7 +389,10 @@ export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSiz
                           </span>
                         );
                       })()}
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }} title={metaOf(col)?.label ? col : undefined}>{metaOf(col)?.label ?? col}</span>
+                      {(() => {
+                        const label = metaOf(col)?.label ?? (readableHeaders ? readableColumnLabel(col) : col);
+                        return <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }} title={label !== col ? col : undefined}>{label}</span>;
+                      })()}
                       <SortArrow dir={sortCol === col ? sortDir : null} color={sortCol === col ? t.accent : t.textMuted} />
                     </span>
                   </th>

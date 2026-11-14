@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/client';
 import { themes, type Theme } from '../../themes/notebook-theme';
 import type { ThemeMode } from '../../store/types';
-import { STATUS_COLORS, type BlockEntry } from './block-types';
+import { STATUS_COLORS, pickableBlocks, type BlockEntry } from './block-types';
 import { useNotebook } from '../../store/NotebookStore';
 import { authoredDomainIds, authoredDomainOptions } from '../domains/authored-domain-options';
 
@@ -30,7 +30,7 @@ export function BlockPicker({ themeMode, onPick, autoFocus = true, compact = tru
     let cancelled = false;
     setLoading(true);
     api.getBlockLibrary()
-      .then((result) => { if (!cancelled) setBlocks(result.blocks); })
+      .then((result) => { if (!cancelled) setBlocks(pickableBlocks(result.blocks)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);

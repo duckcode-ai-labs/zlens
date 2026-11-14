@@ -290,7 +290,7 @@ export function ResultView({
             Smart chart · {effectiveChart.chart}
           </span>
         ) : null}
-        <span style={{ marginLeft: 'auto', fontSize: 11, color: t.textMuted, alignSelf: 'center' }}>{result.rowCount ?? result.rows.length} rows</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: t.textMuted, alignSelf: 'center' }}>{(() => { const count = result.rowCount ?? result.rows.length; return `${count.toLocaleString('en-US')} ${count === 1 ? 'row' : 'rows'}`; })()}</span>
       </div>
       <div style={{ padding: embedded ? 12 : 8, minHeight: chartable && view === 'chart' ? 200 : undefined, maxHeight: contentMaxHeight ?? (embedded ? 380 : 320), overflow: 'auto' }}>
         {isEmpty
@@ -312,7 +312,7 @@ export function ResultView({
                     </button>
                   </div>
                 ) : null}
-                <TableOutput result={tableResult} themeMode={themeMode} maxHeight={tableMaxHeight} />
+                <TableOutput result={tableResult} themeMode={themeMode} maxHeight={tableMaxHeight} readableHeaders />
               </>}
       </div>
     </div>

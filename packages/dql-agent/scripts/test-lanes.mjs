@@ -213,10 +213,11 @@ const EXPECTED_TEST_FILES = 198;
 // views, planning one tile for each thing it shows, waiting at most its time and asking again only after a quick
 // first reply, and telling the planner the exact JSON (app-builder-orchestrator.test.ts +5), and a cut-off brief
 // read after a sentence with braces of its own (app-builder-planner-json.test.ts +1; V12).
-const EXPECTED_TESTS = 2884;
+// 2890 with one Ask draft per question and draft names cut between words (metadata/drafts.test.ts +6; V13, #337).
+const EXPECTED_TESTS = 2890;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2803.
+// The ordinary lane's share is the difference: 2809.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

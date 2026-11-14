@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { buildManifest, parse } from '@zlens/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, readdirSync } from 'node:fs';
-import { deriveGeneratedDraftSlug, deriveSemanticDraftName, upsertGeneratedDqlArtifactDraft, upsertGeneratedDraft, upsertReviewRequiredAnswerDraft } from './drafts.js';
+import { utimesSync } from 'node:fs';
+import { automaticAskDraftState, clearAutomaticAskDrafts, deriveGeneratedDraftSlug, deriveReviewDraftSlug, deriveSemanticDraftName, listAutomaticAskDrafts, upsertGeneratedDqlArtifactDraft, upsertGeneratedDraft, upsertReviewRequiredAnswerDraft } from './drafts.js';
 
 describe('generated draft blocks', () => {
   let projectRoot: string;
@@ -299,5 +300,89 @@ describe('review-required answer drafts (graduated trust, Tier 2)', () => {
     const mcp = upsertGeneratedDraft(projectRoot, { slug: 'top_team_wins', question: 'Top team by wins in 2017', proposedSql: sql, proposedContractId: 'nba.Team.top_team_wins' });
     const ask = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Which team had the most wins in season 2017?', sql });
     expect(ask).toMatchObject({ created: false, path: mcp.path, askedTimes: 2 });
+  });
+});
+
+describe('fewer automatic Ask drafts (V13)', () => {
+  let projectRoot: string;
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'dql-ask-drafts-'));
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'drafts' }), 'utf-8');
+  });
+  afterEach(() => rmSync(projectRoot, { recursive: true, force: true }));
+  const draftFiles = (dir = join(projectRoot, 'blocks', '_drafts')) => existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith('.dql')) : [];
+
+  it('names a draft with its question word and cuts the name only between words', () => {
+    expect(deriveReviewDraftSlug('How many teams are there?')).toBe('how_many_teams');
+    expect(deriveReviewDraftSlug('How many points did LeBron James score in the 2012 playoffs?')).toBe('how_many_points_lebron_james_score_2012_playoffs');
+    const long = deriveReviewDraftSlug('Help a Warriors fan see how the Golden State Warriors did in each season from 2014 to 2018: regular-season wins and losses, and playoff wins, shown separately.');
+    expect(long.length).toBeLessThanOrEqual(80);
+    // Every part of the name is a whole word of the question.
+    for (const part of long.split('_')) expect(` help warriors fan see how golden state each season 2014 2018 regular wins losses playoff shown separately `).toContain(` ${part} `);
+  });
+
+  it('keeps one draft for the same question asked again, even when its tables propose another Domain', () => {
+    mkdirSync(join(projectRoot, 'domains', 'nba'), { recursive: true });
+    writeFileSync(join(projectRoot, 'domains', 'nba', 'domain.dql'), 'domain "nba" {\n  id = "nba"\n  owner = "a@b.c"\n  sourceSystems = ["team_game_facts"]\n}\n');
+    const first = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many games did the Warriors win in 2015?', sql: 'SELECT COUNT(*) FROM team_game_facts WHERE season = 2015' });
+    expect(first.path).toBe('domains/nba/blocks/_drafts/how_many_games_warriors_win_2015.dql');
+    const again = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'how many games did the warriors win in 2015', sql: 'SELECT COUNT(*) FROM other_facts WHERE yr = 2015' });
+    expect(again).toMatchObject({ created: false, path: first.path, askedTimes: 2 });
+    expect(draftFiles()).toHaveLength(0);
+    // Nobody changed the draft, so it holds the newer answer.
+    expect(readFileSync(join(projectRoot, first.path), 'utf-8')).toContain('other_facts');
+  });
+
+  it('a draft a person edited keeps their work: a repeat only counts the ask, and Clear drafts leaves it', () => {
+    const saved = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Which team won the most games in 2016?', sql: 'SELECT team, COUNT(*) AS wins FROM games GROUP BY team' });
+    const file = join(projectRoot, saved.path);
+    expect(automaticAskDraftState(readFileSync(file, 'utf-8'))).toBe('untouched');
+    writeFileSync(file, readFileSync(file, 'utf-8').replace('COUNT(*) AS wins', 'COUNT(*) AS games_won'));
+    expect(automaticAskDraftState(readFileSync(file, 'utf-8'))).toBe('edited');
+    const again = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Which team won the most games in 2016?', sql: 'SELECT 2' });
+    expect(again).toMatchObject({ created: false, path: saved.path, askedTimes: 2 });
+    expect(readFileSync(file, 'utf-8')).toContain('games_won');
+    expect(clearAutomaticAskDrafts(projectRoot)).toEqual({ removed: [], kept: 1 });
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('Clear drafts removes only automatic drafts nobody changed, never a saved query a person wrote', () => {
+    const untouched = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many teams are there?', sql: 'SELECT COUNT(*) FROM teams' });
+    const asked = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many games are in our data?', sql: 'SELECT COUNT(*) FROM games' });
+    upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many games are in our data', sql: 'select count(*) from games' });
+    const certified = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many players are there?', sql: 'SELECT COUNT(*) FROM players' });
+    const certifiedFile = join(projectRoot, certified.path);
+    writeFileSync(certifiedFile, readFileSync(certifiedFile, 'utf-8').replace('status = "draft"', 'status = "certified"'));
+    const mine = join(projectRoot, 'blocks', '_drafts', 'my_own_query.dql');
+    writeFileSync(mine, 'block "my_own_query" {\n  type = "custom"\n  status = "draft"\n  query = """\n    SELECT 1\n  """\n}\n');
+    expect(listAutomaticAskDrafts(projectRoot).map((draft) => [draft.path, draft.state]).sort()).toEqual([
+      [asked.path, 'untouched'], [certified.path, 'edited'], [untouched.path, 'untouched'],
+    ].sort());
+    const cleared = clearAutomaticAskDrafts(projectRoot);
+    expect(cleared.removed.sort()).toEqual([asked.path, untouched.path].sort());
+    expect(cleared.kept).toBe(1);
+    expect(draftFiles().sort()).toEqual(['how_many_players.dql', 'my_own_query.dql']);
+  });
+
+  it('a draft from before the check counts as unchanged only while its file is as Ask last wrote it', () => {
+    const legacy = join(projectRoot, 'blocks', '_drafts', 'many_teams.dql');
+    mkdirSync(join(projectRoot, 'blocks', '_drafts'), { recursive: true });
+    const stamped = '2026-11-01T10:00:00.000Z';
+    writeFileSync(legacy, `block "many_teams" {\n  type = "custom"\n  status = "draft"\n  asked_times = 3\n  last_asked = "${stamped}"\n  answer_fingerprint = "abc"\n  query = """\n    SELECT 1\n  """\n}\n`);
+    utimesSync(legacy, new Date(stamped), new Date(Date.parse(stamped) + 2_000));
+    expect(listAutomaticAskDrafts(projectRoot)).toMatchObject([{ path: 'blocks/_drafts/many_teams.dql', state: 'untouched', askedTimes: 3 }]);
+    utimesSync(legacy, new Date(stamped), new Date(Date.parse(stamped) + 3_600_000));
+    expect(listAutomaticAskDrafts(projectRoot)).toMatchObject([{ state: 'edited' }]);
+  });
+
+  it('never takes over a saved query a person wrote under the same name', () => {
+    mkdirSync(join(projectRoot, 'blocks', '_drafts'), { recursive: true });
+    const mine = join(projectRoot, 'blocks', '_drafts', 'how_many_teams.dql');
+    const original = 'block "how_many_teams" {\n  type = "custom"\n  status = "draft"\n  query = """\n    SELECT 30\n  """\n}\n';
+    writeFileSync(mine, original);
+    const saved = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many teams?', sql: 'SELECT COUNT(*) FROM teams' });
+    expect(saved).toMatchObject({ created: true, path: 'blocks/_drafts/how_many_teams_2.dql' });
+    expect(readFileSync(mine, 'utf-8')).toBe(original);
+    expect(() => parse(readFileSync(join(projectRoot, saved.path), 'utf-8'), saved.path)).not.toThrow();
   });
 });

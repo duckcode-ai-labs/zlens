@@ -419,7 +419,7 @@ export function AiSqlDraftDialog({
                     <>
                       <div style={previewResultHeaderStyle(t)}>
                         <span>Preview result</span>
-                        <b>{previewRowCount} rows</b>
+                        <b>{previewRowCount} {previewRowCount === 1 ? 'row' : 'rows'}</b>
                       </div>
                       <div style={previewTableWrapStyle(t)}>
                         <TableOutput result={previewResult} themeMode={themeMode} />
@@ -590,7 +590,7 @@ function runStatusText(status: DraftRunStatus, result: QueryResult | null, error
   if (status === 'running') return 'Running against the active connection...';
   if (status === 'fixing') return 'Repairing with AI...';
   if (error) return 'Preview failed';
-  if (result) return `${result.rowCount ?? result.rows.length} rows`;
+  if (result) { const count = result.rowCount ?? result.rows.length; return `${count} ${count === 1 ? 'row' : 'rows'}`; }
   return 'Review required';
 }
 
