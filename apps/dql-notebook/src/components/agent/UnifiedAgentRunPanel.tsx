@@ -86,7 +86,7 @@ import { BlockParameterControls, isRuntimeEditableParameter } from '../parameter
 export { deriveResultChartConfig } from '../output/ResultView';
 import type { QueryResult, AppSummary, CellChartConfig, Cell, BlockParameterDefinition, ExecutionTarget } from '../../store/types';
 import { useNotebook } from '../../store/NotebookStore';
-import { certifiedQueryPrompts, neutralPrompts, projectExamplePrompts, type ProjectPrompt } from './project-prompts';
+import { savedQueryPrompts, neutralPrompts, projectExamplePrompts, type ProjectPrompt } from './project-prompts';
 import { buildConversationContext } from './agentConversationContext';
 import { describeJoin, explainAskRun, explanationForTrace, isAskPipelineReceipt, OUTCOME_WORDS, passedCheckCount, readerDetail, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
 import { runContextLine, runContextSummary } from './run-context-summary';
@@ -421,11 +421,11 @@ export function UnifiedAgentRunPanel({
   );
   // No metrics: the project's certified saved queries suggest what to ask (V12: NBA data was offered revenue,
   // region, customer and order questions). Loaded once per page; a failure keeps the neutral questions.
-  const [queryPrompts, setQueryPrompts] = useState<ProjectPrompt[]>(() => cachedCertifiedQueryPrompts ?? []);
+  const [queryPrompts, setQueryPrompts] = useState<ProjectPrompt[]>(() => cachedSavedQueryPrompts ?? []);
   useEffect(() => {
-    if (examplePrompts || metricPrompts.length || cachedCertifiedQueryPrompts) return undefined;
+    if (examplePrompts || metricPrompts.length || cachedSavedQueryPrompts) return undefined;
     let active = true;
-    void loadCertifiedQueryPrompts().then((prompts) => { if (active) setQueryPrompts(prompts); });
+    void loadSavedQueryPrompts().then((prompts) => { if (active) setQueryPrompts(prompts); });
     return () => { active = false; };
   }, [examplePrompts, metricPrompts.length]);
   const projectPrompts = metricPrompts.length ? metricPrompts : queryPrompts.length ? queryPrompts : neutralPrompts(Boolean(notebookPath));
@@ -1585,20 +1585,20 @@ export function UnifiedAgentRunPanel({
 }
 
 const DEFAULT_EMPTY_HINT = 'Ask a question. Each answer says what it is built on: Certified, From Metrics, or AI-generated. Use Research deeper on any answer to investigate what changed.';
-// The project's certified saved queries as example questions, read once per page (see certifiedQueryPrompts).
-let cachedCertifiedQueryPrompts: ProjectPrompt[] | undefined;
-let pendingCertifiedQueryPrompts: Promise<ProjectPrompt[]> | undefined;
-function loadCertifiedQueryPrompts(): Promise<ProjectPrompt[]> {
-  pendingCertifiedQueryPrompts ??= Promise.resolve()
+// The project's certified saved queries as example questions, read once per page (see savedQueryPrompts).
+let cachedSavedQueryPrompts: ProjectPrompt[] | undefined;
+let pendingSavedQueryPrompts: Promise<ProjectPrompt[]> | undefined;
+function loadSavedQueryPrompts(): Promise<ProjectPrompt[]> {
+  pendingSavedQueryPrompts ??= Promise.resolve()
     .then(() => api.getBlockLibrary())
     .then((library) => {
-      const prompts = certifiedQueryPrompts(library.blocks ?? []);
-      if (!library.error) cachedCertifiedQueryPrompts = prompts;
+      const prompts = savedQueryPrompts(library.blocks ?? []);
+      if (!library.error) cachedSavedQueryPrompts = prompts;
       return prompts;
     })
     .catch(() => [] as ProjectPrompt[])
-    .finally(() => { pendingCertifiedQueryPrompts = undefined; });
-  return pendingCertifiedQueryPrompts;
+    .finally(() => { pendingSavedQueryPrompts = undefined; });
+  return pendingSavedQueryPrompts;
 }
 
 // ── Server-thread resume ─────────────────────────────────────────────────────

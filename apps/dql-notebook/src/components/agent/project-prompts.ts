@@ -41,7 +41,7 @@ function queryWords(name: string): string {
  * test V12: Notebook AI on NBA data offered revenue, region, customer and order questions). A description written
  * as a question is asked as written; otherwise the saved query's name is asked, which Ask answers from it.
  */
-export function certifiedQueryPrompts(queries: LibraryQuery[], limit = 4): ProjectPrompt[] {
+export function savedQueryPrompts(queries: LibraryQuery[], limit = 4): ProjectPrompt[] {
   const out: ProjectPrompt[] = [];
   for (const query of queries) {
     if (out.length >= limit) break;

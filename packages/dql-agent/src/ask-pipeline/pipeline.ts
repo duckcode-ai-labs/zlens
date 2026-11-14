@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { withoutTrailing } from '../text-ends.js';
 import type { AgentProvider, ProviderRunOptions } from '../providers/types.js';
 import { executeCandidate, fillPeriodGaps, literalIsFieldName, relationName, statementFailure, type ExecuteDeps, type ExecutedRows } from './execute.js';
 import { describeIntent, intentExecutionFingerprint, intentRefs, type AnalyticalIntentV1, type IntentPredicate } from './intent.js';
@@ -817,7 +818,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       ? hint
       // No reading: the question's own words, and for a follow-up the question it follows, so what is saved from
       // this answer and the next follow-up still say what "those" were.
-      : { version: 1, kind: 'analytics', reading: options.followUp ? `${input.question.trim().replace(/[.\s]+$/, '')} (following up on: ${options.followUp})` : input.question, measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' } as AnalyticalIntentV1;
+      : { version: 1, kind: 'analytics', reading: options.followUp ? `${withoutTrailing(input.question.trim(), '.')} (following up on: ${options.followUp})` : input.question, measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' } as AnalyticalIntentV1;
     const asRead = reading;
     let previous: { sql: string; error: string } | undefined;
     let lastFailure: Extract<Awaited<ReturnType<typeof executeCandidate>>, { ok: false }> | undefined;
@@ -1222,7 +1223,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     // means that answer's rows (V12 long-chat N4 lost it after an 85 s reading).
     const cutShort = resolution.code === 'reading_out_of_time';
     const readSeconds = Math.round((timings.resolve ?? 0) / 1_000);
-    const followUp = input.prior?.reading?.trim().replace(/[.\s]+$/, '') || undefined;
+    const followUp = input.prior?.reading ? withoutTrailing(input.prior.reading.trim(), '.') || undefined : undefined;
     const words = `the SQL was written from your words${followUp ? ' and the question before it' : ''}`;
     const readingNote = cutShort
       ? `The AI model took too long to read the question${readSeconds >= 20 ? ` (${readSeconds} s)` : ''}, so ${words}`

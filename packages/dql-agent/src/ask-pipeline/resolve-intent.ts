@@ -1,4 +1,5 @@
 import type { RenderedCards } from './vocabulary.js';
+import { withoutLeading, withoutTrailing } from '../text-ends.js';
 import type { AgentMessage, AgentProvider, ProviderRunOptions } from '../providers/types.js';
 import { generateStructured } from '../providers/structured-output.js';
 import {
@@ -1927,10 +1928,10 @@ export function clauseQuestion(clause: string): string {
   // 'Which did you mean for "How are the Warriors doing lately? — neither …"?'). What is unclear is said, then asked.
   const mark = asked.lastIndexOf('?');
   if (mark >= 0) {
-    const unclear = asked.slice(mark + 1).replace(/^[\s—–:;,.-]+/, '').replace(/[.\s]+$/, '');
+    const unclear = withoutTrailing(withoutLeading(asked.slice(mark + 1), '—–:;,.-'), '.');
     if (unclear) return `Not clear yet: ${unclear}. Which did you mean?`;
   }
-  const plain = asked.replace(/[?.\s]+$/, '').replace(/\?/g, '');
+  const plain = withoutTrailing(asked, '?.').replace(/\?/g, '');
   // A clause written as a question without its mark ("what defines 'best player' (…)") is asked as that question,
   // not quoted inside another one (V13 gate, Q16).
   if (/^(who|what|which|when|where|why|how)\b/i.test(plain)) return `${plain.charAt(0).toUpperCase()}${plain.slice(1)}?`;

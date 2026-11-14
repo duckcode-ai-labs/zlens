@@ -3,6 +3,7 @@ import { runAskPipeline } from './pipeline.js';
 import { composeAnsweredText } from './outcomes.js';
 import { clauseQuestion } from './resolve-intent.js';
 import type { AnalyticalIntentV1 } from './intent.js';
+import { withoutEnds, withoutLeading, withoutTrailing } from '../text-ends.js';
 import { buildVocabularyIndex, type VocabularySource } from './vocabulary.js';
 import type { AgentProvider } from '../providers/types.js';
 
@@ -154,5 +155,11 @@ describe('the answer reads as one answer sentence, the reading, and one source l
     expect(one(['TEAM_ID', 'TEAM_NICKNAME', 'PRESEASON_WINS'], { TEAM_ID: 1610612766, TEAM_NICKNAME: 'Hornets', PRESEASON_WINS: 4 })).toBe('Hornets: preseason wins 4.');
     expect(one(['GAMES_PLAYED', 'POINTS_SCORED'], { GAMES_PLAYED: 79, POINTS_SCORED: 2375 })).toBe('Games played: 79, points scored: 2375.');
     expect(one(['COUNT(DISTINCT PLAYER_ID)'], { 'COUNT(DISTINCT PLAYER_ID)': 2611 })).toBe('Distinct player ID count: 2611.');
+    expect(one(['SUM ( t.PTS )'], { 'SUM ( t.PTS )': 5 })).toBe('Total pts: 5.');
+    // The ends are trimmed in one pass, as the patterns they replace did (no backtracking on long runs).
+    expect(withoutTrailing('in 2015?. \t', '.')).toBe('in 2015?');
+    expect(withoutLeading(' — neither', '—–:;,.-')).toBe('neither');
+    expect(withoutEnds('__a_b__', '_')).toBe('a_b');
+    expect(withoutTrailing(`${'.'.repeat(50_000)}x`, '.')).toBe(`${'.'.repeat(50_000)}x`);
   });
 });

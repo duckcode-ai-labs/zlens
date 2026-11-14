@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { dirname, join, relative } from 'node:path';
+import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { basename, dirname, join, relative } from 'node:path';
 import { extractTablesFromSql, loadDomainPackageRegistry, type DqlArtifactFilter, type DqlArtifactOrderBy, type DqlArtifactReference } from '@zlens/core';
 import { resolveLocalOwner } from './identity.js';
+import { withoutTrailing } from '../text-ends.js';
 
 export type GeneratedDraftSourceDqlArtifact = DqlArtifactReference;
 
@@ -99,15 +100,38 @@ export function deriveReviewDraftSlug(question: string): string {
   return (slug || 'untitled_proposal').replace(/^(\d)/, 'q_$1');
 }
 
+/**
+ * Writes a draft in one step: the content goes to a new file beside it, created exclusively (it cannot already
+ * exist, and nothing else can have opened it), then that file is renamed over the draft. A reader sees the old
+ * draft or the new one, never half of one, and no check of the draft's path can go stale before the write.
+ */
+function writeDraftFile(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const staged = join(dirname(filePath), `.${basename(filePath)}.${randomBytes(8).toString('hex')}.tmp`);
+  const fd = openSync(staged, 'wx', 0o600);
+  try {
+    writeSync(fd, content);
+    // A draft is project source, readable like the files beside it.
+    fchmodSync(fd, 0o644);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(staged, filePath);
+  } catch (error) {
+    try { unlinkSync(staged); } catch { /* already gone */ }
+    throw error;
+  }
+}
+
 /** A question as compared for "the same question": case, spacing, quotes and closing punctuation ignored. */
 export function normalizeDraftQuestion(question: string): string {
-  return question
+  const folded = question
     .toLowerCase()
     .replace(/[‘’`]/g, "'")
     .replace(/[“”]/g, '"')
-    .replace(/\s+/g, ' ')
-    .replace(/[\s?.!;:,]+$/, '')
-    .trim();
+    .replace(/\s+/g, ' ');
+  return withoutTrailing(folded, '?.!;:,').trim();
 }
 
 /** Snake_case identifier rule the namer enforces: `^[a-z][a-z0-9_]*$`. */
@@ -278,8 +302,7 @@ export function upsertGeneratedDraft(
     };
   }
 
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, withAutoDraftMark(renderGeneratedDraft({ ...rec, owner, answerFingerprint: fingerprint }, relativePath)));
+  writeDraftFile(filePath, withAutoDraftMark(renderGeneratedDraft({ ...rec, owner, answerFingerprint: fingerprint }, relativePath)));
   return {
     path: relativePath,
     askedTimes: 1,
@@ -448,7 +471,7 @@ export function upsertReviewRequiredAnswerDraft(
       let body = reviewDraftBody(rec, { slug: keptSlug, proposedContractId: keptSlug, proposedDomain: keptDomain, owner, fingerprint }, sameQuestion)
         .replace(/asked_times\s*=\s*\d+/, `asked_times = ${askedTimes}`);
       if (firstAsked) body = body.replace(/first_asked\s*=\s*"[^"]*"/, `first_asked = "${firstAsked}"`);
-      writeFileSync(existingPath, withAutoDraftMark(body));
+      writeDraftFile(existingPath, withAutoDraftMark(body));
       return { path: sameQuestion, askedTimes, proposedContractId: keptSlug, created: false, fingerprint };
     }
     return { path: sameQuestion, askedTimes: bumpAskedTimes(projectRoot, sameQuestion, owner), proposedContractId, created: false, fingerprint };
@@ -460,8 +483,7 @@ export function upsertReviewRequiredAnswerDraft(
     target = resolveGeneratedDraftPath(projectRoot, { slug: freeSlug, proposedDomain });
   }
   const body = reviewDraftBody(rec, { slug: freeSlug, proposedContractId: freeSlug, proposedDomain, owner, fingerprint }, target.relativePath);
-  mkdirSync(dirname(target.filePath), { recursive: true });
-  writeFileSync(target.filePath, withAutoDraftMark(body));
+  writeDraftFile(target.filePath, withAutoDraftMark(body));
   return { path: target.relativePath, askedTimes: 1, proposedContractId: freeSlug, created: true, fingerprint };
 }
 

@@ -1,4 +1,5 @@
 import { describeIntent, type AnalyticalIntentV1 } from './intent.js';
+import { withoutTrailing } from '../text-ends.js';
 import { relationName, type ExecutedRows, type ResultColumnMeta, type WarehouseFailure } from './execute.js';
 import type { PreparedCandidate, PreparedRefusal } from './prepare/types.js';
 import type { VocabularyIndex } from './vocabulary.js';
@@ -329,12 +330,16 @@ export function readableColumnName(name: string): string {
   const say = (parts: string[]) => parts.map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word)).join(' ');
   if (!raw) return name;
   if (/\s/.test(raw) && !/_/.test(raw) && !/[()]/.test(raw) && /[a-z]/.test(raw)) return raw;
-  const call = /^([A-Za-z_]+)\s*\(\s*(distinct\s+)?(.*?)\s*\)$/i.exec(raw);
-  if (call) {
-    const fn = call[1]!.toLowerCase();
-    const inner = call[3]!.trim();
+  // A function call ("COUNT(DISTINCT PLAYER_ID)"), read by position rather than by a pattern that backtracks.
+  const open = raw.indexOf('(');
+  const fnName = open > 0 && raw.endsWith(')') ? raw.slice(0, open).trim() : '';
+  if (/^[A-Za-z_]+$/.test(fnName)) {
+    const fn = fnName.toLowerCase();
+    const args = raw.slice(open + 1, -1).trim();
+    const distinct = /^distinct\s/i.test(args);
+    const inner = distinct ? args.slice('distinct'.length).trim() : args;
     const innerWords = inner === '*' ? [] : words(inner.split('.').pop() ?? inner);
-    if (fn === 'count') return innerWords.length ? say([...(call[2] ? ['distinct'] : []), ...innerWords, 'count']) : 'row count';
+    if (fn === 'count') return innerWords.length ? say([...(distinct ? ['distinct'] : []), ...innerWords, 'count']) : 'row count';
     const lead = AGGREGATE_WORDS[fn];
     if (lead && innerWords.length) return say([lead, ...innerWords]);
   }
@@ -345,7 +350,7 @@ export function readableColumnName(name: string): string {
 const capitalized = (text: string) => (text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : text);
 /** A sentence ends once: a reading written as a question keeps its question mark ("…in 2015?", never "…in 2015?."). */
 export function endSentence(text: string): string {
-  const trimmed = text.trim().replace(/[.\s]+$/, '');
+  const trimmed = withoutTrailing(text.trim(), '.');
   return /[?!]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 /** The words a reader knows: a certified block is a certified saved query (new-user test V12, Q13's reading). */
