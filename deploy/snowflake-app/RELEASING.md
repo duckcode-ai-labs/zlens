@@ -26,8 +26,8 @@ repository (`/<db>/<schema>/<repo>`).
    a version's images cannot change after it is created.
 
    ```bash
-   docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" \
-     --build-arg ZLENS_USER=node -t zlens-snowflake:<v> .
+   docker build --platform linux/amd64 --target snowflake-app \
+     --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake:<v> .
    ```
 
 2. **Scan** it: fixable critical or high CVEs, or any malware, stop the release.

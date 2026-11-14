@@ -333,9 +333,10 @@ jobs:
         run: docker compose down
 
   # --- the image the ZLens app for Snowflake ships (deploy/snowflake-app) ---
-  # Snowflake's security review rejects images with fixable critical or high CVEs and asks for a
-  # non-root container: build that image as the app does, check it runs as `node` and can write a
-  # fresh volume, and scan it with Trivy.
+  # Snowflake's security review asks for minimal, non-root images with no fixable critical or high
+  # CVEs and no malware: build the Dockerfile's snowflake-app stage as a release does, check it has no
+  # shell or package manager, runs as uid 1000, writes a fresh volume and sets up its first start, then
+  # scan it with Trivy and ClamAV (deploy/snowflake-app/scan-image.sh, the release scan).
   snowflake-image:
     name: snowflake app image (non-root, CVE scan)
     runs-on: ubuntu-24.04
@@ -343,19 +344,41 @@ jobs:
       - uses: actions/checkout@v4
       - name: build the Snowflake app image
         run: |
-          docker build --platform linux/amd64 --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" \
-            --build-arg ZLENS_USER=node -t zlens-snowflake:ci .
-      - name: runs as node and writes a fresh volume
+          docker build --platform linux/amd64 --target snowflake-app \
+            --build-arg ZLENS_DRIVERS="snowflake-sdk@^3.4.1" -t zlens-snowflake:ci .
+      - name: runs as uid 1000 and writes a fresh volume
         run: |
-          test "$(docker inspect --format '{{.Config.User}}' zlens-snowflake:ci)" = node
+          test "$(docker inspect --format '{{.Config.User}}' zlens-snowflake:ci)" = 1000:1000
           docker volume create zlens-ci-workspace
-          docker run --rm -v zlens-ci-workspace:/workspace --entrypoint sh zlens-snowflake:ci \
-            -c 'test "$(id -u)" = 1000 && touch /workspace/write-check && node /opt/dql/dist/index.js --version'
-      - name: no fixable critical or high CVEs
+          docker run --rm -v zlens-ci-workspace:/workspace --entrypoint /nodejs/bin/node zlens-snowflake:ci -e '
+            const fs = require("fs");
+            if (process.getuid() !== 1000) { console.error("runs as uid " + process.getuid()); process.exit(1); }
+            fs.writeFileSync("/workspace/write-check", "ok");
+            console.log("uid 1000, volume writable, user " + require("os").userInfo().username);'
+          docker run --rm zlens-snowflake:ci zlens --version
+      # Inside Snowflake the start-up (deploy/snowflake-app/snowflake-entrypoint.mjs) creates the project
+      # on first start with one connection that signs in with the service token and names no account.
+      - name: first start inside Snowflake writes its connection
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.2 image \
-            --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --no-progress \
-            zlens-snowflake:ci
+          # Readable by the image's uid 1000, as Snowflake's /snowflake/session/token is (mktemp -d is 0700).
+          session=$(mktemp -d) && chmod 755 "$session" && echo ci-not-a-real-token > "$session/token" && chmod 644 "$session/token"
+          docker volume create zlens-ci-first-start
+          docker run --rm -v "$session:/snowflake/session:ro" -v zlens-ci-first-start:/workspace \
+            -e SNOWFLAKE_HOST=example.snowflakecomputing.com -e ZLENS_SNOWFLAKE_WAREHOUSE=APP_WH \
+            -e SNOWFLAKE_DATABASE=THE_APP -e SNOWFLAKE_SCHEMA=CORE \
+            zlens-snowflake:ci zlens --version
+          docker run --rm -v zlens-ci-first-start:/workspace --entrypoint /nodejs/bin/node zlens-snowflake:ci -e '
+            const config = JSON.parse(require("fs").readFileSync("/workspace/dql.config.json", "utf8"));
+            const c = config.connections?.snowflake ?? {};
+            const want = { driver: "snowflake", authMethod: "oauth", tokenFilePath: "/snowflake/session/token", account: "${SNOWFLAKE_ACCOUNT}", host: "${SNOWFLAKE_HOST}", warehouse: "APP_WH" };
+            const wrong = Object.entries(want).filter(([key, value]) => c[key] !== value);
+            if (config.defaultConnectionName !== "snowflake" || config.modeling?.mode !== "warehouse-first" || wrong.length || "username" in c || "database" in c || "schema" in c) {
+              console.error("unexpected first-start config:", JSON.stringify(config));
+              process.exit(1);
+            }
+            console.log("first-start connection ok");'
+      - name: minimal, no fixable critical or high CVEs, no malware
+        run: deploy/snowflake-app/scan-image.sh zlens-snowflake:ci
 
   # --- docs: every relative link resolves; every documented command is real ---
   docs:
