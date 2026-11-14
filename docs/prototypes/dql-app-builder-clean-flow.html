@@ -1778,8 +1778,9 @@ LIMIT 20;</div>
       const gap = leader.points - second.points;
       const ppg = leader.points / leader.games;
 
+      const escapeText = (value) => String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
       storyCopy.innerHTML = `
-        <p><b>${leader.name}</b> led the ${document.getElementById("seasonStart").value}-${document.getElementById("seasonEnd").value} window with <b>${formatNumber(leader.points)} total points</b> across <b>${formatNumber(leader.games)} games</b>, averaging <b>${formatNumber(ppg)}</b> points per game. The selected top ${rows.length} players combined for <b>${formatNumber(combined)}</b> points.</p>
+        <p><b>${escapeText(leader.name)}</b> led the ${escapeText(document.getElementById("seasonStart").value)}-${escapeText(document.getElementById("seasonEnd").value)} window with <b>${formatNumber(leader.points)} total points</b> across <b>${formatNumber(leader.games)} games</b>, averaging <b>${formatNumber(ppg)}</b> points per game. The selected top ${rows.length} players combined for <b>${formatNumber(combined)}</b> points.</p>
       `;
       document.getElementById("metricLeaderPoints").textContent = formatNumber(leader.points);
       document.getElementById("metricPpg").textContent = formatNumber(ppg);
