@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -223,6 +223,14 @@ describe('the page the app for Snowflake serves', () => {
     const page = await (await call('/')).text();
     expect(page).toContain('<meta name="zlens-snowflake-app" content="1" />');
     expect(page.indexOf('zlens-snowflake-app')).toBeLessThan(page.indexOf('<title>'));
+    // Other files are served as they are, read once; a folder or a missing file is a 404.
+    mkdirSync(join(projectRoot, 'assets'), { recursive: true });
+    writeFileSync(join(projectRoot, 'assets', 'app.js'), 'console.log(1);');
+    const script = await call('/assets/app.js');
+    expect(script.status).toBe(200);
+    expect(await script.text()).toBe('console.log(1);');
+    expect((await call('/assets')).status).toBe(404);
+    expect((await call('/assets/missing.js')).status).toBe(404);
 
     // The image has no git: the History tab says what the app keeps instead of "Git is not installed".
     const history = await (await call('/api/blocks/history?path=blocks/a.dql')).json() as { status: string; message: string };

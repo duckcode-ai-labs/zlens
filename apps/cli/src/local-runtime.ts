@@ -33651,7 +33651,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       ? '/index.html'
       : path;
     const filePath = safeJoin(rootDir, requestedPath);
-    if (!filePath || !existsSync(filePath) || statSync(filePath).isDirectory()) {
+    // Read once, with no separate exists/is-a-folder check before it (no window for the file to change between
+    // the two): a missing file, a folder (EISDIR) or an unreadable one is a real 404.
+    let file: Buffer | undefined;
+    try {
+      file = filePath ? readFileSync(filePath) : undefined;
+    } catch {
+      file = undefined;
+    }
+    if (!filePath || !file) {
       res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(renderNotFound(path));
       return;
@@ -33659,7 +33667,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
     // A hosted page says so before any script runs, so the app never shows its single-user screens there, even while
     // the person's capability map is loading or failing to load (RFC 0010 HH-9).
-    let content: Buffer = hostIdentity && requestedPath === '/index.html' ? hostedIndexHtml(readFileSync(filePath)) : readFileSync(filePath);
+    let content: Buffer = hostIdentity && requestedPath === '/index.html' ? hostedIndexHtml(file) : file;
     // The app for Snowflake says so before any script runs, so the page opens on Ask and leaves out the laptop's screens.
     if (snowflakeApp && requestedPath === '/index.html') content = snowflakeAppIndexHtml(content);
     res.writeHead(200, {

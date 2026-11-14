@@ -92,11 +92,16 @@ test('Check and add asks about cents once, leaves junk counts off, and the table
   await page.goto(server!.baseUrl);
   await expect(page.getByRole('button', { name: 'Apps', exact: true })).toBeVisible({ timeout: 60_000 });
   await page.getByRole('button', { name: 'Apps', exact: true }).click();
-  // A project with no App opens on the new App form; otherwise Build new App opens it.
+  // A project with no App opens on the new App form once its Apps have loaded; otherwise Build new App opens
+  // it. "Build new App" is on screen while the list loads, and the same button toggles the form, so a click
+  // that lands just as the list finishes loading closes the form it opened: try until the form stays open.
   const buildNew = page.getByRole('button', { name: 'Build new App' });
-  await expect(page.getByRole('tab', { name: 'Start manually' }).or(buildNew).first()).toBeVisible({ timeout: 30_000 });
-  if (await buildNew.isVisible()) await buildNew.click();
-  await page.getByRole('tab', { name: 'Start manually' }).click();
+  const startManually = page.getByRole('tab', { name: 'Start manually' });
+  await expect(async () => {
+    if (!(await startManually.isVisible()) && await buildNew.isVisible()) await buildNew.click({ timeout: 2_000 });
+    await expect(startManually).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 30_000 });
+  await startManually.click();
   await page.getByRole('button', { name: /^Continue to data/ }).click();
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
 

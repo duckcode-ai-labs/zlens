@@ -33,17 +33,21 @@ test('opens the app and the runtime reports healthy', async ({ page, request }) 
 });
 
 test('theme choice sets data-theme, persists dql-theme, and survives a reload', async ({ page }) => {
-  // The theme button's visible text is the current theme; its title names it.
-  await page.getByTitle(/^Theme:/).click();
-  await page.getByRole('menuitemradio', { name: /Obsidian/ }).click();
+  // The theme is chosen in Settings › Appearance (it left the page header in V13).
+  const chooseTheme = async (name: RegExp) => {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Settings sections' }).getByRole('button', { name: 'Appearance', exact: true }).click();
+    await page.getByRole('radiogroup', { name: 'Theme' }).getByRole('radio', { name }).click();
+  };
+  await expect(page.getByTitle(/^Theme:/)).toHaveCount(0);
+  await chooseTheme(/Obsidian/);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'obsidian');
   expect(await page.evaluate(() => window.localStorage.getItem('dql-theme'))).toBe('obsidian');
 
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'obsidian');
 
-  await page.getByTitle(/^Theme:/).click();
-  await page.getByRole('menuitemradio', { name: /White/ }).click();
+  await chooseTheme(/White/);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'white');
   expect(await page.evaluate(() => window.localStorage.getItem('dql-theme'))).toBe('white');
 });
