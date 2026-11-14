@@ -17,9 +17,9 @@ jobs:
     # Skip cleanly when no key is configured, so forks without the secret don't fail.
     if: ${{ github.repository_owner == 'duckcode-ai-labs' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
@@ -48,7 +48,7 @@ jobs:
           cat judged-eval-report.json
       - name: Upload judged eval report
         if: steps.guard.outputs.run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: judged-eval-report
           path: judged-eval-report.json
