@@ -1,0 +1,30 @@
+# Dependabot (docs/security/secure-development.md).
+# - npm: security updates only. Version updates are off (open-pull-requests-limit: 0); Dependabot still
+#   opens a pull request for each advisory once security updates are on in the repository settings.
+#   The weekly `security` workflow fails on any high or critical advisory meanwhile.
+# - docker: new digests for the pinned base images (the Snowflake app's distroless image), so OS fixes
+#   reach the next release.
+# - github-actions: new action versions.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 0
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ['*']
