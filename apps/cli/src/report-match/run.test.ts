@@ -169,6 +169,24 @@ describe('a comparison from start to finish', () => {
     await expect(runComparison(request(byRegion, { query: 'Revenue', filters: ['region = East'] }), deps([]))).rejects.toThrow('--param');
   });
 
+  it('matches a several-row export of a saved query on the column that tells its rows apart, and says so', async () => {
+    const seasons = [[2014, 67], [2015, 73], [2016, 67], [2017, 58], [2018, 57]].map(([season, wins]) => ({ SEASON: season, WINS: wins }));
+    const text = 'SEASON,WINS\n2014,67\n2015,73\n2016,67\n2017,58\n2018,57\n';
+    const outcome = await runComparison(request(text, { query: 'Revenue' }), deps(seasons));
+    expect(outcome.comparison).toMatchObject({ verdict: 'matches', rows: { inFile: 5, inBoth: 5 }, values: { compared: 5, equal: 5 } });
+    expect(outcome.keysProposed).toEqual(['SEASON']);
+    expect(outcome.mapping.SEASON).toBe('the column SEASON, as the key');
+    expect(outcome.comparison.notes[0]).toBe('Rows were matched on SEASON: no two rows share a value there. If another column says which row is which, name it with --key.');
+    // A difference is still a difference, named by its season.
+    const edited = await runComparison(request(text.replace('2016,67', '2016,66'), { query: 'Revenue' }), deps(seasons));
+    expect(edited.comparison).toMatchObject({ verdict: 'differs', values: { compared: 5, equal: 4 } });
+    expect(edited.comparison.differences[0]).toMatchObject({ key: ['2016'], column: 'WINS', old: '66', zlens: 67 });
+    // A key named by the person is used as named, with no note.
+    const named = await runComparison(request(text, { query: 'Revenue', keys: ['SEASON'] }), deps(seasons));
+    expect(named.keysProposed).toBeUndefined();
+    expect(named.comparison.notes).toEqual([]);
+  });
+
   it('refuses a tolerance that is not a percent, and a file it can\'t read', async () => {
     await expect(runComparison(request(byRegion, { tolerance: '5' }), deps(rows))).rejects.toThrow('takes a percent');
     await expect(runComparison({ file: { name: 'x.pbix', bytes: Buffer.from('x') } }, deps(rows))).rejects.toThrow(ExportRefused);
@@ -205,7 +223,7 @@ describe('what stays after a comparison', () => {
     const root = project();
     const first = await runComparison(request(byRegion), deps(rows));
     writeMatchRecords(root, first, { comparedBy: 'a', via: 'cli' });
-    writeMatchRecords(root, { ...first, comparedAt: '2026-12-01T00:00:00Z', tool: 'tableau' }, { comparedBy: 'b', via: 'cli' });
+    writeMatchRecords(root, { ...first, comparedAt: '2026-12-01T12:00:00Z', tool: 'tableau' }, { comparedBy: 'b', via: 'cli' });
     const records = readMatchRecords(root, 'metric', 'total_sales');
     expect(records.map((record) => record.comparedBy)).toEqual(['b', 'a']);
     expect(matchWords(records[0]!)).toBe('Matches Sales by Region (Tableau), 2026-12-01: 2 of 2 values at 2 decimals');

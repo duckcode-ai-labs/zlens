@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DimensionDefinition, MetricDefinition } from '@zlens/core';
 import { importDraftsToApprove, importDraftsWithMatches, listMetricDrafts, type ImportMetricDrafts } from '../import-metric-drafts.js';
-import { matchWords, readMatchRecords, writeMatchRecords, type MatchRecord } from './record.js';
+import { matchWords, moveMatchRecords, readMatchRecords, writeMatchRecords, type MatchRecord } from './record.js';
 import { runComparison, type CompareDeps } from './run.js';
-import { catalogWithDrafts, latestMatch, metricMatchStatus, queryChanged, receiptLines, standingRecord, type MatchCatalog } from './status.js';
+import { catalogWithDrafts, latestMatch, metricMatchStatus, queryChanged, queryMatchFor, receiptLines, standingRecord, type MatchCatalog } from './status.js';
 
 const metric = (name: string, label: string, extra: Partial<MetricDefinition> = {}): MetricDefinition => ({ name, label, description: '', domain: 'sales', type: 'sum', sql: name, table: 'analytics.orders', ...extra });
 const dimension = (name: string, label: string): DimensionDefinition => ({ name, label, description: '', sql: name, type: 'string', table: 'analytics.orders' });
@@ -178,7 +178,16 @@ describe('what a certification receipt says', () => {
   });
 
   it('counts a current match as a check, in plain words', () => {
-    expect(receiptLines(record('matches'), false)).toEqual({ checks: ['Matches Sales by Region (Tableau), 2026-11-02: 4 of 4 values at 2 decimals'], warnings: [] });
+    expect(receiptLines(record('matches'), false)).toEqual({ checks: ['Matches Sales by Region (Tableau) · every value compared (4 of 4 at 2 decimals, 2026-11-02)'], warnings: [] });
+  });
+
+  it('says every value was compared only when nothing was left out or waived', () => {
+    const leftOut = { ...record('matches'), mapping: { Profit: 'left out, as asked' } };
+    expect(receiptLines(leftOut, false).checks[0]).toBe('Matches Sales by Region (Tableau), 2026-11-02: 4 of 4 values at 2 decimals, left out: Profit');
+    const notCompared = { ...record('matches'), mapping: { Margin: 'not compared: the saved query has no such column' } };
+    expect(receiptLines(notCompared, false).checks[0]).not.toContain('every value compared');
+    const waived = { ...record('matches'), filters: { stated: [], waived: ['Region: all of them'] } };
+    expect(receiptLines(waived, false).checks[0]).toContain('1 filter waived');
   });
 
   it('warns of anything else, and never counts it as passed', () => {
@@ -253,5 +262,68 @@ describe('drafts beside their comparison', () => {
     const names = catalogWithDrafts(root, catalog).metrics.map((item) => item.name);
     expect(names.filter((name) => name === 'total_sales')).toHaveLength(1);
     expect(names).toContain('new_one');
+  });
+});
+
+describe('a saved query renamed after it was compared', () => {
+  const sql = 'select season, wins from games';
+  const exportFile = { name: 'warriors_regular_wins_2014_2018.csv', bytes: Buffer.from('SEASON,WINS\n2014,67\n2015,73\n2016,67\n2017,58\n2018,57\n') };
+  const rows = [[2014, 67], [2015, 73], [2016, 67], [2017, 58], [2018, 57]].map(([season, wins]) => ({ SEASON: season, WINS: wins }));
+  async function comparedAs(root: string, name: string, now = '2026-11-11T12:40:00Z', querySql = sql) {
+    const outcome = await runComparison({ file: exportFile, query: name }, { ...deps(rows, querySql), savedQuery: async (asked) => ({ name: asked, sql: querySql, variables: {} }), now: new Date(now) });
+    writeMatchRecords(root, outcome, { comparedBy: 'TEST_ADMIN', via: 'screen' });
+    return outcome;
+  }
+  const fingerprint = (outcome: Awaited<ReturnType<typeof comparedAs>>) => outcome.querySha256.query!;
+
+  it('keeps its comparisons: they move to the new name, joining any there', async () => {
+    const root = project();
+    await comparedAs(root, 'WINS By SEASON');
+    await comparedAs(root, 'warriors_regular_season_wins_2014_2018', '2026-11-10T10:00:00Z');
+    expect(moveMatchRecords(root, 'query', 'WINS By SEASON', 'warriors_regular_season_wins_2014_2018')).toBe(true);
+    expect(readMatchRecords(root, 'query', 'WINS By SEASON')).toEqual([]);
+    expect(readMatchRecords(root, 'query', 'warriors_regular_season_wins_2014_2018').map((record) => record.comparedAt)).toEqual(['2026-11-11T12:40:00.000Z', '2026-11-10T10:00:00.000Z']);
+    // Nothing to move, or the same name: nothing happens.
+    expect(moveMatchRecords(root, 'query', 'WINS By SEASON', 'other')).toBe(false);
+    expect(moveMatchRecords(root, 'query', 'warriors_regular_season_wins_2014_2018', 'warriors_regular_season_wins_2014_2018')).toBe(false);
+  });
+
+  it('a name that differs only in case keeps its records', async () => {
+    const root = project();
+    await comparedAs(root, 'Revenue');
+    moveMatchRecords(root, 'query', 'Revenue', 'revenue');
+    expect(readMatchRecords(root, 'query', 'revenue')).toHaveLength(1);
+  });
+
+  it('finds the match under the name the query had when it was compared', async () => {
+    const root = project();
+    const outcome = await comparedAs(root, 'WINS By SEASON');
+    const found = queryMatchFor(root, ['warriors_regular_season_wins_2014_2018', 'WINS By SEASON'], fingerprint(outcome)) as MatchRecord;
+    expect(found.verdict).toBe('matches');
+    expect(receiptLines(found, false).checks).toEqual(['Matches warriors_regular_wins_2014_2018 · every value compared (5 of 5 at whole numbers, 2026-11-11)']);
+  });
+
+  it('finds a comparison of exactly the same SQL under any name, and only of the same SQL', async () => {
+    const root = project();
+    const outcome = await comparedAs(root, 'WINS By SEASON');
+    expect((queryMatchFor(root, ['warriors_regular_season_wins_2014_2018'], fingerprint(outcome)) as MatchRecord).report).toBe('warriors_regular_wins_2014_2018');
+    expect(queryMatchFor(root, ['warriors_regular_season_wins_2014_2018'], 'another query')).toBeUndefined();
+    expect(queryMatchFor(root, ['warriors_regular_season_wins_2014_2018'])).toBeUndefined();
+  });
+
+  it('prefers its comparison of the SQL it has now over one of an older version', async () => {
+    const root = project();
+    await comparedAs(root, 'wins', '2026-11-12T10:00:00Z', 'select season, wins from games where 1 = 0');
+    const current = await comparedAs(root, 'wins', '2026-11-11T10:00:00Z');
+    expect((queryMatchFor(root, ['wins'], fingerprint(current)) as MatchRecord).comparedAt).toBe('2026-11-11T10:00:00.000Z');
+    // Without the SQL it has now, its newest stands, and the receipt checks it against the query.
+    expect((queryMatchFor(root, ['wins']) as MatchRecord).comparedAt).toBe('2026-11-12T10:00:00.000Z');
+  });
+
+  it('says so when its record file can\'t be read', () => {
+    const root = project();
+    mkdirSync(join(root, 'semantic-layer/report-matches/query'), { recursive: true });
+    writeFileSync(join(root, 'semantic-layer/report-matches/query/wins.yaml'), 'matches: [');
+    expect(queryMatchFor(root, ['wins'], 'x')).toBe('unreadable');
   });
 });

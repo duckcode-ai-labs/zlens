@@ -10,7 +10,7 @@ import {
   type SemanticLayer,
 } from '@zlens/core';
 import type { Verdict } from './compare.js';
-import { matchWords, readMatchRecords, type MatchRecord } from './record.js';
+import { matchWords, mergeMatchRecords, queryMatchRecordsFor, readMatchRecords, receiptMatchWords, type MatchRecord } from './record.js';
 import { comparisonLayer, queryFingerprint } from './run.js';
 
 /**
@@ -89,6 +89,34 @@ export function latestMatch(projectRoot: string, kind: 'metric' | 'query', name:
 
 export const UNREADABLE_RECORD = 'The record of its comparison with the old report can\'t be read.';
 
+/**
+ * The record that speaks for a saved query, wherever it was filed. A query is
+ * compared under the name it has then, and may be renamed before it is
+ * certified, so its own records are those under each name it has had. When the
+ * query's compiled SQL is known (`querySha256`), its records of exactly this SQL
+ * stand; with none, a comparison of exactly this SQL filed under another name
+ * speaks for it, because the same SQL gives the same rows. Otherwise its own
+ * newest stands, and the receipt says it was for another version.
+ */
+export function queryMatchFor(projectRoot: string, names: Array<string | undefined>, querySha256?: string): MatchRecord | 'unreadable' | undefined {
+  const own: MatchRecord[][] = [];
+  for (const name of Array.from(new Set(names.map((item) => item?.trim()).filter((item): item is string => Boolean(item))))) {
+    try {
+      own.push(readMatchRecords(projectRoot, 'query', name));
+    } catch {
+      return 'unreadable';
+    }
+  }
+  const records = mergeMatchRecords(...own);
+  if (querySha256) {
+    const current = records.filter((record) => record.querySha256 === querySha256);
+    if (current.length) return standingRecord(current);
+    const elsewhere = queryMatchRecordsFor(projectRoot, querySha256);
+    if (elsewhere.length) return standingRecord(elsewhere);
+  }
+  return standingRecord(records);
+}
+
 export function metricMatchStatus(projectRoot: string, name: string, catalog: MatchCatalog): MatchStatus | undefined {
   const record = latestMatch(projectRoot, 'metric', name);
   if (!record) return undefined;
@@ -128,5 +156,5 @@ export function receiptLines(record: MatchRecord, changed: boolean | undefined, 
   if (changed === undefined) return { checks: [], warnings: [`${words}. Not checked against this version of the query.`] };
   if (changed) return { checks: [], warnings: [`${words}. Changed since compared.`] };
   if (!sameConnection) return { checks: [], warnings: [`${words}. Compared on another connection.`] };
-  return record.verdict === 'matches' && record.scope === 'all rows' ? { checks: [words], warnings: [] } : { checks: [], warnings: [words] };
+  return record.verdict === 'matches' && record.scope === 'all rows' ? { checks: [receiptMatchWords(record)], warnings: [] } : { checks: [], warnings: [words] };
 }

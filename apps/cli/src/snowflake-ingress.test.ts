@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
 import { startLocalServer } from './local-runtime.js';
-import { sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage } from './snowflake-ingress.js';
+import { sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, snowflakeSignedInUser, withSnowflakeUser } from './snowflake-ingress.js';
+import { localPersonIdentity, localPersonName } from './certification-receipt.js';
 
 /**
  * ZLens inside Snowflake (the ZLens app): Snowflake signs the person in and names them in
@@ -44,6 +45,29 @@ describe('when the Snowflake sign-in counts', () => {
     expect(sameOriginAsHost('http://abc-org-acct.snowflakecomputing.app', 'abc-org-acct.snowflakecomputing.app')).toBe(false);
     expect(sameOriginAsHost(undefined, 'h')).toBe(false);
     expect(snowflakeIngressRefusalPage('<b>x</b>')).toContain('&lt;b&gt;x&lt;/b&gt;');
+  });
+});
+
+describe('who is acting, inside Snowflake', () => {
+  it('is the user the trusted ingress names, for that work only', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'zlens-sf-person-'));
+    roots.push(root);
+    const outside = localPersonIdentity(root);
+    expect(withSnowflakeUser({}, 'TEST_ADMIN', () => localPersonIdentity(root))).toBe('TEST_ADMIN');
+    expect(withSnowflakeUser({}, ['TEST_ADMIN'], () => localPersonName(root))).toBe('TEST_ADMIN');
+    // It follows the work across awaits, and ends with it.
+    expect(await withSnowflakeUser({}, ' TEST_ADMIN ', async () => { await new Promise((done) => setTimeout(done, 1)); return snowflakeSignedInUser(); })).toBe('TEST_ADMIN');
+    expect(snowflakeSignedInUser()).toBeUndefined();
+    expect(localPersonIdentity(root)).toBe(outside);
+  });
+
+  it('is never the header without the ingress, or with no user in it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'zlens-sf-person-'));
+    roots.push(root);
+    expect(withSnowflakeUser(undefined, 'TEST_ADMIN', () => snowflakeSignedInUser())).toBeUndefined();
+    expect(withSnowflakeUser(undefined, 'TEST_ADMIN', () => localPersonIdentity(root))).not.toBe('TEST_ADMIN');
+    expect(withSnowflakeUser({}, '  ', () => snowflakeSignedInUser())).toBeUndefined();
+    expect(withSnowflakeUser({}, undefined, () => snowflakeSignedInUser())).toBeUndefined();
   });
 });
 

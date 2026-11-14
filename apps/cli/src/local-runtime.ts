@@ -64,7 +64,7 @@ import {
 } from "./mixed-source-sql.js";
 import { resolveNpmInvocation } from './npm-runtime.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, NO_EGRESS_DBT_CLOUD_REASON, NO_EGRESS_METRICFLOW_REASON } from './deployment-locks.js';
-import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, type SnowflakeIngress } from './snowflake-ingress.js';
+import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, withSnowflakeUser, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
 import { LONG_REQUEST_PATH, answerLongRequest, handleLongRequestPoll } from './long-request.js';
 import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions } from './snowflake-app-settings.js';
@@ -325,8 +325,8 @@ import {
   certificationByline,
   checkByline,
   currentGitBranch,
-  gitUserName,
   localPersonIdentity,
+  localPersonName,
   buildDeprecationRecord,
   demoteCertifiedSource,
   passedCheckNames,
@@ -827,10 +827,10 @@ import {
   type DqlParameterDecision,
 } from './block-studio-import.js';
 import { findImportedWorksheet, readBlockStudioImportCalculations } from './block-studio-import.js';
-import { comparisonLayer, compareOptionProblem, ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, runComparison } from './report-match/run.js';
+import { comparisonLayer, compareOptionProblem, ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, queryFingerprint, runComparison } from './report-match/run.js';
 import { readExportAside } from './report-match/read-export-aside.js';
-import { readComparisonDetail, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
-import { catalogWithDrafts, latestMatch, queryChanged, receiptLines, UNREADABLE_RECORD } from './report-match/status.js';
+import { moveMatchRecords, readComparisonDetail, receiptMatchWords, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
+import { catalogWithDrafts, queryChanged, queryMatchFor, receiptLines, UNREADABLE_RECORD } from './report-match/status.js';
 import {
   MetricDraftApprovalError,
   approveMetricDrafts,
@@ -9064,7 +9064,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         entityOperationIds.push(id);
       }
       const certifiedBy = hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot));
-      const certifiedByName = hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot);
+      const certifiedByName = hostActor() ? hostActorDisplayName() : hostHooks ? undefined : localPersonName(projectRoot);
       const certifiedAgainst = {
         ...decision.certifiedAgainst,
         certifiedAt: new Date().toISOString(),
@@ -13817,14 +13817,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>>;
     /** Plain-word checks this surface ran beyond the Certify checklist (row key, number formats). */
     extraChecks?: string[];
+    /** The saved file this certification replaces: a comparison made under the name it had there still counts. */
+    blockPath?: string;
   }): Promise<CertificationReceipt> => {
-    const compared = await reportMatchLines(input.source);
+    const compared = await reportMatchLines(input.source, input.blockPath);
     return buildCertificationReceipt({
     source: input.source,
     // The person certifying, never the project's configured owner (B6).
     certifiedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)) ?? parseBlockSourceMetadata(input.source).owner,
     // The name "Certified by" shows: the host's display name, else git user.name.
-    certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
+    certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : localPersonName(projectRoot),
     via: input.via,
     enterprise: input.enterprise,
     checks: [...(input.extraChecks ?? []), ...passedCheckNames(input.verdict.checklist), ...compared.checks],
@@ -13834,19 +13836,56 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     });
   };
 
-  /** The receipt's lines for this block's latest comparison with an old report, checked against the query as it is now. */
-  const reportMatchLines = async (source: string): Promise<{ checks: string[]; warnings: string[] }> => {
+  /**
+   * The receipt's lines for this block's comparison with an old report, checked against the query as it is now.
+   * A comparison is filed under the name the query had when it was compared; the query may be renamed before it
+   * is certified (an import's auto name, then a real one), so the name it had at `blockPath` counts too, and so
+   * does a comparison of exactly this SQL under any name.
+   */
+  const reportMatchLines = async (source: string, blockPath?: string): Promise<{ checks: string[]; warnings: string[] }> => {
+    const queryRecords = join(projectRoot, 'semantic-layer', 'report-matches', 'query');
+    // No saved query was ever compared: nothing to say, and no need to run the query again.
+    if (!existsSync(queryRecords) || !readdirSync(queryRecords).some((entry) => entry.endsWith('.yaml'))) return { checks: [], warnings: [] };
     const { name } = parseBlockSourceMetadata(source);
-    const record = name ? latestMatch(projectRoot, 'query', name) : undefined;
+    const formerName = savedBlockName(blockPath);
+    let preview: Awaited<ReturnType<typeof runBlockStudioPreviewSource>> | undefined;
+    let active: ConnectionConfig | undefined;
+    try {
+      active = requireActiveConnection();
+      preview = await runBlockStudioPreviewSource(source, active, {});
+    } catch {
+      preview = undefined;
+    }
+    const record = queryMatchFor(projectRoot, [name, formerName], preview ? queryFingerprint(preview.sql, preview.variables) : undefined);
     if (!record) return { checks: [], warnings: [] };
     if (record === 'unreadable') return { checks: [], warnings: [UNREADABLE_RECORD] };
+    if (!preview || !active) return receiptLines(record, undefined);
+    const sameConnection = record.connection.driver === active.driver && (record.connection.database ?? '') === (active.database ?? '');
+    return receiptLines(record, queryChanged(record, preview.sql, preview.variables), sameConnection);
+  };
+
+  /** A saved query's file, by its project path: its name and domain as the file declares them. */
+  const savedBlockAt = (blockPath: string): { name: string; filePath: string; domain?: string } | undefined => {
+    const filePath = normalize(blockPath).replace(/^\/+/, '').replaceAll('\\', '/');
+    if (!isBlockStudioBlockPath(filePath) || !filePath.endsWith('.dql')) return undefined;
+    const absolute = safeJoin(projectRoot, filePath);
+    if (!absolute || !existsSync(absolute)) return undefined;
     try {
-      const active = requireActiveConnection();
-      const preview = await runBlockStudioPreviewSource(source, active, {});
-      const sameConnection = record.connection.driver === active.driver && (record.connection.database ?? '') === (active.database ?? '');
-      return receiptLines(record, queryChanged(record, preview.sql, preview.variables), sameConnection);
+      const meta = parseBlockSourceMetadata(readFileSync(absolute, 'utf-8'));
+      return meta.name ? { name: meta.name, filePath, ...(meta.domain ? { domain: meta.domain } : {}) } : undefined;
     } catch {
-      return receiptLines(record, undefined);
+      return undefined;
+    }
+  };
+
+  /** The name a saved query has in its file on disk, if the file is there. */
+  const savedBlockName = (blockPath: string | undefined): string | undefined => {
+    const absolute = blockPath ? safeJoin(projectRoot, blockPath) : undefined;
+    if (!absolute || !existsSync(absolute)) return undefined;
+    try {
+      return parseBlockSourceMetadata(readFileSync(absolute, 'utf-8')).name || undefined;
+    } catch {
+      return undefined;
     }
   };
 
@@ -13870,7 +13909,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const record = buildCheckRecord({
       source,
       checkedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)) ?? parseBlockSourceMetadata(source).owner,
-      checkedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
+      checkedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : localPersonName(projectRoot),
       checks: [...input.checks, ...(input.verdict ? passedCheckNames(input.verdict.checklist) : [])],
       ...(input.hiddenColumns?.length ? { hiddenColumns: input.hiddenColumns } : {}),
     });
@@ -15547,7 +15586,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // without resolvePrincipal) then reads and keeps no one's own content (RecordOwner null).
     // Every statement the request sends says which action sent it and which request it was, in the
     // warehouse's own history (Snowflake: QUERY_TAG); with or without a host.
-    return withQueryLabels({ action: requestAction, request: requestId }, () => withRequestContext(requestPrincipal ? {
+    // Inside Snowflake the request also runs as the Snowflake user who signed in, so a certification or a
+    // comparison names them (snowflake-ingress.ts); anywhere else that header is never read.
+    return withSnowflakeUser(snowflakeIngress, req.headers[SNOWFLAKE_USER_HEADER], () => withQueryLabels({ action: requestAction, request: requestId }, () => withRequestContext(requestPrincipal ? {
       principal: requestPrincipal,
       requestId,
       ...(requestAction ? { action: requestAction } : {}),
@@ -19002,7 +19043,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           },
           savedQuery: async (queryName, parameters) => {
             const wanted = queryName.trim().toLowerCase();
-            const block = Object.values(projectSnapshot().manifest.blocks ?? {}).find((candidate) => candidate.name.toLowerCase() === wanted);
+            const atPath = typeof body.queryPath === 'string' ? savedBlockAt(body.queryPath) : undefined;
+            const block = atPath && atPath.name.toLowerCase() === wanted
+              ? atPath
+              : Object.values(projectSnapshot().manifest.blocks ?? {}).find((candidate) => candidate.name.toLowerCase() === wanted);
             if (!block?.filePath) return undefined;
             // HH-13: a saved query compared by name is its Dataset, as when it is run by name.
             const refusal = await restrictedBlockRefusal({ name: block.name, filePath: block.filePath, ...(block.domain ? { domain: block.domain } : {}) });
@@ -19019,6 +19063,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const stopped = error instanceof ComparisonStopped || error instanceof ExportRefused;
         reply(stopped ? 422 : 500, { error: error instanceof Error ? error.message : String(error), ...(stopped ? { code: 'COMPARISON_STOPPED' } : {}) });
       }
+      return;
+    }
+
+    // A saved query's own page: its last comparison with an old report, from the record kept under its name.
+    // Records hold counts and fingerprints, never a value, so reading one is reading the project.
+    if (req.method === 'GET' && path === '/api/report-match/query') {
+      const name = url.searchParams.get('name')?.trim() ?? '';
+      res.writeHead(name ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+      if (!name) {
+        res.end(serializeJSON({ error: 'Name the saved query.' }));
+        return;
+      }
+      const record = queryMatchFor(projectRoot, [name]);
+      res.end(serializeJSON(record === 'unreadable'
+        ? { match: null, unreadable: UNREADABLE_RECORD }
+        : { match: record ? { verdict: record.verdict, words: receiptMatchWords(record), report: record.report, comparedAt: record.comparedAt } : null }));
       return;
     }
 
@@ -20124,7 +20184,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         certifyTermDeclaration(projectRoot, term, {
           // The person certifying, never the term's configured owner (as for saved queries).
           certifiedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)),
-          certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
+          certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : localPersonName(projectRoot),
           via: 'modeling',
           checks: verdict.checks,
         });
@@ -28673,7 +28733,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             description: certifiedMetadata.description,
             owner: certifiedMetadata.owner,
             tags: certifiedMetadata.tags,
-            certification: await explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result }),
+            certification: await explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result, blockPath: canonicalPath ?? draftPath }),
           });
           if (canonicalPath && draftPath !== savedPath) {
             try { deleteBlockStudioArtifacts(projectRoot, draftPath); } catch { /* certified source is already durable */ }
@@ -28868,7 +28928,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           return;
         }
         const certifiedSource = setBlockStudioStatusInSource(source, 'certified');
-        const receipt = await explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result });
+        const receipt = await explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result, ...(blockPath ? { blockPath } : {}) });
         const certifiedPayload: ReturnType<typeof openBlockStudioDocument> | null = blockPath
           ? await timer.time('write_certified_block', async () => {
           const normalizedBlockPath = normalize(blockPath).replace(/^\/+/, '');
@@ -29231,7 +29291,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               sourceKind: readiness.candidate.sourceKind,
               sourcePath: readiness.candidate.sourcePath,
             },
-            certification: await explicitCertificationReceipt({ source: certifiedSource, via: 'sql-import', enterprise: false, verdict: certification }),
+            certification: await explicitCertificationReceipt({ source: certifiedSource, via: 'sql-import', enterprise: false, verdict: certification, blockPath: readiness.candidate.savedPath }),
           });
           const next: DqlGenerationCandidate = {
             ...readiness.candidate,
@@ -33563,7 +33623,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       'Content-Length': content.byteLength,
     });
     res.end(content);
-    }));
+    })));
     })().catch((error) => {
       // API-007/E2E-014: no rejected request promise may terminate the local
       // notebook process. Route-specific handlers should still return their
@@ -38120,6 +38180,8 @@ interface CompareRequestBody {
   metric?: unknown;
   value?: unknown;
   query?: unknown;
+  /** The saved query's file, from its own page: found even before the project index has its new name. */
+  queryPath?: unknown;
   parameters?: Record<string, unknown>;
   report?: unknown;
   worksheet?: unknown;
@@ -45439,6 +45501,7 @@ export function saveBlockStudioArtifacts(
     && comparable(readFileSync(previousAbsolute, 'utf-8')) === comparable(options.source);
   const declared = withDeclaredBlockName(options.source, options.name);
   const source = options.certification || unchangedCertified ? declared : demoteCertifiedSource(declared);
+  carryReportMatches(projectRoot, previousAbsolute, options.name);
   const previousCompanion = unchangedCertified && !options.certification && previousPath
     ? blockCompanionRelativePath(projectRoot, previousPath)
     : null;
@@ -45487,6 +45550,21 @@ export function saveBlockStudioArtifacts(
   }
 
   return targetRelativePath;
+}
+
+/**
+ * A saved query renamed on save keeps its comparisons with old reports: they
+ * are filed by name, so they move to the new one. `previousAbsolute` is the file
+ * being saved over, read before it is written.
+ */
+function carryReportMatches(projectRoot: string, previousAbsolute: string | null, name: string): void {
+  if (!previousAbsolute || !existsSync(previousAbsolute)) return;
+  try {
+    const before = parseBlockSourceMetadata(readFileSync(previousAbsolute, 'utf-8')).name;
+    if (before && before !== name) moveMatchRecords(projectRoot, 'query', before, name);
+  } catch {
+    // A record file that can't be read stays where it is; the receipt says it can't be read.
+  }
 }
 
 /**
@@ -45670,6 +45748,7 @@ export function saveBlockStudioDraftArtifacts(
 
   // A draft is never certified, whatever status the incoming source claims.
   const draftSource = demoteCertifiedSource(withDeclaredBlockName(options.source, options.name));
+  carryReportMatches(projectRoot, previousPath ? join(projectRoot, previousPath) : null, options.name);
   mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, draftSource.trimEnd() + '\n', 'utf-8');
   const companionSlug = targetRelativePath.split('/').pop()?.replace(/\.dql$/, '') || slug;

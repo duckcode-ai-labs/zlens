@@ -41,8 +41,20 @@ optional**.
 saved query editor shows it):
 
 ```text
-Certified by you@example.com · 10/15/2026, 3:27:48 PM · via the saved query editor · OSS rules
+Certified by Maria Lopez · 15 Oct
 ```
+
+Its **Technical details** read:
+
+```text
+Recorded as maria.lopez@example.com · 10/15/2026, 3:27:48 PM · via the saved query editor · standard certification rules
+```
+
+The certifier is your git `user.email` (else `$USER@local`), named by git `user.name`; in the ZLens app for
+Snowflake it is the Snowflake user you signed in as. When the saved query was compared
+with its old report and every value matched, the receipt adds a line such as
+`Old report: Matches Sales by Region · every value compared (12 of 12 at 2 decimals, 2026-10-15)`;
+see [Prove the numbers match](../guides/migrate.md#prove-the-numbers-match).
 
 **When it does not pass**, the panel reads **Unable to certify** and lists
 **Fixes before certification**. Each fix says how to fix it and has a button

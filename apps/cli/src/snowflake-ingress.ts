@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync } from 'node:fs';
 import { readEnv } from '@zlens/core';
 
@@ -45,6 +46,24 @@ export function snowflakeIngressRefusal(
     return { status: 403, error: 'This ZLens app is set up for one person. Ask your Snowflake admin for access.', code: 'NOT_THIS_APPS_USER' };
   }
   return undefined;
+}
+
+/**
+ * The person Snowflake signed in, for the request being handled. Set only by the server, and only when the
+ * ingress is trusted (snowflakeIngressFromEnv): a certification, a check or a comparison made in the app then
+ * names that Snowflake user instead of the container's own (nameless) account.
+ */
+const signedInUser = new AsyncLocalStorage<string>();
+
+/** Runs `work` as the Snowflake user the ingress named; with no ingress or no user, as before. */
+export function withSnowflakeUser<T>(ingress: SnowflakeIngress | undefined, userHeader: string | string[] | undefined, work: () => T): T {
+  const user = ingress ? (Array.isArray(userHeader) ? userHeader[0] : userHeader)?.trim() : undefined;
+  return user ? signedInUser.run(user, work) : work();
+}
+
+/** The Snowflake user behind the current request, inside the Snowflake app only. */
+export function snowflakeSignedInUser(): string | undefined {
+  return signedInUser.getStore();
 }
 
 /** A browser request from the page this server served: its Origin is the address the request came to. */

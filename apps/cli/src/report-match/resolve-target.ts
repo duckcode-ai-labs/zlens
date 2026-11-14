@@ -263,8 +263,63 @@ function grainOfValues(values: string[], header: string): DateGrain {
   return (grains.values().next().value as DateGrain | undefined) ?? 'day';
 }
 
+/** Words in a column's name that say it names rows rather than counts them. */
+const KEY_WORDS = new Set(['year', 'years', 'yr', 'fy', 'season', 'seasons', 'id', 'key', 'code', 'date', 'day', 'week', 'month', 'quarter', 'qtr', 'period']);
+const looksLikeKey = (header: string) => header.toLowerCase().split(/[^\p{L}\p{N}]+/u).some((word) => KEY_WORDS.has(word));
+
+/**
+ * The column, or two, that tells a file's rows apart when every column looks
+ * like a number (a year or a season does): every row has a value, and no two
+ * rows share one, in the file and in ZLens's result. A name like Season or Year
+ * goes first; a column with another name only when it is the leftmost (an
+ * export's row labels). At least one number is left to compare. Rows
+ * matched on any such column pair up the same rows, so a wrong pick can only
+ * fail to match, never make a false Matches.
+ */
+export function proposeKeyColumns(table: ExportTable, numbers: NumberColumn[], resultRows: Array<Record<string, unknown>> = []): NumberColumn[] {
+  if (table.rows.length < 2 || numbers.length < 2) return [];
+  const headerAt = new Map(table.headers.map((header, index) => [header, index]));
+  const fileCells = new Map(numbers.map((column) => [column, table.rows.map((row) => (row[headerAt.get(column.header)!] ?? '').trim())]));
+  const resultCells = new Map(numbers.map((column) => {
+    const wanted = column.output.toLowerCase();
+    return [column, resultRows.map((row) => {
+      const found = Object.keys(row).find((name) => name.toLowerCase() === wanted);
+      const value = found === undefined ? undefined : row[found];
+      return value === null || value === undefined ? '' : String(value).trim().replace(/\.0+$/, '');
+    })];
+  }));
+  const distinct = (columns: string[][], count: number) => {
+    const seen = new Set<string>();
+    for (let index = 0; index < count; index += 1) {
+      const parts = columns.map((cells) => cells[index]!);
+      if (parts.some((part) => !part)) return false;
+      const id = parts.join('\u0001');
+      if (seen.has(id)) return false;
+      seen.add(id);
+    }
+    return true;
+  };
+  const tellsApart = (columns: NumberColumn[]) => distinct(columns.map((column) => fileCells.get(column)!), table.rows.length)
+    && distinct(columns.map((column) => resultCells.get(column)!), resultRows.length);
+  // An export puts what names a row on the left: a column with no key-like name is tried only there.
+  const leftmost = [...numbers].sort((a, b) => headerAt.get(a.header)! - headerAt.get(b.header)!);
+  const usable = (column: NumberColumn, within: number) => (looksLikeKey(column.header) || leftmost.indexOf(column) < within)
+    && columnShape(fileCells.get(column)!) === 'plain-number' && fileCells.get(column)!.every((cell) => !isEmptyCell(cell));
+  const byPreference = (a: NumberColumn, b: NumberColumn) => Number(looksLikeKey(b.header)) - Number(looksLikeKey(a.header)) || headerAt.get(a.header)! - headerAt.get(b.header)!;
+  for (const column of numbers.filter((candidate) => usable(candidate, 1)).sort(byPreference)) if (tellsApart([column])) return [column];
+  if (numbers.length < 3) return [];
+  const candidates = numbers.filter((candidate) => usable(candidate, 2)).sort(byPreference);
+  for (let first = 0; first < candidates.length; first += 1) {
+    for (let second = first + 1; second < candidates.length; second += 1) {
+      const pair = [candidates[first]!, candidates[second]!].sort((a, b) => headerAt.get(a.header)! - headerAt.get(b.header)!);
+      if (tellsApart(pair)) return pair;
+    }
+  }
+  return [];
+}
+
 /** A saved query's columns are the target: names decide, and how a column looks says key or number. */
-export function resolveQueryTarget(table: ExportTable, resultColumns: string[], choices: TargetChoices = {}): { plan: ComparisonPlan; mapping: Record<string, string> } {
+export function resolveQueryTarget(table: ExportTable, resultColumns: string[], choices: TargetChoices = {}, resultRows?: Array<Record<string, unknown>>): { plan: ComparisonPlan; mapping: Record<string, string>; proposedKeys?: string[] } {
   const ignored = new Set((choices.ignore ?? []).map(normalize));
   const forcedKeys = new Set((choices.keys ?? []).map(normalize));
   const mapped = new Map(Object.entries(choices.map ?? {}).map(([header, target]) => [normalize(header), target]));
@@ -297,7 +352,14 @@ export function resolveQueryTarget(table: ExportTable, resultColumns: string[], 
       numbers.push({ header, output, name: output });
     }
   });
-  return { plan: { keys, numbers, notCompared }, mapping };
+  // No key named, and none by its looks: the column whose values differ on every row, rather than no verdict.
+  const proposed = !keys.length && !forcedKeys.size ? proposeKeyColumns(table, numbers, resultRows) : [];
+  for (const column of proposed) {
+    numbers.splice(numbers.indexOf(column), 1);
+    keys.push({ header: column.header, output: column.output, kind: 'text' });
+    mapping[column.header] = `the column ${column.output}, as the key`;
+  }
+  return { plan: { keys, numbers, notCompared }, mapping, ...(proposed.length ? { proposedKeys: proposed.map((column) => column.header) } : {}) };
 }
 
 // ── Filters a person states ─────────────────────────────────────────────────

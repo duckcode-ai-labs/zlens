@@ -76,6 +76,8 @@ export interface CompareOutcome {
   tolerance?: string;
   /** On a server: another reader could see other figures, so this can't be recorded for everyone. */
   readerDependent?: boolean;
+  /** Columns ZLens matched rows on by itself, because no key was named and none looked like one. */
+  keysProposed?: string[];
   comparison: Comparison;
 }
 
@@ -179,18 +181,23 @@ export async function runComparison(request: CompareRequest, deps: CompareDeps):
     const result = await deps.run(saved.sql, { ...(saved.sqlParams ? { sqlParams: saved.sqlParams } : {}), ...(saved.variables ? { variables: saved.variables } : {}) });
     const columns = Object.keys(result.rows[0] ?? {});
     if (!columns.length) throw new ComparisonStopped(`The saved query ${saved.name} returned no rows, so there is nothing to compare.`);
-    const { plan, mapping } = resolveQueryTarget(table, columns, request);
+    const { plan, mapping, proposedKeys } = resolveQueryTarget(table, columns, request, result.rows);
+    const comparison = compareExport(table, plan, result.rows, {
+      ...options,
+      resultIncomplete: result.truncated,
+      ...(TIMES_100.test(saved.sql) ? { pointColumns: new Set(plan.numbers.map((number) => number.name)) } : {}),
+    });
+    if (proposedKeys?.length) {
+      comparison.notes.unshift(`Rows were matched on ${proposedKeys.join(' and ')}: no two rows share ${proposedKeys.length === 1 ? 'a value there' : 'those values'}. If another column says which row is which, name it with --key.`);
+    }
     return {
       ...base,
       target: { kind: 'query', name: saved.name, parameters },
       // What the parameters resolved to: a changed default changes the rows, not the SQL.
       querySha256: { query: queryFingerprint(saved.sql, saved.variables ?? parameters) },
       mapping,
-      comparison: compareExport(table, plan, result.rows, {
-        ...options,
-        resultIncomplete: result.truncated,
-        ...(TIMES_100.test(saved.sql) ? { pointColumns: new Set(plan.numbers.map((number) => number.name)) } : {}),
-      }),
+      ...(proposedKeys?.length ? { keysProposed: proposedKeys } : {}),
+      comparison,
     };
   }
 

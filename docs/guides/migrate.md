@@ -245,7 +245,10 @@ rows, not that the rows are the right ones, and the result says so.
 **Which columns are compared.** Columns are matched by name to metrics and
 dimensions: `Total Sales`, `SUM(Sales)` and `Sum of Sales` all find their metric.
 The mapping is printed. Change it with `--map "Sales=total_sales"`, `--key
-Column` or `--ignore Column`. To compare a saved query instead, use `--query
+Column` or `--ignore Column`. When a saved query's export has several rows and
+every column looks like a number (`Season`, `Wins`), ZLens matches rows on the
+column whose values differ on every row, in the file and in its own result, and
+says which; a column named like a key (year, season, month, id) comes first. To compare a saved query instead, use `--query
 <name>`, with `--param name=value` for its parameters. For one number:
 
 ```bash
@@ -258,10 +261,13 @@ signs off the migration. An `exports.yaml` in the folder gives each file its own
 options, under the file's name: `worksheet`, `report`, `query`, `filters`,
 `waive`, `map`, `keys`, `ignore`, `fileRows`, `tolerance`.
 
-**On the Import screen.** **Compare with the old report**, in the *Metric drafts*
-section and on a saved query draft, does the same thing: drop the file, state the
-filters, read the differences. Each draft then shows its verdict, and **Approve
-all that ran** leaves out what differs.
+**On the screen.** **Compare with the old report** does the same thing: drop the
+file (CSV or Excel), read the differences. It is on every saved query's own page,
+on a saved draft in the Import screen, and in the Import screen's *Metric drafts*
+section, where you also state the report's filters. Each draft then shows its
+verdict, and **Approve all that ran** leaves out what differs. The Import screen's
+**Source** box takes SQL, Tableau and Power BI files only; it points a CSV to the
+compare box.
 
 **What is kept.** Each metric or saved query gets a record in
 `semantic-layer/report-matches/`: who compared which file (by its fingerprint),
@@ -276,8 +282,10 @@ compared** when its definition, or a part of it, moves on. The newest comparison
 with each report counts, but a narrower look at the same query, such as fewer rows
 or `--file-rows`, does not clear a difference. With several reports, the worst
 stands. Certifying a saved query adds that comparison to the receipt: as a passed
-check when it matches every row and the query is unchanged, otherwise as a warning.
-A match is not required to certify.
+check when it matches every row and the query is unchanged (`Matches <report> ·
+every value compared`), otherwise as a warning. A match is not required to certify.
+Renaming a saved query keeps its comparisons: they move to the new name, and a
+comparison of exactly the same SQL counts under any name.
 
 **On a server.** Comparing runs as you, with your row rules, and the differences
 stay yours. Recording is a second step that takes the right to author datasets. It

@@ -200,7 +200,7 @@ approves every draft whose check ran, leaving out any that differs from the old
 report, and any ratio that would bring one along: those are approved one at a
 time. **Compare with the old report** takes an export of a report and compares
 every value, as [`zlens migrate compare`](../guides/migrate.md#prove-the-numbers-match)
-does; a saved query draft has the same section. Below them: calculations that are
+does; a saved query draft has the same section, and so does every saved query's own page. Below them: calculations that are
 already a metric, ones whose check failed on the database, and ones left out,
 each with why. See [Migrate from other tools](../guides/migrate.md#bring-the-calculations-over-as-metrics).
 
