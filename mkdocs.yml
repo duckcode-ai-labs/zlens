@@ -197,6 +197,13 @@ nav:
       - Compatibility: reference/compatibility.md
       - Troubleshooting: guides/troubleshooting.md
       - FAQ: guides/faq.md
+  - Security:
+      - Overview: security/index.md
+      - Secure development: security/secure-development.md
+      - Vulnerability management: security/vulnerability-management.md
+      - Incident response: security/incident-response.md
+      - Threat model: security/threat-model.md
+      - CVE exceptions: security/cve-exceptions.md
   - Architecture and contributing:
       - Overview: architecture/overview.md
       - Graduated trust: architecture/graduated-trust.md

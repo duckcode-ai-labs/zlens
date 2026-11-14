@@ -41,9 +41,9 @@ function zodTypeFromJsonSchema(schema: unknown): z.ZodTypeAny {
       }
       type = record.additionalProperties === false ? z.object(shape).strict() : z.object(shape);
     } else if (record.additionalProperties && typeof record.additionalProperties === 'object') {
-      type = z.record(zodTypeFromJsonSchema(record.additionalProperties));
+      type = z.record(z.string(), zodTypeFromJsonSchema(record.additionalProperties));
     } else {
-      type = z.record(z.unknown());
+      type = z.record(z.string(), z.unknown());
     }
   } else {
     type = z.unknown();

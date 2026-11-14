@@ -4,10 +4,11 @@
 
 | Version | Supported |
 |---|---|
-| 1.17.x | Yes — current release line |
-| 1.16.x and earlier | No — please upgrade |
+| The latest `0.x` release on npm | Yes |
+| The ZLens app for Snowflake: the version on its default release channel | Yes |
+| Older releases | No, please upgrade |
 
-Fixes ship in the latest `1.x` release. We do not back-port to older lines.
+Fixes ship in the latest release. We do not back-port to older lines.
 
 ---
 
@@ -21,7 +22,9 @@ Report security issues privately by emailing **security@zlens.app**. Include:
 2. Steps to reproduce (minimal example preferred)
 3. Your contact information for follow-up
 
-We will acknowledge receipt within 2 business days and aim to issue a fix or mitigation within 14 days for confirmed vulnerabilities.
+We will acknowledge receipt within 2 business days. Confirmed vulnerabilities are fixed within 7 days
+(critical), 30 days (high) or 90 days (medium); see [Vulnerability management](docs/security/vulnerability-management.md).
+How we build and release, and how the app for Snowflake is protected: [docs/security](docs/security/index.md).
 
 ---
 
