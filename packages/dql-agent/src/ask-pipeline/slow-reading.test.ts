@@ -94,7 +94,8 @@ describe('a clause the reading wrote as a question is asked as written (V11 rete
     const asked = clauseQuestion("How are the Warriors doing lately? — neither the measure of 'doing' (wins, points per game) nor 'lately' (no recent period is defined in this project)");
     expect(asked).toBe("Not clear yet: neither the measure of 'doing' (wins, points per game) nor 'lately' (no recent period is defined in this project). Which did you mean?");
     expect(asked).not.toMatch(/\?"\?|"[^"]*\?[^"]*"/);
-    expect(clauseQuestion('how are they doing (which performance measure)')).toBe('What do you mean by "how are they doing (which performance measure)"?');
+    expect(clauseQuestion('how are they doing (which performance measure)')).toBe('How are they doing (which performance measure)?');
+    expect(clauseQuestion("what defines 'best player' (efficiency rating, career points, or another stat)")).toBe("What defines 'best player' (efficiency rating, career points, or another stat)?");
   });
 });
 

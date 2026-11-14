@@ -1930,7 +1930,11 @@ export function clauseQuestion(clause: string): string {
     const unclear = asked.slice(mark + 1).replace(/^[\s—–:;,.-]+/, '').replace(/[.\s]+$/, '');
     if (unclear) return `Not clear yet: ${unclear}. Which did you mean?`;
   }
-  return `What do you mean by "${asked.replace(/[?.\s]+$/, '').replace(/\?/g, '')}"?`;
+  const plain = asked.replace(/[?.\s]+$/, '').replace(/\?/g, '');
+  // A clause written as a question without its mark ("what defines 'best player' (…)") is asked as that question,
+  // not quoted inside another one (V13 gate, Q16).
+  if (/^(who|what|which|when|where|why|how)\b/i.test(plain)) return `${plain.charAt(0).toUpperCase()}${plain.slice(1)}?`;
+  return `What do you mean by "${plain}"?`;
 }
 
 /** A retry after a provider timeout needs room for one more full dispatch (the subscription CLI's 60 s) plus 15 s for the rest of the turn. */
