@@ -260,14 +260,17 @@ export function ConnectionRuntimeSettings({
                   </>
                 )}
               </section>
-              <section style={{ marginTop: 22 }}>
-                <SectionTitle title="Runtime status" detail="Environment variables remain supported for Docker, CI, and shell-based setup." t={t} />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-                  {groups.map((group) => (
-                    <EnvGroupCard key={group.id} group={group} t={t} />
-                  ))}
-                </div>
-              </section>
+              {/* Without internet access the install set its own environment: no keys for outside providers, Slack or email. */}
+              {mcpSettings.noEgress || isSnowflakeApp() ? null : (
+                <section style={{ marginTop: 22 }}>
+                  <SectionTitle title="Runtime status" detail="Environment variables remain supported for Docker, CI, and shell-based setup." t={t} />
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
+                    {groups.map((group) => (
+                      <EnvGroupCard key={group.id} group={group} t={t} />
+                    ))}
+                  </div>
+                </section>
+              )}
             </>
           )}
           {!section && (

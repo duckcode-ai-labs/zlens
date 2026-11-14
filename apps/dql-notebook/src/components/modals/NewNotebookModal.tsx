@@ -209,7 +209,9 @@ export function NewNotebookModal({ onFileOpened }: NewNotebookModalProps) {
                 Create notebook
               </h2>
               <p style={{ margin: '3px 0 0', color: t.textMuted, fontSize: 11.5, lineHeight: 1.35, fontFamily: t.font }}>
-                Choose who this notebook is for and how much starter structure you want. Templates only add cells.
+                {snowflakeApp
+                  ? 'Choose how much starter structure you want. Templates only add cells.'
+                  : 'Choose who this notebook is for and how much starter structure you want. Templates only add cells.'}
               </p>
             </div>
           </div>

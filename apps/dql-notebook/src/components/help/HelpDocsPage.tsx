@@ -335,7 +335,7 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
       mins: '2 min',
       body: (
         <>
-          <p style={para}>ZLens runs inside your Snowflake account, as a Snowflake Native App. It reads only the database your Snowflake admin granted to it, with its own extra-small warehouse. Nothing leaves your account.</p>
+          <p style={para}>ZLens runs inside your Snowflake account, as a Snowflake Native App. It reads only the database your Snowflake admin granted to it, with its own extra-small warehouse. Nothing is sent to the app's provider.</p>
           <p style={para}>When it first opened, ZLens read the tables and views in that database and drafted models: the business entities, their keys and the joins between them. A strip at the top of the page said so while it worked.</p>
           <p style={para}>Nothing is saved until you review the drafts. Open <strong>Modeling</strong> to accept or change them.</p>
         </>
