@@ -234,6 +234,8 @@ const EMPTY_PLAN = {
 
 export interface SemanticRuntimeSettingsResponse {
   preference: 'auto' | 'native' | 'metricflow-cli' | 'dbt-cloud';
+  /** True on an install with no internet access (an app inside Snowflake): no dbt Cloud, no MetricFlow install. */
+  noEgress?: boolean;
   dbtCloud: {
     host?: string;
     environmentId?: string;
@@ -330,6 +332,9 @@ export interface MetricFlowInstallJob {
 
 export interface MetricFlowInstallerStatus {
   job: MetricFlowInstallJob | null;
+  /** False on an install with no internet access (an app inside Snowflake): MetricFlow is not offered. */
+  installable?: boolean;
+  reason?: string;
   recommendedAdapter: MetricFlowWarehouseAdapter | null;
   supportedAdapters: MetricFlowWarehouseAdapter[];
   projectConfigured: boolean;
@@ -9676,6 +9681,8 @@ export const api = {
     };
     ollamaReachable: boolean;
     installed: string[];
+    /** False on an install with no internet access: no model downloads. */
+    installable?: boolean;
   }> {
     const query = endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : '';
     return request(`/api/settings/embeddings/models${query}`);

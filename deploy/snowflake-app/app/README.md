@@ -75,8 +75,10 @@ To start it without opening it: `CALL ZLENS_APP.app_public.start_app();`
 - **Endpoints.** One: `ui` (port 3474), ZLens's web page and its API, at the address `app_url()` returns.
   Snowflake signs people in before any request reaches it, and ZLens serves only the user named on
   the Configurations tab. There is no other way in.
-- **Internet.** None. The app asks for no external access integration, and ZLens runs with downloads and
-  update checks turned off. Nothing is sent to the app's provider.
+- **Internet.** None. The app asks for no external access integration, and ZLens runs with downloads,
+  installs and update checks turned off: everything it runs is in the app's image, and it loads no code or
+  models at run time. It calls no outside service (no dbt Cloud; no Slack, email or webhook deliveries).
+  Nothing is sent to the app's provider.
 - **Your data.** ZLens reads table and column descriptions and runs read-only queries, as the app, on only
   the database you granted, with its own warehouse. Every query carries a `QUERY_TAG` and shows in your `QUERY_HISTORY`.
 - **AI.** Questions go to Claude through Snowflake Cortex, inside Snowflake. A prompt holds the question,

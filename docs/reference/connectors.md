@@ -77,8 +77,14 @@ export ZLENS_CONNECTOR_PATH=/opt/zlens/drivers ZLENS_NO_EGRESS=1
 ```
 
 ZLens looks for a driver in the project's `.dql/connectors` first, then in
-`ZLENS_CONNECTOR_PATH`, then in the project. What you point ZLens at yourself,
-such as a model provider or a Slack webhook, still goes where you point it.
+`ZLENS_CONNECTOR_PATH`, then in the project.
+
+Nothing installs at run time either: Settings offers no MetricFlow install and
+no embedding model download. Nothing talks to an outside service: no dbt Cloud
+Semantic Layer (metrics compile with ZLens's own engine), and schedules and
+alerts send no Slack, email or webhook messages (the results stay in ZLens and
+the project's `.dql/runs/notifications.log`). Model providers follow
+`ZLENS_MODEL_PROVIDERS`.
 
 Keep the `@^1.5.6-r.1` range on the DuckDB command (and the quotes, which
 zsh needs): npm's `latest` for `@duckdb/node-api` is 2.0, whose database files

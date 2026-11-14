@@ -59,6 +59,8 @@ export function DbtProjectEditor({
   const [busy, setBusy] = useState<'loading' | 'preview' | 'apply' | 'refresh' | null>('loading');
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [semanticRuntime, setSemanticRuntime] = useState<SemanticRuntimeSettingsResponse | null>(null);
+  // An install with no internet access (an app inside Snowflake) offers neither dbt Cloud nor a MetricFlow install.
+  const offline = Boolean(semanticRuntime?.noEgress);
   const [semanticHost, setSemanticHost] = useState('');
   const [semanticEnvironmentId, setSemanticEnvironmentId] = useState('');
   const [semanticToken, setSemanticToken] = useState('');
@@ -428,7 +430,9 @@ export function DbtProjectEditor({
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>Semantic execution adapters</div>
           <div style={{ fontSize: 11.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5 }}>
-            Adapter code is included with ZLens. Auto selects one ready adapter in priority order: dbt Cloud, local MetricFlow, then native for simple metrics. Once selected, an adapter failure is shown directly and never silently downgraded.
+            {offline
+              ? 'This install has no internet access, so metrics compile with ZLens\'s own engine (Native). dbt Cloud and a MetricFlow install are not offered here.'
+              : <>Adapter code is included with ZLens. Auto selects one ready adapter in priority order: dbt Cloud, local MetricFlow, then native for simple metrics. Once selected, an adapter failure is shown directly and never silently downgraded.</>}
           </div>
           {semanticRuntime?.dbtCloud.configured ? (
             <div style={{ fontSize: 10.5, color: semanticRuntime.dbtCloud.targetBindingState === 'bound' && semanticRuntime.dbtCloud.metricInventoryState === 'complete' ? 'var(--status-success)' : 'var(--status-warning)', marginTop: 6, lineHeight: 1.5 }}>
@@ -451,8 +455,8 @@ export function DbtProjectEditor({
               style={{ fontSize: 11.5, padding: '4px 8px', borderRadius: 7, border: '1px solid var(--border-subtle)', background: t.cellBg, color: t.textPrimary, fontFamily: t.font }}
             >
               <option value="auto">Auto (recommended)</option>
-              <option value="dbt-cloud">dbt Cloud</option>
-              <option value="metricflow-cli">Local MetricFlow</option>
+              {offline ? null : <option value="dbt-cloud">dbt Cloud</option>}
+              {offline ? null : <option value="metricflow-cli">Local MetricFlow</option>}
               <option value="native">Native (DQL)</option>
             </select>
             {semanticRuntime?.runtime.active ? (
@@ -467,7 +471,7 @@ export function DbtProjectEditor({
         </div>
 
         <div style={{ display: 'grid', gap: 7 }}>
-          {(semanticRuntime?.runtime.adapters ?? []).map((adapter) => (
+          {(semanticRuntime?.runtime.adapters ?? []).filter((adapter) => !offline || adapter.ready || (adapter.id !== 'dbt-cloud' && adapter.id !== 'metricflow-cli')).map((adapter) => (
             <div key={adapter.id} style={{ border: '1px solid var(--border-subtle)', borderRadius: 9, padding: '9px 10px', display: 'grid', gap: adapter.id === 'metricflow-cli' ? 10 : 0 }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
                 <span style={{ width: 8, height: 8, borderRadius: 999, marginTop: 4, background: adapter.ready ? 'var(--status-success)' : adapter.configured ? 'var(--status-warning)' : 'var(--text-muted)' }} />
@@ -481,7 +485,7 @@ export function DbtProjectEditor({
                 <span style={{ fontSize: 9.5, color: adapter.ready ? 'var(--status-success)' : t.textMuted }}>{adapter.ready ? 'Ready' : adapter.configured ? 'Configured' : 'Setup required'}</span>
               </div>
 
-              {adapter.id === 'metricflow-cli' && (!adapter.ready || metricFlowJob) ? (
+              {adapter.id === 'metricflow-cli' && !offline && metricFlowInstaller?.installable !== false && (!adapter.ready || metricFlowJob) ? (
                 <div style={{ marginLeft: 17, paddingTop: 9, borderTop: '1px solid var(--border-subtle)', display: 'grid', gap: 8 }}>
                   {!adapter.ready ? (
                     <>
@@ -538,7 +542,7 @@ export function DbtProjectEditor({
           ))}
         </div>
 
-        <details>
+        {offline ? null : <details>
           <summary style={{ cursor: 'pointer', fontSize: 11.5, fontWeight: 700, color: t.textSecondary }}>dbt Cloud Semantic Layer</summary>
           <div style={{ display: 'grid', gap: 9, marginTop: 11 }}>
             <label style={{ display: 'grid', gap: 5 }}>
@@ -560,7 +564,7 @@ export function DbtProjectEditor({
               <button type="button" onClick={() => void applySemanticRuntime()} disabled={Boolean(semanticBusy)} style={{ ...secondary, border: 'none', background: t.accent, color: '#fff' }}>{semanticBusy === 'apply' ? 'Testing & binding…' : 'Test, bind & save'}</button>
             </div>
           </div>
-        </details>
+        </details>}
       </div>
       </AdvancedDisclosure>
     </div>
