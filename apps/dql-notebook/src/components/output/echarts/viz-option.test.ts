@@ -96,7 +96,8 @@ describe('buildVizOption (RFC 0008 step 4)', () => {
     // A stack writes a lower segment's value inside it.
     const stacked: QueryResult = { columns: ['season', 'regular', 'playoffs'], rows: [{ season: '2015', regular: 73, playoffs: 15 }], rowCount: 1, executionTime: 1 };
     const [lower, upper] = series(buildVizOption({ chartType: 'stacked-bar', result: stacked, themeMode: 'paper', config: { chart: 'stacked-bar', valueLabels: 'auto' } })!.option);
-    expect([lower.label.position, upper.label.position]).toEqual(['inside', 'right']);
+    // Seasons are periods, so the bars stand on a time axis running left to right and the top segment's value sits above it (#337).
+    expect([lower.label.position, upper.label.position]).toEqual(['inside', 'top']);
     expect(lower.data[0]).toMatchObject({ value: 73, label: { show: true } });
   });
 
