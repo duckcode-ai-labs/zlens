@@ -39,8 +39,12 @@ export function semanticAnswerArtifact(request: SemanticCompileRequest, reading:
   } as DqlArtifactReference;
 }
 
-const blockName = (reading: string, fallback: string) =>
-  (reading.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || fallback).replace(/^(\d)/, 'q_$1');
+// A name is cut between words, never inside one (V12: "count_of_regular_season_games_the_golden_state_w").
+const blockName = (reading: string, fallback: string) => {
+  const words = reading.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const cut = words.length <= 64 ? words : words.slice(0, 65).replace(/_[^_]*$/, '') || words.slice(0, 64);
+  return (cut || fallback).replace(/^(\d)/, 'q_$1');
+};
 
 const sqlBlockSource = (name: string, reading: string, sql: string) => [
   `block "${name}" {`,

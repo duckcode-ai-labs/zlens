@@ -140,6 +140,16 @@ describe('how an Ask run was answered, as steps in plain words', () => {
     expect(warehouse.headline).toMatch(/^Stopped while running on the warehouse/);
   });
 
+  it('a reading that ran out of time is not "Done": it says the SQL was written from the question\'s words (V12 retest)', () => {
+    const slow = { ...aiAnswer, checks: [], story: [
+      { phase: 'read', title: 'Ran out of time to check the reading', state: 'missed', detail: 'no time was left to correct the reading', at: 1 },
+      { phase: 'schema', title: 'Drafted SQL over sales.opportunities', state: 'done', at: 2 },
+    ] };
+    const explanation = explainAskRun({ receipt: slow, payload: { sql: 'SELECT 1' }, status: 'completed' }) as RunExplanation;
+    expect(explanation.steps[0]).toMatchObject({ kind: 'read', outcome: 'failed', reason: 'The AI model took too long to read the question, so the SQL was written from the question\'s words.' });
+    expect(explanation.ending).toBe('answered');
+  });
+
   it('a conversation is one step; a run the pipeline did not write is not explained here', () => {
     const chat = explainAskRun({ receipt: base({ intent: { kind: 'conversation', reading: 'A greeting.' } }), status: 'completed' })!;
     expect(chat.steps).toHaveLength(1);

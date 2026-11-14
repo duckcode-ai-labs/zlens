@@ -370,10 +370,15 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
   } else {
     // 1. Reading the question.
     const readFailed = failure?.stage === 'resolve';
+    // A reading that could not be made, after which the AI wrote the SQL from the question's words, is not "Done"
+    // (new-user test V12: "Read the question · Done" above "Could not read the question into governed fields").
+    const readMissed = readFailed ? undefined : story.find((entry) => entry.phase === 'read' && entry.state !== 'done' && /^(Could not read the question|Ran out of time to check the reading)/.test(entry.title));
     push({
-      id: 'read', kind: 'read', title: 'Read the question', outcome: readFailed ? 'failed' : 'done',
+      id: 'read', kind: 'read', title: 'Read the question', outcome: readFailed || readMissed ? 'failed' : 'done',
       ...(num(timings.resolve) !== undefined ? { ms: num(timings.resolve) } : {}),
-      reason: readFailed ? plainRefs(str(failure?.message) ?? 'The AI could not read the question.') : plainRefs(reading ?? 'Read the question.'),
+      reason: readFailed ? plainRefs(str(failure?.message) ?? 'The AI could not read the question.')
+        : readMissed ? `${/^Ran out of time/.test(readMissed.title) ? 'The AI model took too long to read the question' : 'The AI could not read the question into the project\'s fields'}, so the SQL was written from the question's words.`
+        : plainRefs(reading ?? 'Read the question.'),
       aiCalls: readCalls,
       story: story.filter((entry) => entry.phase === 'context' || entry.phase === 'read' || entry.phase === 'search'),
       notes: arr(receipt.grounding).map(str).filter((note): note is string => Boolean(note) && /^discovery:/.test(note!)).map((note) => plainRefs(note.replace(/^discovery:\s*/, ''))),

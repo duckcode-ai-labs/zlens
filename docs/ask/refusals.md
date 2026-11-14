@@ -12,12 +12,13 @@ it means the data or the definitions you need are not in the project yet.
 
 Ask the sample project `What is our employee headcount by department?`:
 
-1. The trust line reads **Couldn't run this query**.
+1. The trust line reads **Not in this data**, calmly: it is an answer about
+   your data, not an error. A query that failed reads **Couldn't run this
+   query** instead.
 2. The reason follows, for example: `No query was run because the tables Ask
    searched do not hold it: no listed table or column holds employee or
    department information …`
-3. The status line reads **No answer**, with the steps Ask took and what it
-   looked for and missed.
+3. The status line reads **No answer**, with the steps Ask took.
 
 ZLens keeps no draft for a refusal.
 

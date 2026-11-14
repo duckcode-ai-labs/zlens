@@ -130,7 +130,8 @@ export interface ContextLedgerV1 {
 export type AskPipelineReceiptV9 = PipelineReceipt;
 
 export type PipelineOutcome =
-  | { kind: 'answered'; intent: AnalyticalIntentV1; candidate: PreparedCandidate; result: ExecutedRows; text: string; receipt: PipelineReceipt }
+  /** `record`: the answer as the conversation keeps it for the next question (see composeAnswerRecord); absent, the text is the record. */
+  | { kind: 'answered'; intent: AnalyticalIntentV1; candidate: PreparedCandidate; result: ExecutedRows; text: string; record?: string; receipt: PipelineReceipt }
   | { kind: 'clarify'; intent: AnalyticalIntentV1; question: string; options: Array<{ ref: string; label: string; description?: string }>; text: string; receipt: PipelineReceipt }
   | { kind: 'conversation' | 'definition'; reply: string; text: string; receipt: PipelineReceipt; intent?: AnalyticalIntentV1 }
   /** `executedSql`: the statement that ran on the warehouse before the gap or failure was declared (an empty aggregate, a failed statement), for the host's audit; absent when nothing ran. */
@@ -310,30 +311,123 @@ export function proseColumns(columns: string[], rows: Array<Record<string, unkno
   return { shown: columns.filter((column) => !opaque.includes(column)), opaque, unnamed: named ? [] : opaque };
 }
 
+/** A column of identifiers (GAME_ID, TEAM_ID, a surrogate key): the table shows it, the answer sentence reads the name beside it. */
+const ID_COLUMN = /(?:^|_)(?:id|key|uuid)$/i;
+const ACRONYMS = new Set(['id', 'ids', 'url', 'sku', 'kpi', 'usd', 'eur', 'gbp', 'nba', 'uuid', 'ytd', 'mtd', 'qtd']);
+const AGGREGATE_WORDS: Record<string, string> = { sum: 'total', avg: 'average', average: 'average', max: 'max', min: 'min', median: 'median' };
+/** Short forms a column name uses and a reader does not ("PCT_HOME_TEAM_WINS" reads "percent home team wins"). */
+const SHORT_WORDS: Record<string, string> = { pct: 'percent', avg: 'average', cnt: 'count', num: 'number', qty: 'quantity' };
+
+/**
+ * A result column's name as a reader says it, lower case as it sits inside a sentence: TOTAL_POINTS reads
+ * "total points", COUNT(DISTINCT PLAYER_ID) "distinct player ID count" (new-user test V12: the answer read
+ * "COUNT(DISTINCT PLAYER ID): 2611" and "TOTAL POINTS: 596"). The same words the answer's table uses for its headers.
+ */
+export function readableColumnName(name: string): string {
+  const raw = name.trim();
+  const words = (text: string) => text.replace(/["`[\]]/g, '').replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^A-Za-z0-9]+/).filter(Boolean).map((word) => word.toLowerCase()).map((word) => SHORT_WORDS[word] ?? word);
+  const say = (parts: string[]) => parts.map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word)).join(' ');
+  if (!raw) return name;
+  if (/\s/.test(raw) && !/_/.test(raw) && !/[()]/.test(raw) && /[a-z]/.test(raw)) return raw;
+  const call = /^([A-Za-z_]+)\s*\(\s*(distinct\s+)?(.*?)\s*\)$/i.exec(raw);
+  if (call) {
+    const fn = call[1]!.toLowerCase();
+    const inner = call[3]!.trim();
+    const innerWords = inner === '*' ? [] : words(inner.split('.').pop() ?? inner);
+    if (fn === 'count') return innerWords.length ? say([...(call[2] ? ['distinct'] : []), ...innerWords, 'count']) : 'row count';
+    const lead = AGGREGATE_WORDS[fn];
+    if (lead && innerWords.length) return say([lead, ...innerWords]);
+  }
+  const parts = words(raw.split('.').pop() ?? raw);
+  return parts.length ? say(parts) : raw;
+}
+
+const capitalized = (text: string) => (text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : text);
+/** A sentence ends once: a reading written as a question keeps its question mark ("…in 2015?", never "…in 2015?."). */
+export function endSentence(text: string): string {
+  const trimmed = text.trim().replace(/[.\s]+$/, '');
+  return /[?!]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+/** The words a reader knows: a certified block is a certified saved query (new-user test V12, Q13's reading). */
+export function readerWords(text: string): string {
+  return text.replace(/\bcertified blocks\b/gi, 'certified saved queries').replace(/\bcertified block\b/gi, 'certified saved query');
+}
+
+/** What one row says, without its identifier columns when a name stands beside them. */
+function answerColumns(shown: string[], rows: Array<Record<string, unknown>>, metaOf: (column: string) => ResultColumnMeta | undefined): string[] {
+  const textLike = (column: string) => {
+    const meta = metaOf(column);
+    if (meta && meta.kind !== 'text') return false;
+    const values = rows.slice(0, 20).map((row) => row[column]).filter((value) => value !== null && value !== undefined && value !== '');
+    return values.length > 0 && values.every((value) => typeof value === 'string' && !/^-?\d+(?:\.\d+)?$/.test(value.trim()));
+  };
+  const ids = shown.filter((column) => ID_COLUMN.test(column));
+  const named = shown.some((column) => !ids.includes(column) && textLike(column));
+  // "2544 · LeBron James · 591" read the player's number aloud; the name says who it is (new-user test V12).
+  return named ? shown.filter((column) => !ids.includes(column)) : shown;
+}
+
+/**
+ * The answer in one sentence, from the cells: "Total points: 596.", "Hornets: preseason wins 4.", "5 rows,
+ * starting with LeBron James · 46612; Kevin Durant · 32272; Carmelo Anthony · 31658."
+ */
+function answerSentence(result: ExecutedRows, shown: string[], metaOf: (column: string) => ResultColumnMeta | undefined): string | undefined {
+  const columns = answerColumns(shown, result.rows, metaOf);
+  if (!columns.length) return undefined;
+  const value = (row: Record<string, unknown>, column: string) => formatValue(row[column], metaOf(column));
+  if (result.rowCount === 1) {
+    const row = result.rows[0] ?? {};
+    const isText = (column: string) => typeof row[column] === 'string' && (metaOf(column)?.kind ?? 'text') === 'text' && !/^-?\d+(?:\.\d+)?$/.test(String(row[column]).trim());
+    const labels = columns.filter(isText).slice(0, 3);
+    const figures = columns.filter((column) => !labels.includes(column)).slice(0, 6);
+    const pairs = figures.map((column, index) => {
+      const name = readableColumnName(column);
+      return labels.length ? `${name} ${value(row, column)}` : `${index === 0 ? capitalized(name) : name}: ${value(row, column)}`;
+    });
+    if (labels.length && pairs.length) return `${labels.map((column) => value(row, column)).join(' · ')}: ${pairs.join(', ')}.`;
+    if (labels.length) return `${labels.map((column) => value(row, column)).join(' · ')}.`;
+    return `${pairs.join(', ')}.`;
+  }
+  const first = result.rows.slice(0, 3).map((row) => columns.map((column) => value(row, column)).join(' · '));
+  const count = `${result.truncated ? `The first ${result.rowCount}` : result.rowCount} rows`;
+  return `${count}, starting with ${first.join('; ')}.`;
+}
+
 /** Deterministic answer prose from the rows themselves: no claim without a cell behind it. */
-export function composeAnsweredText(intent: AnalyticalIntentV1, result: ExecutedRows, vocabulary: VocabularyIndex, trust: string, extras: { notes?: string[]; caveats?: string[]; tier?: string } = {}): string {
-  const reading = intent.reading || describeIntent(intent, labelFor(vocabulary));
-  const lines: string[] = [`I read this as: ${reading.replace(/[.\s]+$/, '')}.`];
+export function composeAnsweredText(intent: AnalyticalIntentV1, result: ExecutedRows, vocabulary: VocabularyIndex, trust: string, extras: {
+  notes?: string[]; caveats?: string[]; tier?: string;
+  /** Which rows it counts ("it counts only playoff games …"): said with the reading. */
+  scope?: string[];
+  /** The source line's words, when the default for the trust is not enough (the tables the AI read, and why it wrote the SQL). */
+  source?: string;
+  /** Said instead of "I read this as …" when no reading could be made (the AI model ran out of time reading the question). */
+  readingNote?: string;
+} = {}): string {
+  // THREE PARTS, in this order (new-user test V12): the answer in one sentence, then how the question was read, then
+  // one source line. No SQL in the text (the SQL tab shows it), no identifiers read out beside a name.
+  const reading = readerWords(intent.reading || describeIntent(intent, labelFor(vocabulary)));
+  const readingParts: string[] = [extras.readingNote ? endSentence(extras.readingNote) : `I read this as: ${endSentence(reading)}`];
+  for (const line of extras.scope ?? []) readingParts.push(endSentence(capitalized(line.trim())));
+  const answerParts: string[] = [];
   const columns = result.columns;
   const metaOf = (column: string) => result.columnsMeta?.find((meta) => meta.name === column);
   if (result.rowCount === 0) {
-    lines.push('The query ran and returned no rows for that reading.');
-    return lines.join(' ');
-  }
-  const prose = proseColumns(columns, result.rows);
-  // Rows told apart only by opaque keys are said to be, never read out.
-  const keyedOnly = prose.unnamed;
-  const keyedNote = keyedOnly.length ? `The rows are identified by ${keyedOnly.join(', ')}, internal key${keyedOnly.length === 1 ? '' : 's'} with no name beside ${keyedOnly.length === 1 ? 'it' : 'them'} in this result.` : undefined;
-  if (result.rowCount === 1 && columns.length <= 4) {
-    const row = result.rows[0] ?? {};
-    if (prose.shown.length) lines.push(prose.shown.map((column) => `${column.replace(/_/g, ' ')}: ${formatValue(row[column], metaOf(column))}`).join(', ') + '.');
-    if (keyedNote) lines.push(keyedNote);
+    answerParts.push('The query ran and returned no rows for that reading.');
   } else {
-    lines.push(`${result.rowCount} row${result.rowCount === 1 ? '' : 's'} across ${columns.length} column${columns.length === 1 ? '' : 's'}${result.truncated ? ' (bounded)' : ''}.`);
-    const first = prose.shown.length ? result.rows.slice(0, 3).map((row) => prose.shown.map((column) => formatValue(row[column], metaOf(column))).join(' · ')) : [];
-    if (first.length) lines.push(`Leading rows: ${first.join(' | ')}.`);
-    if (keyedNote) lines.push(keyedNote);
+    const prose = proseColumns(columns, result.rows);
+    // Rows told apart only by opaque keys are said to be, never read out.
+    const keyedOnly = prose.unnamed;
+    const sentence = answerSentence(result, prose.shown, metaOf);
+    if (sentence) answerParts.push(sentence);
+    else answerParts.push(`${result.rowCount} row${result.rowCount === 1 ? '' : 's'}.`);
+    if (keyedOnly.length) answerParts.push(`The rows are identified by ${keyedOnly.join(', ')}, internal key${keyedOnly.length === 1 ? '' : 's'} with no name beside ${keyedOnly.length === 1 ? 'it' : 'them'} in this result.`);
   }
+  const lines = answerParts;
+  const sourceLine = `Source: ${endSentence(readerWords(extras.source ?? (trust === 'certified' ? 'a certified saved query'
+    : trust === 'governed' ? 'the semantic layer'
+      // A semantic compile labelled for review: no AI wrote its SQL, but a join is not certified.
+      : extras.tier === 'semantic' ? 'the semantic layer, through a join that is not certified (review before relying on it)'
+        : 'SQL written by AI from the tables (review before relying on it)')))}`;
   // CONCENTRATION IS A TOTAL, NOT A LIST. "How concentrated is scoring among
   // the top five" asks what the five together are, and five rows of "1.0%"
   // never say 4.4%. The shares are over one whole-period denominator, so they
@@ -348,9 +442,9 @@ export function composeAnsweredText(intent: AnalyticalIntentV1, result: Executed
   }
   // Identity: several members share the asked-for name; the rows keep them apart.
   for (const note of extras.notes ?? []) {
-    if (note.startsWith('identity:')) lines.push(`${note.slice('identity:'.length).trim().replace(/[.\s]+$/, '')}.`);
+    if (note.startsWith('identity:')) readingParts.push(endSentence(capitalized(note.slice('identity:'.length).trim())));
     // A join the warehouse proved but nobody certified is said out loud.
-    else if (note.startsWith('relationship:')) lines.push(`${note.slice('relationship:'.length).trim().replace(/[.\s]+$/, '')}.`);
+    else if (note.startsWith('relationship:')) readingParts.push(endSentence(capitalized(note.slice('relationship:'.length).trim())));
   }
   // Definitions: a grouping or filter dimension with a governed description
   // is explained ("new" is a customer with one lifetime order).
@@ -358,10 +452,59 @@ export function composeAnsweredText(intent: AnalyticalIntentV1, result: Executed
     .map((ref) => vocabulary.get(ref))
     .filter((entry, index, all): entry is NonNullable<typeof entry> => Boolean(entry && entry.kind === 'dimension' && entry.description && all.indexOf(entry) === index))
     .slice(0, 2);
+  if (defined.length) readingParts.push(`Definitions: ${defined.map((entry) => `${entry.label ?? entry.name}: ${entry.description!.replace(/\s+/g, ' ').slice(0, 200).replace(/[.\s]+$/, '')}`).join('; ')}.`);
+  for (const caveat of extras.caveats ?? []) readingParts.push(endSentence(capitalized(readerWords(caveat.trim()))));
+  return [lines.join(' '), readingParts.join(' '), sourceLine].join('\n\n');
+}
+
+/**
+ * THE ANSWER AS THE CONVERSATION KEEPS IT, for the model that reads the next question ("Which of those…"). It is
+ * the full technical record: the reading first, the leading rows with their keys, which tables the SQL read, what it
+ * filtered on and why no governed tier answered. A person reads `composeAnsweredText`; the model keeps the keys and
+ * filters the follow-up must edit. Its wording is the one follow-up prompts have always carried, so a recorded
+ * conversation replays as it was recorded.
+ */
+export function composeAnswerRecord(intent: AnalyticalIntentV1, result: ExecutedRows, vocabulary: VocabularyIndex, trust: string, extras: { notes?: string[]; caveats?: string[]; tier?: string } = {}): string {
+  const reading = intent.reading || describeIntent(intent, labelFor(vocabulary));
+  const lines: string[] = [`I read this as: ${reading.replace(/[.\s]+$/, '')}.`];
+  const columns = result.columns;
+  const metaOf = (column: string) => result.columnsMeta?.find((meta) => meta.name === column);
+  if (result.rowCount === 0) {
+    lines.push('The query ran and returned no rows for that reading.');
+    return lines.join(' ');
+  }
+  const prose = proseColumns(columns, result.rows);
+  const keyedOnly = prose.unnamed;
+  const keyedNote = keyedOnly.length ? `The rows are identified by ${keyedOnly.join(', ')}, internal key${keyedOnly.length === 1 ? '' : 's'} with no name beside ${keyedOnly.length === 1 ? 'it' : 'them'} in this result.` : undefined;
+  if (result.rowCount === 1 && columns.length <= 4) {
+    const row = result.rows[0] ?? {};
+    if (prose.shown.length) lines.push(prose.shown.map((column) => `${column.replace(/_/g, ' ')}: ${formatValue(row[column], metaOf(column))}`).join(', ') + '.');
+    if (keyedNote) lines.push(keyedNote);
+  } else {
+    lines.push(`${result.rowCount} row${result.rowCount === 1 ? '' : 's'} across ${columns.length} column${columns.length === 1 ? '' : 's'}${result.truncated ? ' (bounded)' : ''}.`);
+    const first = prose.shown.length ? result.rows.slice(0, 3).map((row) => prose.shown.map((column) => formatValue(row[column], metaOf(column))).join(' · ')) : [];
+    if (first.length) lines.push(`Leading rows: ${first.join(' | ')}.`);
+    if (keyedNote) lines.push(keyedNote);
+  }
+  const shareColumn = intent.measures.find((measure) => measure.derived?.denominatorScope === 'overall')?.alias;
+  if (shareColumn && intent.limit !== undefined && result.rowCount > 1 && columns.includes(shareColumn)) {
+    const total = result.rows.reduce((sum, row) => {
+      const value = typeof row[shareColumn] === 'number' ? row[shareColumn] as number : Number(row[shareColumn]);
+      return Number.isFinite(value) ? sum + value : sum;
+    }, 0);
+    lines.push(`Together the ${result.rowCount} rows are ${formatValue(total, metaOf(shareColumn))} of the whole period.`);
+  }
+  for (const note of extras.notes ?? []) {
+    if (note.startsWith('identity:')) lines.push(`${note.slice('identity:'.length).trim().replace(/[.\s]+$/, '')}.`);
+    else if (note.startsWith('relationship:')) lines.push(`${note.slice('relationship:'.length).trim().replace(/[.\s]+$/, '')}.`);
+  }
+  const defined = [...intent.groupBy.map((group) => group.ref), ...intent.filters.map((predicate) => predicate.ref)]
+    .map((ref) => vocabulary.get(ref))
+    .filter((entry, index, all): entry is NonNullable<typeof entry> => Boolean(entry && entry.kind === 'dimension' && entry.description && all.indexOf(entry) === index))
+    .slice(0, 2);
   if (defined.length) lines.push(`Definitions: ${defined.map((entry) => `${entry.label ?? entry.name}: ${entry.description!.replace(/\s+/g, ' ').slice(0, 200).replace(/[.\s]+$/, '')}`).join('; ')}.`);
   lines.push(trust === 'certified' ? 'Source: a certified saved query.'
     : trust === 'governed' ? 'Source: the semantic layer.'
-      // A semantic compile labelled for review: no AI wrote its SQL, but a join is not certified.
       : extras.tier === 'semantic' ? 'Source: the semantic layer, through a join that is not certified (review before relying on it).'
         : 'Source: SQL written by AI from the schema (review before relying on it).');
   for (const caveat of extras.caveats ?? []) lines.push(caveat.replace(/[.\s]+$/, '') + '.');

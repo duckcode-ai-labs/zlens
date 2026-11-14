@@ -246,13 +246,16 @@ const READING_LEAD = 'I read this as: ';
 function readingSpan(answerText: string, own: GovernedAnswerOwn): { start: number; end: number } | undefined {
   const reading = own.reading?.trim().replace(/[.\s]+$/, '');
   if (reading) {
-    const line = `${READING_LEAD}${reading}.`;
+    // A reading written as a question ends with its own question mark (no "?.").
+    const line = `${READING_LEAD}${reading}`;
     const start = answerText.indexOf(line);
-    if (start >= 0) return { start, end: start + line.length };
+    if (start >= 0) return { start, end: start + line.length + (/[?!]$/.test(reading) ? 0 : answerText.charAt(start + line.length) === '.' ? 1 : 0) };
   }
-  if (!answerText.startsWith(READING_LEAD)) return undefined;
-  const end = /[.!?](?=\s|$)/.exec(answerText.slice(READING_LEAD.length));
-  return { start: 0, end: end ? READING_LEAD.length + end.index + 1 : answerText.length };
+  // The answer says its figures first and its reading after them (V13).
+  const lead = answerText.indexOf(READING_LEAD);
+  if (lead < 0) return undefined;
+  const end = /[.!?](?=\s|$)/.exec(answerText.slice(lead + READING_LEAD.length));
+  return { start: lead, end: end ? lead + READING_LEAD.length + end.index + 1 : answerText.length };
 }
 
 /** The answer's text without its own reading (the part a document could ever have reached). */

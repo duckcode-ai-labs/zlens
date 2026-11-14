@@ -12,8 +12,12 @@ function words(name: string): string[] {
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .split(/[^A-Za-z0-9]+/)
     .filter(Boolean)
-    .map((word) => word.toLowerCase());
+    .map((word) => word.toLowerCase())
+    .map((word) => SHORT_WORDS[word] ?? word);
 }
+
+/** Short forms a column name uses and a reader does not ("PCT_HOME_TEAM_WINS" reads "Percent home team wins"); the answer text uses the same words. */
+const SHORT_WORDS: Record<string, string> = { pct: 'percent', avg: 'average', cnt: 'count', num: 'number', qty: 'quantity' };
 
 function sentence(parts: string[]): string {
   const text = parts.map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word)).join(' ');

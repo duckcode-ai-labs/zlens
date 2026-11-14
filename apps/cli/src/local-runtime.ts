@@ -1838,8 +1838,8 @@ function askTraceScenarioLabel(run: Pick<AgentRun, 'requestedMode' | 'route'>): 
   if (run.requestedMode === 'research' || run.route === 'research') return 'Research';
   const labels: Partial<Record<AgentRunRoute, string>> = {
     certified_answer: 'Certified answer',
-    semantic_answer: 'Semantic answer',
-    generated_answer: 'Review-required SQL',
+    semantic_answer: 'Answer from Metrics',
+    generated_answer: 'AI-generated answer',
     clarify: 'Clarification',
     blocked: 'Blocked',
     conversation: 'Conversation',
@@ -3786,7 +3786,9 @@ export function conversationTurnInputFromRun(run: AgentRun): ConversationTurnInp
   return {
     agentRunId: run.id,
     question: run.question,
-    answerSummary: run.answer ?? run.summary,
+    // The next question reads the answer's technical record (its keys, tables and filters) when the run kept one;
+    // the person read the plain answer.
+    answerSummary: (typeof payload?.answerRecord === 'string' && payload.answerRecord.trim() ? payload.answerRecord : undefined) ?? run.answer ?? run.summary,
     answerText: run.answer,
     route: run.route,
     // A route/context label is presentation metadata, not the terminal trust

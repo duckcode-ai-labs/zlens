@@ -1917,10 +1917,20 @@ export function auditLedger(question: string, intent: AnalyticalIntentV1, ledger
  * (new-user test V11 retest, Q16: 'Which did you mean for "best player — which stat should define …?"?').
  */
 export function clauseQuestion(clause: string): string {
-  const asked = clause.trim();
-  if (!/\?\s*$/.test(asked)) return `Which did you mean for "${asked}"?`;
-  const tail = asked.split(/\s[—–-]\s/).pop()!.trim();
-  return `${tail.charAt(0).toUpperCase()}${tail.slice(1)}`;
+  const asked = clause.trim().replace(/\s+/g, ' ');
+  if (/\?\s*$/.test(asked)) {
+    const tail = asked.split(/\s[—–-]\s/).pop()!.trim();
+    return `${tail.charAt(0).toUpperCase()}${tail.slice(1)}`;
+  }
+  // A clause that holds a question and then says what is unclear ("How are the Warriors doing lately? — neither
+  // the measure of 'doing' … nor 'lately' …") is never quoted inside another question (new-user test V12, Q17:
+  // 'Which did you mean for "How are the Warriors doing lately? — neither …"?'). What is unclear is said, then asked.
+  const mark = asked.lastIndexOf('?');
+  if (mark >= 0) {
+    const unclear = asked.slice(mark + 1).replace(/^[\s—–:;,.-]+/, '').replace(/[.\s]+$/, '');
+    if (unclear) return `Not clear yet: ${unclear}. Which did you mean?`;
+  }
+  return `What do you mean by "${asked.replace(/[?.\s]+$/, '').replace(/\?/g, '')}"?`;
 }
 
 /** A retry after a provider timeout needs room for one more full dispatch (the subscription CLI's 60 s) plus 15 s for the rest of the turn. */

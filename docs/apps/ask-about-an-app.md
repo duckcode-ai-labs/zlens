@@ -70,7 +70,7 @@ card is titled, for example, **Answer from this App (certified tiles)**:
 |---|---|
 | **Certified** | Every tile it read runs a certified source. |
 | **From Metrics** | It read tiles built from Metrics, none of them certified. |
-| **Needs review** | A tile it read needs review. Check that tile's source before relying on the answer. |
+| **AI-generated** | A tile it read needs review. Check that tile's source before relying on the answer. |
 
 The AI model writes the answer only when the App's values may reach it. When
 no model is set up, the model is outside the project's privacy boundary, the

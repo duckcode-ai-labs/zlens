@@ -131,7 +131,7 @@ describe('the pipeline answers a recorded question from its block before any mod
     if (outcome.kind !== 'answered') return;
     expect(outcome.candidate.tier).toBe('certified');
     expect(seen[0]?.sql).toContain("status = 'open'");
-    expect(outcome.text).toContain('it counts only open claims (STATUS open)');
+    expect(outcome.text).toContain('It counts only open claims (STATUS open).');
   });
 
   it('a question the block does not record still goes through the model (and its column-shaped reading is not the block)', async () => {
