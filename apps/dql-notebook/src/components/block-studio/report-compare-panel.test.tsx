@@ -40,7 +40,19 @@ describe('reading a comparison on the screen', () => {
     expect(html).toContain('200.004');
     expect(html).toContain('Only in ZLens: Central');
     expect(html).toContain('1 total row set aside.');
-    expect(html).toContain('Recorded beside Sales by Region');
+    expect(html).toContain('Recorded beside each metric it compared. Approving a draft shows this result.');
+  });
+
+  it('says a saved query\'s result is recorded for the query, and shows on its receipt when certified', () => {
+    const html = result({ ...comparison({ verdict: 'matches' }), target: { kind: 'query', name: 'warriors_regular_season_wins_2014_2018' } }, 'with-compare', true);
+    expect(html).toContain('Recorded for the saved query warriors_regular_season_wins_2014_2018. When you certify it, its receipt shows this result.');
+    expect(html).not.toContain('Recorded beside Sales by Region');
+  });
+
+  it('says which column it matched rows on, when it chose one', () => {
+    const html = result(comparison({ verdict: 'matches', notes: ['Rows were matched on SEASON: no two rows share a value there. If another column says which row is which, name it with --key.'] }), 'with-compare', true);
+    expect(html).toContain('If another column says which row is which, name it under More options, in Keys.');
+    expect(screenWords('With no keys it must have one row, the total. If a column says which row is which, name it with --key.')).toBe('With no keys it must have one row, the total. If a column says which row is which, name it under More options, in Keys.');
   });
 
   it('names the fields of this panel, not the flags of the terminal', () => {

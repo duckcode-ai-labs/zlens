@@ -196,6 +196,7 @@ import type {
   ReportCompareRecording,
   ReportCompareRequest,
   ReportComparison,
+  ReportQueryMatch,
   BlockStudioImportCandidate,
   DqlGenerationSession,
   DqlGenerationCandidate,
@@ -6656,6 +6657,11 @@ export const api = {
     /** Keep a comparison's counts in the project, beside what was compared. */
     async recordComparison(id: string): Promise<{ recorded: string[] }> {
       return request('/api/report-match/record', { method: 'POST', body: JSON.stringify({ id, via: 'screen' }) });
+    },
+
+    /** A saved query's last comparison with an old report, if it has one. */
+    async getQueryReportMatch(name: string): Promise<ReportQueryMatch> {
+      return request(`/api/report-match/query?name=${encodeURIComponent(name)}`);
     },
 
     async discardMetricDrafts(names: string[]): Promise<{ discarded: string[] }> {

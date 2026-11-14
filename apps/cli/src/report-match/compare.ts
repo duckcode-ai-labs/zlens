@@ -132,7 +132,7 @@ export function compareExport(table: ExportTable, plan: ComparisonPlan, rows: Ar
     }
   }
 
-  if (!plan.keys.length && table.rows.length > 1) throw new ComparisonStopped(`The file has ${table.rows.length} rows and no column to tell them apart. With no keys it must have one row, the total.`);
+  if (!plan.keys.length && table.rows.length > 1) throw new ComparisonStopped(`The file has ${table.rows.length} rows and no column to tell them apart. With no keys it must have one row, the total. If a column says which row is which, name it with --key.`);
 
   // Rows on each side, by key.
   const fileRows = new Map<string, { key: string[]; cells: string[] }>();

@@ -426,7 +426,7 @@ export async function runCertify(filePath: string, flags: CLIFlags): Promise<voi
     }
     console.log(`\n  ✓ ${result.message}`);
     if (result.certification) {
-      console.log(`    Certified by ${result.certification.certifiedBy} (${result.certification.rules} rules); receipt in ${result.companionPath ?? 'the block companion YAML'}.`);
+      console.log(`    Certified by ${result.certification.certifiedBy} (${result.certification.rules === 'enterprise' ? 'enterprise' : 'standard'} rules); receipt in ${result.companionPath ?? 'the block companion YAML'}.`);
     }
     if (result.certifiedPath) {
       console.log(`    Run \`zlens compile\` to refresh dql-manifest.json.`);

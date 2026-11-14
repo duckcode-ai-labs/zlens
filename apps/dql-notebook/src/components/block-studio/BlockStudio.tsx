@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { certifiedByLabel, plainCertificationChecks } from '@zlens/core/apps/reader-trust';
+import { certifiedByLabel, certifierDisplayName, plainCertificationChecks } from '@zlens/core/apps/reader-trust';
 import { useShallow } from 'zustand/react/shallow';
 import { useQuery } from '@tanstack/react-query';
 import { certificationFieldGaps, certificationFieldLabel, renderSemanticBlockSource } from '@zlens/core/blocks';
@@ -72,6 +72,7 @@ function selectedTimeGrains(
 import { themes } from '../../themes/notebook-theme';
 import type { Theme, ThemeMode } from '../../themes/notebook-theme';
 import { ReportComparePanel, verdictTone } from './ReportComparePanel';
+import { reportMatchReceipt, SavedQueryReportCheck } from './SavedQueryReportCheck';
 import { SQLCellEditor } from '../cells/SQLCellEditor';
 import { ChartOutput, CHART_TYPE_OPTIONS, resolveChartType } from '../output/ChartOutput';
 import { MiniLineageGraph } from '../lineage/MiniLineageGraph';
@@ -1840,6 +1841,7 @@ export function BlockStudio() {
                 setBottomPaneCollapsed(false);
                 loadBlockHistory();
               }}
+              blockPath={state.activeBlockPath}
               t={t}
             />
           ) : editorMode === 'visual' ? (
@@ -3270,15 +3272,26 @@ export function certificationReceiptLine(receipt: BlockStudioMetadata['certifica
   return certifiedByLabel({ by: receipt.certifiedBy, name: receipt.certifiedByName, at: receipt.certifiedAt });
 }
 
+/** Under the Import screen's upload box: a report's export does not go here. */
+export const IMPORT_SOURCE_EXPORT_HINT = "A report's CSV or Excel export is not imported here: compare it on the saved query's page, under Compare with the old report.";
+
+/** What the Import screen says when a chosen file is a report's export, which it cannot import. */
+export function importSourceUploadNote(names: string[]): string | null {
+  const exports = names.filter((name) => /\.(?:csv|tsv|xlsx|xls)$/i.test(name));
+  if (!exports.length) return null;
+  return `${exports.join(', ')} ${exports.length === 1 ? 'looks' : 'look'} like a report's export, not SQL, so ${exports.length === 1 ? 'it was' : 'they were'} left out. To check a saved query against it, open the saved query and use Compare with the old report.`;
+}
+
 /** The receipt's ids and exact record, kept under Technical details (D6). */
 export function certificationReceiptTechnical(receipt: NonNullable<BlockStudioMetadata['certification']>): string {
   const when = Number.isNaN(Date.parse(receipt.certifiedAt)) ? receipt.certifiedAt : new Date(receipt.certifiedAt).toLocaleString();
   const via = CERTIFICATION_SURFACE_LABELS[receipt.via] ?? receipt.via;
   return [
-    `Recorded as ${receipt.certifiedBy}`,
+    // A placeholder such as "local" names nobody: say so rather than show it.
+    certifierDisplayName(receipt.certifiedBy) ? `Recorded as ${receipt.certifiedBy}` : 'No name recorded',
     when,
     `via ${via}`,
-    `${receipt.rules === 'enterprise' ? 'enterprise' : 'OSS'} rules`,
+    `${receipt.rules === 'enterprise' ? 'enterprise' : 'standard'} certification rules`,
     receipt.sourceSha256 ? `source sha256 ${receipt.sourceSha256.slice(0, 12)}…` : '',
   ].filter(Boolean).join(' · ');
 }
@@ -3299,6 +3312,7 @@ export function BlockDetailView({
   onDelete,
   onRun,
   onOpenHistory,
+  blockPath,
   t,
 }: {
   metadata: BlockStudioOpenPayload['metadata'] | null;
@@ -3317,9 +3331,12 @@ export function BlockDetailView({
   onDelete?: () => void;
   onRun: () => void;
   onOpenHistory: () => void;
+  /** The saved query's file: with it, the page offers the old report check. */
+  blockPath?: string | null;
   t: Theme;
 }) {
   const certified = (metadata?.reviewStatus ?? '').toLowerCase() === 'certified';
+  const receiptLines = reportMatchReceipt(metadata?.certification);
   const proposed = certified && blockDisplayStatus('certified', metadata, proposes) === 'proposed';
   const name = metadata?.name || 'block';
   const semanticFields = isSemanticBlock ? parseSemanticVisualFields(source) : null;
@@ -3367,9 +3384,15 @@ export function BlockDetailView({
             {certified ? (
               <div data-testid="block-certification-receipt" style={{ fontSize: 11.5, color: t.textMuted, marginTop: 4 }}>
                 {proposed ? certificationProposalLine(metadata?.certification) : certificationReceiptLine(metadata?.certification)}
-                {metadata?.certification && plainCertificationChecks(metadata.certification.checks).length ? (
-                  <div data-testid="block-certification-checks">Checks passed: {plainCertificationChecks(metadata.certification.checks).join(' · ')}</div>
+                {metadata?.certification && plainCertificationChecks(receiptLines.checks).length ? (
+                  <div data-testid="block-certification-checks">Checks passed: {plainCertificationChecks(receiptLines.checks).join(' · ')}</div>
                 ) : null}
+                {receiptLines.matched.map((line) => (
+                  <div key={line} data-testid="block-certification-report-match" style={{ color: 'var(--status-success)' }}>Old report: {line}</div>
+                ))}
+                {receiptLines.warnings.map((line) => (
+                  <div key={line} data-testid="block-certification-report-warning" style={{ color: 'var(--status-warning)' }}>Old report: {line}</div>
+                ))}
                 {metadata?.certification ? (
                   <details className="dql-technical-details">
                     <summary style={{ cursor: 'pointer' }}>Technical details</summary>
@@ -3419,6 +3442,10 @@ export function BlockDetailView({
             </div>
           ))}
         </div>
+
+        {metadata?.name && blockPath ? (
+          <SavedQueryReportCheck name={metadata.name} path={blockPath} primaryButton={primaryImportButtonStyle(t)} t={t} />
+        ) : null}
 
         {/* outputs */}
         <div>
@@ -4404,6 +4431,7 @@ function BlockStudioImportWorkspace({
   const [path, setPath] = useState('');
   const [pasteSql, setPasteSql] = useState('');
   const [uploadSources, setUploadSources] = useState<Array<{ path: string; content: string; encoding?: 'base64' }>>([]);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
   const [domain, setDomain] = useState(defaultDomain);
   const [owner, setOwner] = useState(defaultOwner);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -4950,6 +4978,7 @@ function BlockStudioImportWorkspace({
     // SQL, Tableau workbooks and Power BI files; the zipped ones (.twbx, .pbit,
     // .pbix) go up base64-encoded.
     const importable = list.filter((file) => /\.(?:sql|twb|twbx|pbit|pbix|tmdl|bim)$/i.test(file.name));
+    setUploadNote(importSourceUploadNote(list.map((file) => file.name)));
     const sources = await Promise.all(importable.map(async (file) => (/\.(?:twbx|pbit|pbix)$/i.test(file.name)
       ? { path: file.name, content: bytesToBase64(new Uint8Array(await file.arrayBuffer())), encoding: 'base64' as const }
       : { path: file.name, content: await file.text() })));
@@ -5036,6 +5065,11 @@ function BlockStudioImportWorkspace({
                       <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
                         {uploadSources.length > 0 ? `${uploadSources.length} file(s) ready` : 'Choose .sql files, Tableau workbooks (.twb, .twbx) or Power BI templates (.pbit).'}
                       </span>
+                      {uploadNote ? (
+                        <span role="alert" data-testid="import-source-export-note" style={{ fontSize: 11, color: 'var(--status-warning)', fontFamily: t.font, lineHeight: 1.45 }}>{uploadNote}</span>
+                      ) : (
+                        <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, lineHeight: 1.45 }}>{IMPORT_SOURCE_EXPORT_HINT}</span>
+                      )}
                     </FieldLabel>
                 )}
                 {mode === 'paste' && (
@@ -5666,9 +5700,12 @@ export function ImportCandidateDetail({
         </div>
       )}
       {candidate.savedPath && (
-        <details style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '8px 10px' }}>
+        <details open style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '8px 10px' }}>
           <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 800, color: t.textSecondary, fontFamily: t.font }}>Compare with the old report</summary>
-          <ReportComparePanel query={candidate.name} primaryButton={primaryImportButtonStyle(t)} t={t} />
+          <div style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, lineHeight: 1.45, marginTop: 4 }}>
+            Check this saved query against a CSV or Excel export of the report it replaces. The same box is on the saved query's own page.
+          </div>
+          <ReportComparePanel query={candidate.name} queryPath={candidate.savedPath} primaryButton={primaryImportButtonStyle(t)} t={t} />
         </details>
       )}
       {editError && <div role="alert" style={{ fontSize: 12, color: '#f85149', background: '#f8514914', borderRadius: 8, padding: 10 }}>{editError}</div>}

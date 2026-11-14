@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DimensionDefinition, MetricDefinition } from '@zlens/core';
 import { ComparisonStopped } from './compare.js';
 import { readExport } from './read-export.js';
-import { columnShape, isFilterAnswered, parseStatedFilter, resolveFilterField, resolveMetricTarget, resolveQueryTarget, type TargetCatalog } from './resolve-target.js';
+import { columnShape, isFilterAnswered, parseStatedFilter, proposeKeyColumns, resolveFilterField, resolveMetricTarget, resolveQueryTarget, type TargetCatalog } from './resolve-target.js';
 
 const metric = (name: string, label: string, extra: Partial<MetricDefinition> = {}): MetricDefinition => ({ name, label, description: '', domain: 'sales', type: 'sum', sql: name, table: 'analytics.orders', ...extra });
 const dimension = (name: string, label: string, extra: Partial<DimensionDefinition> = {}): DimensionDefinition => ({ name, label, description: '', sql: name, type: 'string', table: 'analytics.orders', ...extra });
@@ -138,6 +138,45 @@ describe('a saved query as the target', () => {
 
   it('stops when a key column is not in the query', () => {
     expect(() => resolveQueryTarget(file('Segment,Revenue\nA,1.5\n'), ['revenue'])).toThrow('changes the rows');
+  });
+});
+
+describe('proposing the key when every column looks like a number', () => {
+  const wins = file('SEASON,WINS\n2014,67\n2015,73\n2016,67\n2017,58\n2018,57\n');
+  const result = [[2014, 67], [2015, 73], [2016, 67], [2017, 58], [2018, 57]].map(([season, value]) => ({ SEASON: season, WINS: value }));
+
+  it('uses the column whose values differ on every row (a season), and says so', () => {
+    const { plan, mapping, proposedKeys } = resolveQueryTarget(wins, ['SEASON', 'WINS'], {}, result);
+    expect(proposedKeys).toEqual(['SEASON']);
+    expect(plan.keys).toEqual([{ header: 'SEASON', output: 'SEASON', kind: 'text' }]);
+    expect(plan.numbers.map((column) => column.header)).toEqual(['WINS']);
+    expect(mapping.SEASON).toBe('the column SEASON, as the key');
+  });
+
+  it('prefers a name that names rows, then the leftmost, and leaves a number to compare', () => {
+    // Both differ on every row: Year names rows; Points counts them.
+    const both = file('Points,Year\n10,2014\n20,2015\n');
+    expect(resolveQueryTarget(both, ['points', 'year']).proposedKeys).toEqual(['Year']);
+    expect(resolveQueryTarget(file('A,B\n1,3\n2,4\n'), ['a', 'b']).proposedKeys).toEqual(['A']);
+    // One column only: nothing would be left to compare.
+    expect(resolveQueryTarget(file('Year\n2014\n2015\n'), ['year']).proposedKeys).toBeUndefined();
+  });
+
+  it('takes two columns together when neither alone tells the rows apart', () => {
+    const table = file('Year,Month,Sales\n2025,1,10\n2025,2,10\n2026,1,12\n');
+    expect(resolveQueryTarget(table, ['year', 'month', 'sales']).proposedKeys).toEqual(['Year', 'Month']);
+  });
+
+  it('proposes none when ZLens\'s result repeats the value, or a cell is empty, or a key is named', () => {
+    const repeated = result.map((row) => ({ ...row, SEASON: 2014 }));
+    expect(proposeKeyColumns(wins, resolveQueryTarget(wins, ['SEASON', 'WINS'], { keys: ['WINS'] }).plan.numbers, repeated)).toEqual([]);
+    expect(resolveQueryTarget(wins, ['SEASON', 'WINS'], {}, repeated).proposedKeys).toBeUndefined();
+    expect(resolveQueryTarget(file('Year,Sales\n2014,1\n,2\n'), ['year', 'sales']).proposedKeys).toBeUndefined();
+    const named = resolveQueryTarget(wins, ['SEASON', 'WINS'], { keys: ['SEASON'] }, result);
+    expect(named.proposedKeys).toBeUndefined();
+    expect(named.mapping.SEASON).toBe('the column SEASON');
+    // A number with marks is a measure, never a proposed key; and a count to its right names no row.
+    expect(resolveQueryTarget(file('Revenue,Orders\n$1.50,3\n$2.50,4\n'), ['revenue', 'orders']).proposedKeys).toBeUndefined();
   });
 });
 

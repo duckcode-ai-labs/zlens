@@ -1356,6 +1356,8 @@ export interface ReportMatchStatus {
 export interface ReportCompareRequest {
   file?: { name: string; base64: string };
   query?: string;
+  /** The saved query's file, from its own page. */
+  queryPath?: string;
   worksheet?: string;
   report?: string;
   filters?: string[];
@@ -1368,6 +1370,13 @@ export interface ReportCompareRequest {
   dates?: 'mdy' | 'dmy';
 }
 
+/** A saved query's last comparison with an old report, from the record kept under its name. */
+export interface ReportQueryMatch {
+  match: { verdict: ReportVerdict; words: string; report: string; comparedAt: string } | null;
+  /** The record file can't be read. */
+  unreadable?: string;
+}
+
 /** How this result gets recorded: at once on a person's own computer, as a second step on a server, or not at all. */
 export type ReportCompareRecording = 'with-compare' | 'separate' | 'refused';
 
@@ -1376,6 +1385,10 @@ export interface ReportComparison {
   report: string;
   file: { name: string; sha256: string; rows: number };
   comparedAt: string;
+  /** What the file was compared with: a saved query, or metrics. */
+  target?: { kind: 'query'; name: string } | { kind: 'metrics'; metrics: string[] };
+  /** Columns ZLens matched rows on by itself, because no key was named. */
+  keysProposed?: string[];
   mapping: Record<string, string>;
   filters: { stated: string[]; waived: string[]; seen: string[] };
   comparison: {

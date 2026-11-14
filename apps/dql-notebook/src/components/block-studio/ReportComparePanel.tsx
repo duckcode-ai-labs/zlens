@@ -4,10 +4,10 @@ import type { ReportCompareRecording, ReportCompareRequest, ReportComparison, Re
 import type { Theme } from '../../themes/notebook-theme';
 
 /**
- * Compare with the old report, on the Import screen: drop an export, say the
- * report's filters, read every difference. The same comparison as
- * `zlens migrate compare`, so its messages name the same options; on the
- * screen those are the fields here.
+ * Compare with the old report: drop an export, say the report's filters, read
+ * every difference. On a saved query's own page and on the Import screen. The
+ * same comparison as `zlens migrate compare`, so its messages name the same
+ * options; on the screen those are the fields here.
  */
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -16,6 +16,7 @@ const MAX_SHOWN_DIFFERENCES = 50;
 const VERDICT_WORDS: Record<ReportVerdict, string> = { matches: 'Matches', differs: 'Differs', 'not-proven': 'Not proven' };
 
 const OPTION_WORDS: Array<[RegExp, string]> = [
+  [/name it with --key\b/g, 'name it under More options, in Keys'],
   [/--filter\b/g, 'Filters'],
   [/--waive\b/g, 'Waived filters'],
   [/--map\b/g, 'Column names'],
@@ -58,9 +59,11 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
-export function ReportComparePanel({ query, worksheets, onRecorded, primaryButton, t }: {
+export function ReportComparePanel({ query, queryPath, worksheets, onRecorded, primaryButton, t }: {
   /** The saved query to compare, instead of the metrics the file's columns name. */
   query?: string;
+  /** The saved query's file, so it is found by its file as well as its name. */
+  queryPath?: string;
   worksheets?: Array<{ name: string; filters: Array<{ field: string; words: string }> }>;
   onRecorded?: () => void;
   primaryButton: CSSProperties;
@@ -115,6 +118,7 @@ export function ReportComparePanel({ query, worksheets, onRecorded, primaryButto
       const body: ReportCompareRequest = {
         file: { name: file.name, base64: await readAsBase64(file) },
         ...(query ? { query } : {}),
+        ...(query && queryPath ? { queryPath } : {}),
         ...(worksheet ? { worksheet } : {}),
         filters: lines(filters),
         waive: lines(waived),
@@ -139,6 +143,12 @@ export function ReportComparePanel({ query, worksheets, onRecorded, primaryButto
   const label: CSSProperties = { display: 'grid', gap: 3, fontSize: 11, fontWeight: 700, color: t.textSecondary, fontFamily: t.font };
   const field: CSSProperties = { fontSize: 11, fontFamily: t.fontMono, color: t.textPrimary, background: 'transparent', border: `1px solid ${t.headerBorder}`, borderRadius: 6, padding: '4px 6px', minWidth: 0, width: '100%', boxSizing: 'border-box' };
   const chosenSheet = worksheets?.find((candidate) => candidate.name === worksheet);
+  const waivedField = (
+    <label style={label}>
+      Waived filters, with your reason
+      <textarea rows={1} value={waived} onChange={(event) => setWaived(event.target.value)} placeholder="Order Date: covers every row" style={field} />
+    </label>
+  );
 
   return (
     <div style={{ display: 'grid', gap: 8, marginTop: 8, minWidth: 0 }}>
@@ -150,7 +160,8 @@ export function ReportComparePanel({ query, worksheets, onRecorded, primaryButto
         }}
         style={{ display: 'block', border: `1px dashed ${t.headerBorder}`, borderRadius: 8, padding: 10, cursor: 'pointer', fontSize: 11, color: t.textSecondary, lineHeight: 1.4, overflowWrap: 'anywhere' }}
       >
-        {file ? file.name : "Drop the report's export here, or choose it: CSV or .xlsx, from Tableau's Download → Crosstab or a Power BI visual's Export data."}
+        <span style={{ display: 'block', fontWeight: 700, color: t.textPrimary }}>The old report's export (CSV or Excel)</span>
+        {file ? file.name : "Drop it here, or choose it: from Tableau's Download → Crosstab, a Power BI visual's Export data, or a download of the old query's result."}
         <input type="file" accept=".csv,.tsv,.txt,.xlsx" aria-label="The old report's export" onChange={(event) => choose(event.target.files?.[0])} style={{ display: 'block', marginTop: 6, fontSize: 11, maxWidth: '100%' }} />
       </label>
       {(worksheets?.length ?? 0) > 0 && (
@@ -167,17 +178,18 @@ export function ReportComparePanel({ query, worksheets, onRecorded, primaryButto
           Saved on this worksheet: {chosenSheet.filters.map((filter) => filter.words).join('; ')}. An export does not show them, so state or waive each one.
         </span>
       )}
-      <label style={label}>
-        Filters on the report, one per line
-        <textarea rows={2} value={filters} onChange={(event) => setFilters(event.target.value)} placeholder="order_date >= 2024-01-01" style={field} />
-      </label>
-      <label style={label}>
-        Waived filters, with your reason
-        <textarea rows={1} value={waived} onChange={(event) => setWaived(event.target.value)} placeholder="Order Date: covers every row" style={field} />
-      </label>
+      {/* A saved query takes its report's filters as its own parameters: only metrics take stated filters. */}
+      {!query && (
+        <label style={label}>
+          Filters on the report, one per line
+          <textarea rows={2} value={filters} onChange={(event) => setFilters(event.target.value)} placeholder="order_date >= 2024-01-01" style={field} />
+        </label>
+      )}
+      {!query && waivedField}
       <details>
         <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700, color: t.textSecondary }}>More options</summary>
         <div style={{ display: 'grid', gap: 8, marginTop: 6 }}>
+          {query && waivedField}
           <label style={label}>
             Column names, one per line
             <textarea rows={2} value={names} onChange={(event) => setNames(event.target.value)} placeholder="Sales=total_sales" style={field} />
@@ -218,6 +230,12 @@ export function ReportComparePanel({ query, worksheets, onRecorded, primaryButto
       )}
     </div>
   );
+}
+
+/** Where a recorded result now lives, and where it shows next. */
+export function recordedWords(result: ReportComparison): string {
+  if (result.target?.kind === 'query') return `Recorded for the saved query ${result.target.name}. When you certify it, its receipt shows this result.`;
+  return 'Recorded beside each metric it compared. Approving a draft shows this result.';
 }
 
 /** One comparison, read top to bottom: the verdict, why, then every difference shown. */
@@ -280,7 +298,7 @@ export function ComparisonResult({ result, recording, recorded, onRecord, primar
       {result.filters.seen.length > 0 && (
         <span style={text}>Filters ZLens can see, as saved (they may have been changed before exporting): {result.filters.seen.join('; ')}</span>
       )}
-      {recorded && <span style={text}>Recorded beside {result.report}. Approving a draft shows this result.</span>}
+      {recorded && <span style={text}>{recordedWords(result)}</span>}
       {!recorded && recording === 'separate' && <button onClick={onRecord} style={primaryButton}>Record this result</button>}
       {recording === 'refused' && <span style={text}>Another person could see different figures here, so this result is yours and is not recorded. Someone who sees every row can compare the file and record it.</span>}
     </div>

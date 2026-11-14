@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { blockCompanionRelativePath, certifiedSourceSha256, certifiedSourceState, type BlockCheckRecord } from '@zlens/core';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
+import { snowflakeSignedInUser } from './snowflake-ingress.js';
 
 /**
  * The record left behind when a person certifies a block.
@@ -422,11 +423,22 @@ function gitConfig(projectRoot: string, key: string): string | undefined {
  * `identity.owner` (B6): a sample project ships an owner of its own
  * ("analytics@jaffle.shop"), and recording it would put someone else's name
  * on the person's certification. Under a host the signed-in person is used
- * instead (the caller checks that first).
+ * instead (the caller checks that first). In the Snowflake app it is the
+ * Snowflake user who signed in: the container has no git and no user of its own.
  */
 export function localPersonIdentity(projectRoot: string): string {
+  const snowflakeUser = snowflakeSignedInUser();
+  if (snowflakeUser) return snowflakeUser;
   const user = process.env.USER?.trim() || process.env.USERNAME?.trim();
   return gitConfig(projectRoot, 'user.email') ?? (user ? `${user}@local` : 'local');
+}
+
+/**
+ * The name "Certified by" shows for this machine's person: the Snowflake user
+ * in the Snowflake app, else git `user.name`. Never throws.
+ */
+export function localPersonName(projectRoot: string): string | undefined {
+  return snowflakeSignedInUser() ?? gitUserName(projectRoot);
 }
 
 /** Identities that name no person: a record written before ZLens knew who did it. */

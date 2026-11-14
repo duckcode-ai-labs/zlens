@@ -66,6 +66,58 @@ export function readMatchRecords(projectRoot: string, kind: 'metric' | 'query', 
 
 const newestFirst = (records: MatchRecord[]) => [...records].sort((a, b) => String(b.comparedAt).localeCompare(String(a.comparedAt)));
 
+/** One comparison is one record, whichever name's file it was read from. */
+const sameComparison = (a: MatchRecord, b: MatchRecord) => a.comparedAt === b.comparedAt && a.file?.sha256 === b.file?.sha256 && a.querySha256 === b.querySha256;
+
+/** Records from several files, each comparison once, newest first. */
+export function mergeMatchRecords(...lists: MatchRecord[][]): MatchRecord[] {
+  const merged: MatchRecord[] = [];
+  for (const record of lists.flat()) if (!merged.some((kept) => sameComparison(kept, record))) merged.push(record);
+  return newestFirst(merged);
+}
+
+/**
+ * A saved query renamed keeps its comparisons: its records move to the new
+ * name's file, joining any already there. Nothing happens when the name is the
+ * same, or the old name has no records. Throws on a file it can't read, like
+ * readMatchRecords, and then moves nothing.
+ */
+export function moveMatchRecords(projectRoot: string, kind: 'metric' | 'query', from: string, to: string): boolean {
+  const fromFile = recordFile(projectRoot, kind, from);
+  const toFile = recordFile(projectRoot, kind, to);
+  if (!from.trim() || !to.trim() || fromFile === toFile || !existsSync(fromFile)) return false;
+  const matches = mergeMatchRecords(readMatchRecords(projectRoot, kind, to), readMatchRecords(projectRoot, kind, from)).slice(0, MAX_RECORDS);
+  // Removed first: on a disk that ignores case, `Revenue` and `revenue` are one file.
+  rmSync(fromFile, { force: true });
+  mkdirSync(dirname(toFile), { recursive: true });
+  writeFileSync(toFile, yaml.dump({ matches }, { lineWidth: 200, noRefs: true }), 'utf-8');
+  return true;
+}
+
+/**
+ * Every saved query comparison whose compiled SQL hashes to `querySha256`,
+ * whatever name it was filed under: the same SQL gives the same rows, so the
+ * comparison speaks for any saved query that runs it. Files it can't read are
+ * skipped.
+ */
+export function queryMatchRecordsFor(projectRoot: string, querySha256: string): MatchRecord[] {
+  const dir = join(projectRoot, 'semantic-layer', 'report-matches', 'query');
+  if (!querySha256 || !existsSync(dir)) return [];
+  const found: MatchRecord[] = [];
+  for (const entry of readdirSync(dir)) {
+    if (!entry.endsWith('.yaml')) continue;
+    try {
+      const parsed = yaml.load(readFileSync(join(dir, entry), 'utf-8'), { schema: yaml.JSON_SCHEMA }) as { matches?: MatchRecord[] } | null;
+      for (const record of Array.isArray(parsed?.matches) ? parsed!.matches : []) {
+        if (record?.querySha256 === querySha256 && ['matches', 'differs', 'not-proven'].includes(record.verdict)) found.push(record);
+      }
+    } catch {
+      // Another query's unreadable file says nothing about this one.
+    }
+  }
+  return mergeMatchRecords(found);
+}
+
 /** One record per metric compared, or one for the saved query. Newest first. */
 export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, who: { comparedBy: string; via: string }): string[] {
   const shared = {
@@ -114,9 +166,32 @@ export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, 
   }));
 }
 
+/** The day a comparison was made, on this computer's calendar, as a receipt's byline dates it. */
+function comparedDay(comparedAt: string): string {
+  const date = new Date(comparedAt);
+  if (Number.isNaN(date.getTime())) return String(comparedAt).slice(0, 10);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+const toolWords = (record: MatchRecord) => (record.tool === 'tableau' ? ' (Tableau)' : record.tool === 'powerbi' ? ' (Power BI)' : '');
+
+/**
+ * A full match on a receipt: "Matches Sales by Region · every value compared
+ * (4 of 4 at 2 decimals, 2026-11-02)". Only when nothing was left out, waived
+ * or narrowed; otherwise matchWords says what was.
+ */
+export function receiptMatchWords(record: MatchRecord): string {
+  const { compared, equal } = record.values ?? { compared: 0, equal: 0 };
+  const everyValue = record.verdict === 'matches' && record.scope === 'all rows' && compared > 0 && equal === compared
+    && !Object.values(record.mapping ?? {}).some((meaning) => /^(left out|not compared)/.test(meaning))
+    && !(record.filters?.waived.length);
+  if (!everyValue) return matchWords(record);
+  return `Matches ${record.report}${toolWords(record)} · every value compared (${equal} of ${compared} at ${record.precision}, ${comparedDay(record.comparedAt)})`;
+}
+
 /** A record in words: for a receipt, or beside a draft. */
 export function matchWords(record: MatchRecord): string {
-  const tool = record.tool === 'tableau' ? ' (Tableau)' : record.tool === 'powerbi' ? ' (Power BI)' : '';
+  const tool = toolWords(record);
   const verdict = record.verdict === 'matches' ? 'Matches' : record.verdict === 'differs' ? 'Differs from' : 'Not proven against';
   const leftOut = Object.entries(record.mapping ?? {}).filter(([, meaning]) => meaning === 'left out, as asked').map(([column]) => column);
   const waived = record.filters?.waived.length ?? 0;
@@ -125,7 +200,7 @@ export function matchWords(record: MatchRecord): string {
     ...(leftOut.length ? [`left out: ${leftOut.join(', ')}`] : []),
     ...(waived ? [`${waived} filter${waived === 1 ? '' : 's'} waived`] : []),
   ];
-  return `${verdict} ${record.report}${tool}, ${record.comparedAt.slice(0, 10)}: ${record.values.equal} of ${record.values.compared} values at ${record.precision}${limits.map((limit) => `, ${limit}`).join('')}`;
+  return `${verdict} ${record.report}${tool}, ${comparedDay(record.comparedAt)}: ${record.values.equal} of ${record.values.compared} values at ${record.precision}${limits.map((limit) => `, ${limit}`).join('')}`;
 }
 
 // ── Per-person detail ───────────────────────────────────────────────────────
