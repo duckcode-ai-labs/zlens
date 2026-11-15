@@ -65,8 +65,9 @@ describe('Help in the app for Snowflake', () => {
     for (const laptop of ['npm i -g', 'zlens notebook', 'git init', 'Source control', 'dbt', '.dql/', 'this computer', 'this machine', 'Node 20']) {
       expect(html).not.toContain(laptop);
     }
-    // It covers what the reviewer needs: first open, grants, Configurations, the model, backups, stop and start.
-    for (const topic of ['What ZLens did first', 'Modeling', 'GRANT SELECT ON ALL TABLES IN SCHEMA', 'Configurations', 'claude-sonnet-5', 'SNOWFLAKE.CORTEX_USER', 'app_public.back_up_now()', 'app_public.restore_backup', 'app_public.start_app()', 'reload once']) {
+    // It covers what the reviewer needs: first open (V2: Launch app's launcher, app_url() in SQL), grants,
+    // Configurations, the model, backups, stop and start.
+    for (const topic of ['What ZLens did first', 'Modeling', 'GRANT SELECT ON ALL TABLES IN SCHEMA', 'Configurations', 'claude-sonnet-5', 'SNOWFLAKE.CORTEX_USER', 'app_public.back_up_now()', 'app_public.restore_backup', 'app_public.start_app()', 'press <strong>Launch app</strong>', '<strong>Open ZLens</strong>', 'app_public.app_url()']) {
       expect(html).toContain(topic);
     }
     for (const link of SNOWFLAKE_APP_HELP_LINKS) expect(html).toContain(`href="${link.href}"`);
