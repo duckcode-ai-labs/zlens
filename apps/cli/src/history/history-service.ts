@@ -1,4 +1,4 @@
-import { closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { automaticAskDraftState } from '@zlens/agent';
 import { applyCompanionCertification } from '../certification-receipt.js';
@@ -422,9 +422,11 @@ export class HistoryService {
     const source = this.options.apps;
     if (!source?.trashed) return [];
     const statePath = join(this.store.location, TRASH_STATE);
+    // Read as it is: no file yet (or one that does not read) is no state.
     let state: { draftsSince?: string; kept?: string[] } = {};
     try {
-      if (existsSync(statePath)) state = JSON.parse(readFileSync(statePath, 'utf-8')) as typeof state;
+      const read = JSON.parse(readFileSync(statePath, 'utf-8')) as unknown;
+      if (read && typeof read === 'object' && !Array.isArray(read)) state = read as typeof state;
     } catch {
       state = {};
     }
@@ -454,7 +456,10 @@ export class HistoryService {
       made.push(await this.commitFiles(ZLENS_AUTHOR, 'trash', bundle.reason, files.map((file) => ({ path: file.path, content: null }))));
     }
     try {
-      writeFileSync(statePath, `${JSON.stringify({ draftsSince: state.draftsSince ?? nowIso, kept: [...kept].sort() }, null, 2)}\n`, 'utf-8');
+      // Written whole, then moved into place: a reader sees the old state or the new one, never part of one.
+      const temp = `${statePath}.${process.pid}.tmp`;
+      writeFileSync(temp, `${JSON.stringify({ draftsSince: state.draftsSince ?? nowIso, kept: [...kept].sort() }, null, 2)}\n`, { encoding: 'utf-8', flag: 'w' });
+      renameSync(temp, statePath);
     } catch (error) {
       this.log('warn', `[zlens] History could not note which trashed Apps it kept: ${error instanceof Error ? error.message : String(error)}`);
     }

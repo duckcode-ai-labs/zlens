@@ -4,7 +4,7 @@
  * dispatcher — returns `true` if the request was handled, `false` otherwise.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync, type Dirent, type Stats } from 'node:fs';
+import { closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync, type Dirent, type Stats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -10004,19 +10004,30 @@ export function trashedAppsForHistory(projectRoot: string): HistoryTrashedApp[] 
   for (const entry of folderEntries(appsRoot)) {
     const manifest = readJsonFile(join(appsRoot, entry, 'recovery.json'));
     const packageDir = join(appsRoot, entry, 'package');
-    if (typeof manifest?.appId !== 'string' || typeof manifest.deletedAt !== 'string' || !existsSync(packageDir)) continue;
+    if (typeof manifest?.appId !== 'string' || typeof manifest.deletedAt !== 'string') continue;
     const files: Array<{ path: string; content: string }> = [];
+    /** One file, sized and read through the same descriptor (it cannot change between the two); too big is left out. */
+    const readSmall = (absolute: string): string | undefined => {
+      const fd = openSync(absolute, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try {
+        return fstatSync(fd).size <= 5 * 1024 * 1024 ? readFileSync(fd, 'utf-8') : undefined;
+      } finally {
+        closeSync(fd);
+      }
+    };
     const visit = (directory: string, depth: number) => {
       if (depth > 4) return;
       for (const item of readdirSync(directory, { withFileTypes: true })) {
         const absolute = join(directory, item.name);
         if (item.isDirectory()) visit(absolute, depth + 1);
-        else if (item.isFile() && statSync(absolute).size <= 5 * 1024 * 1024) {
-          files.push({ path: relative(packageDir, absolute).split(sep).join('/'), content: readFileSync(absolute, 'utf-8') });
+        else if (item.isFile()) {
+          const content = readSmall(absolute);
+          if (content !== undefined) files.push({ path: relative(packageDir, absolute).split(sep).join('/'), content });
         }
       }
     };
     try {
+      // No package (restored already, or never written): nothing to keep.
       visit(packageDir, 0);
     } catch {
       continue;

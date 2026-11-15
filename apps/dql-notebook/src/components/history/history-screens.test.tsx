@@ -270,6 +270,9 @@ describe('V2: one AI label, the first line, and readable kinds', () => {
       items, count: 4, certified: false, canCompare: false, canRestore: false,
     };
     const html = renderToStaticMarkup(<ChangeLine entry={started} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    // Who: ZLens, as on every line; then what.
+    expect(html).toContain('>ZLens</strong>');
+    expect(html.indexOf('>ZLens</strong>')).toBeLessThan(html.indexOf('History starts here:'));
     expect(html).toContain('History starts here:');
     expect(html).toContain('4 items');
     expect(html).toContain('1 saved query, 1 App, 1 notebook, 1 model file');

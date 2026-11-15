@@ -264,8 +264,8 @@ export function ChangeLine({
       <Avatar entry={entry} t={t} />
       <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ lineHeight: 1.45, fontSize: 13.5 }}>
-          {started ? null : <><strong style={{ fontWeight: 650 }}>{authorLabel(entry.by)}</strong>{' '}</>}
-          {started ? <strong style={{ fontWeight: 650 }}>{actionLabel(entry)}</strong> : actionLabel(entry)}{' '}
+          <strong style={{ fontWeight: 650 }}>{authorLabel(entry.by)}</strong>{started ? <span style={{ color: t.textSecondary }}> · </span> : ' '}
+          {actionLabel(entry)}{' '}
           {single ? (
             <button type="button" onClick={() => onOpen(single)} style={{ ...linkButton(t), textDecoration: 'none', fontFamily: t.fontMono, fontWeight: 500, fontSize: 13 }}>{single.name}</button>
           ) : (
