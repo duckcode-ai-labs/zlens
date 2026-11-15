@@ -84,6 +84,8 @@ export interface HistoryFeedEntry {
 export interface HistoryVersionRow {
   version: number;
   commit: string;
+  /** The file holding this version (a saved query's draft edit, when it was one); absent for a removal. */
+  path?: string;
   at: string;
   by: HistoryAuthor;
   change: HistoryChangeKind;
@@ -102,6 +104,8 @@ export interface HistoryItemResult {
 export interface HistoryVersionCard {
   version: number;
   commit: string;
+  /** The file holding this version (a saved query's draft edit, when it was one). */
+  path?: string;
   at: string;
   by: HistoryAuthor;
   state: HistoryVersionRow['state'];
@@ -427,6 +431,7 @@ export class HistoryService {
     const rows = versions.map((version): HistoryVersionRow => ({
       version: version.version,
       commit: version.commit.oid,
+      ...(version.change.change === 'removed' ? {} : { path: version.change.kind === 'saved_query' ? sourcePathOf(version) : version.change.item }),
       at: version.commit.at,
       by: version.commit.author,
       change: version.change.change,
@@ -487,6 +492,7 @@ export class HistoryService {
     return {
       version: version.version,
       commit: version.commit.oid,
+      ...(version.change.change === 'removed' ? {} : { path: version.change.kind === 'saved_query' ? sourcePathOf(version) : version.change.item }),
       at: version.commit.at,
       by: version.commit.author,
       state: stateOf(version.change),

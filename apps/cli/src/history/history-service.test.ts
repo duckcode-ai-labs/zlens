@@ -234,7 +234,8 @@ describe('certified versions, draft edits and restore', () => {
 
     const compared = await history.compare(WINS, 1, 2);
     expect(compared.from).toMatchObject({ version: 1, state: 'certified', certifiedBy: 'JSMITH', oldReport: expect.stringMatching(/^Matches warriors_wins/) });
-    expect(compared.to).toMatchObject({ version: 2, state: 'draft' });
+    expect(compared.to).toMatchObject({ version: 2, state: 'draft', path: beside });
+    expect(item.versions.map((row) => row.path)).toEqual([beside, WINS]);
     expect(compared.sql!.lines.filter((line) => line.kind !== 'same')).toEqual([
       { kind: 'removed', text: SQL_2018, oldNumber: 1 },
       { kind: 'added', text: SQL_2019, newNumber: 1 },
