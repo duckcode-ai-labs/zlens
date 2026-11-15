@@ -662,9 +662,14 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     const options = distinctOptions(outcome.options);
     return options.length === outcome.options.length ? outcome : { ...outcome, options };
   }
-  if (outcome.kind === 'gap' && (outcome.gap === 'not_modeled' || outcome.gap === 'ambiguous') && !outcome.executedSql) {
-    // An "ambiguous" gap may be about a name two members share: only the question's own words make it vague.
-    const question = clarificationForOpenQuestion(input.question, outcome.message, { wordsOnly: outcome.gap === 'ambiguous' });
+  const declinedVague = outcome.kind === 'gap' && (outcome.gap === 'not_modeled' || outcome.gap === 'ambiguous') && !outcome.executedSql;
+  // A reading that ran out of time on a question with no measure or no period needs no AI to know what to ask
+  // (V14 gate, Q17: "How are the Warriors doing lately?" timed out after a 109 s reading).
+  const timedOutVague = outcome.kind === 'failed' && outcome.stage === 'prepare' && outcome.receipt?.failure?.reason === 'provider_timeout';
+  if ((outcome.kind === 'gap' || outcome.kind === 'failed') && (declinedVague || timedOutVague)) {
+    // An "ambiguous" gap may be about a name two members share, and a time-out has no reading: only the question's
+    // own words make it vague then.
+    const question = clarificationForOpenQuestion(input.question, timedOutVague ? undefined : outcome.message, { wordsOnly: timedOutVague || (outcome.kind === 'gap' && outcome.gap === 'ambiguous') });
     if (!question) return outcome;
     const receipt = outcome.receipt;
     delete receipt.failure;

@@ -149,7 +149,8 @@ describe('averages shown as they are from new-user test V10', () => {
       expect(kpi.body.ok, kpi.text).toBe(false);
       expect(kpi.body.diagnostics).toEqual(['NON_ADDITIVE_RESULT_ROLLUP']);
       expect(kpi.body.error).toBe("Averages can't be added up: Points per game is worked out on each row of Warriors ppg regular vs playoffs 2016, and this tile puts 2 of them together. Use Min points per game or Max points per game, or group by a column that is different on each row to show each row as it is.");
-      expect(kpi.text).not.toContain('252');
+      // The sum as a number of its own, never the digits inside an id or a hash (V9 test, same fix).
+      expect(kpi.text).not.toMatch(/(?<![0-9a-z.])252(?![0-9a-z])/i);
       // Max is still there for a KPI, and is what it says.
       const max = await call(base, '/api/app-datasets/tile-preview', { sourceId: ppg.sourceId, query: { dimensions: [], measures: [{ measure: 'max_POINTS_PER_GAME' }], respectsGlobalFilters: true } });
       expect(max.body.ok, max.text).toBe(true);

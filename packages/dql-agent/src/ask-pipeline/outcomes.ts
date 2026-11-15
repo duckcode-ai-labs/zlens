@@ -230,6 +230,9 @@ export function describeResultColumns(intent: AnalyticalIntentV1, result: Pick<E
     // field keeps the Boolean kind.
     const aggregated = Boolean(aggregate) || entry.kind === 'metric' || entry.kind === 'measure' || (aggregation !== undefined && aggregation !== 'none');
     const booleanField = entry.roles.includes('boolean') || entry.dataType?.toLowerCase() === 'boolean';
+    // The average of a yes/no flag is a share of rows (home-team wins: 0.588 is 58.8%, V14 gate Q14); any other
+    // aggregation of it (SUM of losses) is a number.
+    if (booleanField && aggregation === 'avg') return { kind: 'percent', unit: 'fraction' };
     if (booleanField) return aggregated ? { kind: 'number' } : { kind: 'boolean' };
     if (PERCENT_NAME.test(entry.name)) return { kind: 'percent', unit: 'fraction' };
     if (entry.kind === 'metric' || entry.kind === 'measure') return CURRENCY_NAME.test(entry.name) ? { kind: 'currency', unit: 'USD' } : { kind: 'number' };
@@ -276,8 +279,19 @@ export function describeResultColumns(intent: AnalyticalIntentV1, result: Pick<E
       register(name, undefined, meta);
       continue;
     }
-    // A column measure carries its own aggregation: SUM over a Boolean column is a number.
-    register(name, measure.ref, kindOfEntry(measure.ref, measure.aggregation));
+    // A column measure carries its own aggregation: SUM over a Boolean column is a number. A measure the reading
+    // NAMED as a percentage ("HOME_WIN_PERCENT") is one: a fraction when its values are, else on the 0-100 scale.
+    const columnMeta = kindOfEntry(measure.ref, measure.aggregation);
+    if ((columnMeta.kind === undefined || columnMeta.kind === 'number' || columnMeta.kind === 'text') && PERCENT_NAME.test(name)) {
+      const sampled = result.rows.slice(0, 50).flatMap((row) => {
+        const key = Object.keys(row).find((column) => column.toLowerCase() === name.toLowerCase());
+        const value = key === undefined ? Number.NaN : Number(row[key]);
+        return Number.isFinite(value) ? [value] : [];
+      });
+      register(name, measure.ref, sampled.length > 0 && sampled.every((value) => Math.abs(value) <= 1.5) ? { kind: 'percent', unit: 'fraction' } : { kind: 'percent', unit: scaledPercentUnit(name) });
+    } else {
+      register(name, measure.ref, columnMeta);
+    }
     if (entry?.name && entry.name !== name) register(entry.name, measure.ref, kindOfEntry(measure.ref, measure.aggregation));
   }
   for (const group of intent.groupBy) {
