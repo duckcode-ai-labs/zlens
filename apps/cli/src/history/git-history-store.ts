@@ -49,8 +49,11 @@ export class GitHistoryStore implements HistoryStore {
       await git.init({ fs, gitdir: this.location, bare: true, defaultBranch: BRANCH });
     }
     // An outer Git (the project exported and put in a repository) ignores this folder.
-    const ignore = join(this.location, '.gitignore');
-    if (!existsSync(ignore)) writeFileSync(ignore, '*\n', 'utf-8');
+    try {
+      writeFileSync(join(this.location, '.gitignore'), '*\n', { encoding: 'utf-8', flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
     return { created };
   }
 

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { automaticAskDraftState } from '@zlens/agent';
 import { applyCompanionCertification } from '../certification-receipt.js';
@@ -681,9 +681,20 @@ export class HistoryService {
 
   private safeWrite(path: string, content: string): void {
     const absolute = this.safePath(path);
-    if (existsSync(absolute) && lstatSync(absolute).isSymbolicLink()) throw new HistoryError('History does not write through a link.', 400, 'HISTORY_NOT_TRACKED');
     mkdirSync(dirname(absolute), { recursive: true });
-    writeFileSync(absolute, content, 'utf-8');
+    // Opened in one step that refuses a symlink (O_NOFOLLOW): nothing can swap the file for a link in between.
+    let fd: number;
+    try {
+      fd = openSync(absolute, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ELOOP') throw new HistoryError('History does not write through a link.', 400, 'HISTORY_NOT_TRACKED');
+      throw error;
+    }
+    try {
+      writeFileSync(fd, content, 'utf-8');
+    } finally {
+      closeSync(fd);
+    }
   }
 
   // ── The SQL log and the repository's size ───────────────────────────────────────────────────────────────────

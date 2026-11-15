@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
@@ -322,6 +322,13 @@ describe('certified versions, draft edits and restore', () => {
     expect(() => history.item('blocks/nba/other.dql')).toThrow(/no versions/);
     await expect(history.restore({ item: WINS, version: 9 })).rejects.toThrow(/no v9/);
     await expect(history.restore({ item: WINS, version: 1 })).rejects.toThrow(/already the current version/);
+    // A file swapped for a link is never written through.
+    const outside = join(project(), 'outside.dql');
+    writeFileSync(outside, 'keep me', 'utf-8');
+    unlinkSync(join(root, WINS));
+    symlinkSync(outside, join(root, WINS));
+    await expect(history.restore({ item: WINS, version: 1 })).rejects.toThrow(/through a link/);
+    expect(readFileSync(outside, 'utf-8')).toBe('keep me');
   });
 });
 
