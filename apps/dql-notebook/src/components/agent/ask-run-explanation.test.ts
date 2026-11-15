@@ -115,6 +115,10 @@ describe('how an Ask run was answered, as steps in plain words', () => {
     ]);
     expect(explanation.steps[2]!.reason).toBe('The AI looked at the tables and found nothing that answers this: these tables hold orders only; nothing records churn or region.');
     expect(explanation.steps[2]!.aiCalls[0]!.outcome).toBe('declined');
+    // Step 2 never says the AI wrote SQL that step 3 calls "Not used" (V2, listing retake F9).
+    expect(explanation.steps[1]!.reason).toBe('The question is not about a certified saved query or a semantic metric, so the AI looked for it in the tables.');
+    const answered = explainAskRun({ receipt: base({ ...declinedGap, refusals: [], tiers: [{ round: 97, tier: 'exploratory', outcome: 'prepared' }], executed: { tier: 'exploratory', rowCount: 1, ms: 10, proofs: [] } }), payload: { kind: 'uncertified' }, status: 'completed' })!;
+    expect(answered.steps[1]!.reason).toBe('The question is not about a certified saved query or a semantic metric, so the AI wrote the SQL.');
   });
 
   it('a long gap reads short in the headline, names tables without quotes, and lists what was searched once', () => {

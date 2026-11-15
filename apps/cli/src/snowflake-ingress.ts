@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { existsSync } from 'node:fs';
+import { withSignedInOwner } from '@zlens/agent';
 import { readEnv } from '@zlens/core';
 import { brandedPage } from './brand-page.js';
 
@@ -56,10 +57,15 @@ export function snowflakeIngressRefusal(
  */
 const signedInUser = new AsyncLocalStorage<string>();
 
-/** Runs `work` as the Snowflake user the ingress named; with no ingress or no user, as before. */
+/**
+ * Runs `work` as the Snowflake user the ingress named; with no ingress, as before. Inside Snowflake what the work
+ * creates (a draft Ask saves) is owned by that user, or by nobody when no user is named: never by the container's
+ * own account, "zlens@local" (V2, listing retake F4).
+ */
 export function withSnowflakeUser<T>(ingress: SnowflakeIngress | undefined, userHeader: string | string[] | undefined, work: () => T): T {
-  const user = ingress ? (Array.isArray(userHeader) ? userHeader[0] : userHeader)?.trim() : undefined;
-  return user ? signedInUser.run(user, work) : work();
+  if (!ingress) return work();
+  const user = (Array.isArray(userHeader) ? userHeader[0] : userHeader)?.trim();
+  return withSignedInOwner(user, () => (user ? signedInUser.run(user, work) : work()));
 }
 
 /** The Snowflake user behind the current request, inside the Snowflake app only. */

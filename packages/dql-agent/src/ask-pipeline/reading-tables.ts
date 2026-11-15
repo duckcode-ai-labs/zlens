@@ -21,6 +21,8 @@ const TRAILING = /^(?:facts?|fct|table|data|stats|details|records?|cleansed|clea
 /** Words that lead into a clause naming where the figures come from, one or two words long. */
 const PREPOSITIONS = new Set(['per', 'from', 'in', 'using', 'via', 'with', 'of', 'by', 'on', 'based on', 'according to', 'out of']);
 const DETERMINERS = new Set(['the', 'his', 'her', 'their', 'its', 'a', 'an', 'each', 'this', 'that']);
+/** Small words a table's mention never runs across: "team game wins in the data" names no table. */
+const PHRASE_ENDS = 'the|a|an|in|of|for|per|by|from|on|at|to|and|or|with|across|over|during|each|this|that|his|her|their|its|as|is|are|was|were|be|than|then|who|which|where|when';
 
 const bare = (relation: string) => (tableName(relation) || relation).replace(/["`[\]]/g, '').trim();
 
@@ -41,10 +43,12 @@ function mentionPattern(relation: string): string | undefined {
   if (words.length === 0) return undefined;
   const core = words.map((word, index) => (index === words.length - 1 ? `${escape(word.replace(/s$/, ''))}s?` : escape(word))).join('[ _-]');
   // One word ("games") names a table only as "the games table" or "the games relation": "season totals" is a
-  // phrase about seasons, not the seasons table. Two or more words may have one word before the noun.
+  // phrase about seasons, not the seasons table. Two or more words may have up to three words before the noun,
+  // none of them a small word that ends the phrase ("team-season home win totals" names the team season table; V2,
+  // tester V14 Q12): "team game wins in the data" does not.
   return words.length === 1
     ? `\\b(?:the|a) ${core} (?:tables?|relations?|datasets?|views?|dimensions?)\\b`
-    : `\\b${core}(?: [\\w-]+)? ${TABLE_NOUN}\\b`;
+    : `\\b${core}(?: (?!(?:${PHRASE_ENDS})\\b)[\\w-]+){0,3} ${TABLE_NOUN}\\b`;
 }
 
 /**

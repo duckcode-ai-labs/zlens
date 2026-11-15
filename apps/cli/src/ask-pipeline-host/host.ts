@@ -316,6 +316,32 @@ export function kindDatesFrom(rows: Array<Record<string, unknown>>, period: stri
 
 const kindDatesText = (kinds: CodeKinds) => kinds.dates ? `; in ${kinds.dates.period} ${kinds.dates.value} the rows run ${kinds.dates.ranges.map((range) => `${range.first} from ${range.from} to ${range.to}`).join(', ')}` : '';
 
+/** A model rule that says some kinds of row fall in the calendar year after their period (playoff games, SEASON). */
+export interface CalendarAfterRule {
+  /** The coded key whose first character tells the kinds apart (GAME_ID). */
+  code: string;
+  /** The first characters of the kinds the rule is about ("4", "5"). */
+  firsts: string[];
+  /** The period column (SEASON). */
+  column: string;
+}
+
+/** "Rows whose GAME_ID starts with 4 (40,377 rows) or 5 (349 rows) all fall in the calendar year after their SEASON". */
+export function calendarAfterRules(rules: Record<string, { expression?: string; status?: string }> | undefined): CalendarAfterRule[] {
+  const found: CalendarAfterRule[] = [];
+  for (const rule of Object.values(rules ?? {})) {
+    if (rule.status === 'deprecated') continue;
+    const match = /Rows whose ([A-Za-z0-9_$"]+) starts with (.+?) all fall in the calendar year after their ([A-Za-z_]+)/.exec(rule.expression ?? '');
+    if (!match) continue;
+    const code = match[1]!.replace(/"/g, '');
+    const column = match[3]!;
+    if (found.some((item) => item.code.toLowerCase() === code.toLowerCase() && item.column.toLowerCase() === column.toLowerCase())) continue;
+    const firsts = [...match[2]!.matchAll(/(?:^|,|\bor\b|\band\b)\s*([0-9A-Za-z])(?![0-9A-Za-z,])/g)].map((first) => first[1]!);
+    if (firsts.length) found.push({ code, firsts, column });
+  }
+  return found;
+}
+
 export function codeKindsFrom(rules: Record<string, { expression: string; status?: string }> | undefined): CodeKinds[] {
   const live = Object.values(rules ?? {}).filter((rule) => rule.status !== 'deprecated' && rule.expression?.trim());
   const found: CodeKinds[] = [];
@@ -3109,6 +3135,12 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         .sort((a, b) => Number(b.named) - Number(a.named) || a.rule.localId.localeCompare(b.rule.localId))
         .slice(0, MODEL_RULES_IN_DRAFT)
         .map(({ rule }) => `- model rule ${rule.localId}: ${clipText(rule.expression, MODEL_RULE_CHARS)}`);
+      // A year the question states is the period of that number, for every kind of row, unless it says "calendar
+      // year": the model rule above says which calendar year some rows fall in, not how a stated year is read (V2).
+      const statedSeasonLines = modelRuleLines.length ? calendarAfterRules(deps.getManifest().manifest?.modeling?.rules).flatMap((rule) => {
+        const years = [...new Set([...question.matchAll(/(?<![\d-])((?:19|20)\d{2})(?![\d-])/g)].map((match) => match[1]!))].filter((year) => !asksCalendarYear(question, year));
+        return years.length ? [`- a year the question states is ${rule.column} of that number (${years.map((year) => `"${year}" is ${rule.column} = ${year}`).join(', ')}), for every kind of row, also the ones that fall in the calendar year after their ${rule.column}; only a question that says "calendar year" means the calendar year`] : [];
+      }).slice(0, 1) : [];
       // KINDS OF ROWS a coded key tells apart (a game type), for the tables in this draft: a kind the question
       // names is filtered on, and a question that names none counts every kind (new-user test V8 retest: playoff
       // and preseason questions lost their kind, and "the 2012 season" was read as the regular season only).
@@ -3209,6 +3241,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         ...(briefing ? [`- domain ${briefing.name}${briefing.description ? `: ${briefing.description.slice(0, 300)}` : ''}${briefing.caveats.length ? `; caveats: ${briefing.caveats.slice(0, 3).join('; ')}` : ''}${briefing.requiredFilters.length ? `; required filters: ${briefing.requiredFilters.slice(0, 3).join('; ')}` : ''}`] : []),
         ...termLines,
         ...modelRuleLines,
+        ...statedSeasonLines,
         ...kindLines,
         ...metricLines,
         ...joinLines,
@@ -3267,7 +3300,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         const fenced = /```(?:sql)?\s*([\s\S]*?)```/i.exec(raw);
         // The earlier values the model read by position are the real ones again in what it drafted.
         const drafted = (fenced ? fenced[1]! : raw).trim();
-        const sql = drafted ? await withSeasonYears(await withBothNameParts(priorMask ? priorMask.restoreText(drafted) : drafted)) : drafted;
+        const sql = drafted ? await withStatedSeasons(await withSeasonYears(await withBothNameParts(priorMask ? priorMask.restoreText(drafted) : drafted))) : drafted;
         if (!sql) { dispatch.outcome = 'error'; return { error: 'the provider returned no SQL' }; }
         dispatch.outcome = 'sql';
         const runtimeSchema = runtimeSchemaForVocabulary(current)
@@ -3371,35 +3404,89 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
         return fixed;
       };
+      // ONE RULE FOR A STATED YEAR, IN ASK AND IN NOTEBOOK AI: the season of that number (V2, tester V14 retest).
+      // "How many playoff games did the Warriors win in 2015?" was read as SEASON 2015 by Ask (15) and as SEASON 2014
+      // by Notebook AI (16): the model's rule says playoff rows fall in the calendar year after their SEASON, and the
+      // drafter sometimes followed it. Ask's reading stays the default, as every other answer and the tester's own SQL
+      // read it (K1, G2, PO-1): a statement that applied the rule (SEASON = 2014 for "2015") is set back to SEASON
+      // 2015 when that season holds rows. A question that says "calendar year" keeps the rule's reading. Either way
+      // the answer says how it read the year and how to ask for the other.
+      const yearRules = calendarAfterRules(deps.getManifest().manifest?.modeling?.rules);
+      const kindNamesOf = (rule: CalendarAfterRule, firsts: string[]): string => {
+        const kinds = codeKinds.find((item) => item.code.toLowerCase() === rule.code.toLowerCase());
+        const names = firsts.map((first) => kinds?.names?.[first]);
+        return names.length && names.every(Boolean) ? joinKindNames(names as string[]) : `${kindNoun(rule.code)}s with ${rule.code} starting with ${orList(firsts)}`;
+      };
+      const withStatedSeasons = async (sql: string): Promise<string> => {
+        if (!yearRules.length) return sql;
+        let fixed = sql;
+        const years = stated.filter((value) => value.kind === 'year').map((value) => value.value);
+        for (const year of years) {
+          if (asksCalendarYear(question, year) || new RegExp(`(?<![0-9])${year}(?![0-9])`).test(fixed)) continue;
+          const before = String(Number(year) - 1);
+          // "2014 and 2015": SEASON 2014 is a year the question states, never the other one set back. A statement
+          // that also restricts dates is left as written: its dates would contradict another season.
+          if (years.includes(before) || new RegExp(`'(?:${year}|${before})-\\d\\d`).test(fixed)) continue;
+          for (const rule of yearRules) {
+            const applied = new RegExp(`((?:^|[^A-Za-z0-9_$])"?${rule.column}"?\\s*=\\s*)('?)${before}\\2(?![0-9])`, 'gi');
+            if (!new RegExp(applied.source, 'i').test(fixed)) continue;
+            // Only for a statement that keeps the kinds the rule is about: the drafter set the year back for them.
+            const kept = kindFilterOf(fixed, rule.code);
+            if (!kept.filtered || !kept.kinds.some((first) => rule.firsts.includes(first))) continue;
+            let holds = false;
+            for (const relation of relationsInSql(fixed).filter((name) => knownColumns(warehouseTable(name) ?? name).some((column) => column.replace(/"/g, '').toLowerCase() === rule.column.toLowerCase()))) {
+              try { holds = await probeOne(`SELECT 1 FROM ${relation} WHERE ${rule.column} = ${year} LIMIT 1`); } catch { holds = false; }
+              if (holds) break;
+            }
+            if (!holds) continue;
+            fixed = fixed.replace(applied, (_match, lead: string, quote: string) => `${lead}${quote}${year}${quote}`);
+            hostStep({ phase: 'schema', title: `Read ${year} as ${rule.column} ${year}, the year the question states`, state: 'done', detail: `the drafted SQL read it as ${rule.column} ${before}, because ${kindNamesOf(rule, rule.firsts)} fall in the calendar year after their ${rule.column}; a question says "calendar year ${year}" for that reading` });
+            break;
+          }
+        }
+        return fixed;
+      };
+      // How a stated year was read where the kinds the question keeps are played in the calendar year after their
+      // season: said every time, with how to ask for the other reading.
+      const seasonKindReads = (sql: string): Array<{ year: string; line: string }> => stated.filter((value) => value.kind === 'year').flatMap((item) => {
+        if (asksCalendarYear(question, item.value)) return [];
+        for (const rule of yearRules) {
+          if (!new RegExp(`(?:^|[^A-Za-z0-9_$])"?${rule.column}"?\\s*=\\s*'?${item.value}'?(?![0-9])`, 'i').test(sql)) continue;
+          const kept = kindFilterOf(sql, rule.code);
+          const later = kept.filtered ? rule.firsts.filter((first) => kept.kinds.includes(first)) : [];
+          if (!later.length) continue;
+          const names = kindNamesOf(rule, later);
+          const next = String(Number(item.value) + 1);
+          const before = String(Number(item.value) - 1);
+          return [{ year: item.value, line: `caveat: it reads ${item.value} as ${rule.column} ${item.value}, whose ${names} are played in ${next}; to count the ${names} played in ${item.value} (${rule.column} ${before}) instead, say "calendar year ${item.value}"` }];
+        }
+        return [];
+      });
       // Which season a stated year was read as, said beside the reading: always after a rewrite above, and when the
       // SQL was written from the words alone (no reading said "season").
-      const seasonCaveats = (sql: string): string[] => stated.filter((value) => value.kind === 'year').flatMap((item) => {
-        const read = seasonReads.get(item.value);
-        const applied = new RegExp(`(?:^|[^\\w$])"?(season|season_year|season_id)"?\\s*=\\s*'?${item.value}'?(?![\\d])`, 'i').exec(sql);
-        if (!applied) return [];
-        if (read) return [`caveat: it reads ${item.value} as the ${item.value} season (${applied[1]!.toUpperCase()} ${item.value}), not the calendar year of ${read.column}`];
-        if (!fromWords || /\bseasons?\b/i.test(question)) return [];
-        return [`caveat: it reads ${item.value} as the ${item.value} season (${applied[1]!.toUpperCase()} ${item.value}), not the calendar year`];
-      });
-      // A YEAR READ THROUGH THE MODEL'S OWN RULE. "The 2008 playoffs" written as SEASON = 2007, because a rule
-      // says those rows fall in the calendar year after their SEASON, applies 2008: the answer says how it read it
-      // instead of refusing it as "does not apply 2008" (V12 gate, K4).
+      const seasonCaveats = (sql: string): string[] => {
+        const kindReads = seasonKindReads(sql);
+        return [...kindReads.map((item) => item.line), ...stated.filter((value) => value.kind === 'year' && !kindReads.some((read) => read.year === value.value)).flatMap((item) => {
+          const read = seasonReads.get(item.value);
+          const applied = new RegExp(`(?:^|[^\\w$])"?(season|season_year|season_id)"?\\s*=\\s*'?${item.value}'?(?![\\d])`, 'i').exec(sql);
+          if (!applied) return [];
+          if (read) return [`caveat: it reads ${item.value} as the ${item.value} season (${applied[1]!.toUpperCase()} ${item.value}), not the calendar year of ${read.column}`];
+          if (!fromWords || /\bseasons?\b/i.test(question)) return [];
+          return [`caveat: it reads ${item.value} as the ${item.value} season (${applied[1]!.toUpperCase()} ${item.value}), not the calendar year`];
+        })];
+      };
+      // A YEAR READ THROUGH THE MODEL'S OWN RULE. "The playoffs of calendar year 2008" written as SEASON = 2007,
+      // because a rule says those rows fall in the calendar year after their SEASON, applies 2008: the answer says how
+      // it read it instead of refusing it as "does not apply 2008" (V12 gate, K4). Without "calendar year" the
+      // statement is set back to SEASON 2008 above, unless that season holds no rows.
       const shiftedYears = (sql: string): Array<{ year: string; column: string; value: string; kinds: string }> => {
         const found: Array<{ year: string; column: string; value: string; kinds: string }> = [];
-        const rules = Object.values(deps.getManifest().manifest?.modeling?.rules ?? {}).filter((rule) => rule.status !== 'deprecated').map((rule) => rule.expression ?? '');
         for (const item of stated.filter((value) => value.kind === 'year')) {
           if (new RegExp(`(?<![0-9])${item.value}(?![0-9])`).test(sql)) continue;
-          for (const rule of rules) {
-            // "Rows whose GAME_ID starts with 4 (40,377 rows) or 5 (349 rows) all fall in the calendar year after their SEASON".
-            const match = /Rows whose ([A-Za-z0-9_$"]+) starts with (.+?) all fall in the calendar year after their ([A-Za-z_]+)/.exec(rule);
-            if (!match) continue;
-            const column = match[3]!;
+          for (const rule of yearRules) {
             const value = String(Number(item.value) - 1);
-            if (!new RegExp(`(^|[^A-Za-z0-9_])"?${column}"?\\s*=\\s*'?${value}'?(?![0-9])`, 'i').test(sql)) continue;
-            const firsts = [...match[2]!.matchAll(/(?:^|,|\bor\b|\band\b)\s*([0-9A-Za-z])(?![0-9A-Za-z,])/g)].map((first) => first[1]!);
-            const kinds = codeKinds.find((item) => item.code.toLowerCase() === match[1]!.replace(/"/g, '').toLowerCase());
-            const names = firsts.map((first) => kinds?.names?.[first]);
-            found.push({ year: item.value, column, value, kinds: names.every(Boolean) ? joinKindNames(names as string[]) : `rows whose ${match[1]!.replace(/"/g, '')} starts with ${orList(firsts)}` });
+            if (!new RegExp(`(^|[^A-Za-z0-9_])"?${rule.column}"?\\s*=\\s*'?${value}'?(?![0-9])`, 'i').test(sql)) continue;
+            found.push({ year: item.value, column: rule.column, value, kinds: kindNamesOf(rule, rule.firsts) });
             break;
           }
         }

@@ -423,6 +423,42 @@ export function readableColumnName(name: string): string {
   return parts.length ? say(parts) : raw;
 }
 
+/** The column names a project lists (TOTAL_POINTS, game_id), and its tables' names, for `readingInLabels`. */
+export function vocabularyNames(vocabulary: VocabularyIndex): { columns: string[]; tables: string[] } {
+  const columns: string[] = [];
+  const tables: string[] = [];
+  for (const entry of vocabulary.entries) {
+    if (entry.kind === 'relation') {
+      tables.push(entry.name, entry.physical?.relation ?? '', entry.model ?? '');
+      columns.push(...(entry.columns ?? []));
+    } else if (entry.kind === 'column' || entry.kind === 'metric' || entry.kind === 'measure' || entry.kind === 'dimension') {
+      columns.push(entry.name, entry.physical?.column ?? '');
+    }
+  }
+  return { columns: columns.filter(Boolean), tables: tables.filter(Boolean) };
+}
+
+const lastPart = (name: string) => (name.split('.').pop() ?? name).replace(/["`[\]]/g, '').trim().toLowerCase();
+
+/**
+ * A READING SAYS A COLUMN THE WAY THE ANSWER DOES: "using TOTAL_POINTS as the measure" reads "using total points as
+ * the measure" (V2, tester V14 Q16), in the words the answer's sentence and table headers use. A name with an
+ * underscore is said in words when it is a column the project lists, or a name written in capitals from words
+ * (GAME_ID); a table's name stays as the Source line writes it, and a qualified name (t.TOTAL_POINTS) or a call
+ * (SUM(...)) is left alone.
+ */
+export function readingInLabels(reading: string, columns: Iterable<string> = [], tables: Iterable<string> = []): string {
+  if (!reading.includes('_')) return reading;
+  const known = new Set([...columns].map(lastPart).filter((name) => name.includes('_')));
+  const tableNames = new Set([...tables].map(lastPart));
+  return reading.replace(/(?<![\w$.])[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+(?![\w$(]|\.[A-Za-z_"])/g, (token) => {
+    const lower = token.toLowerCase();
+    if (tableNames.has(lower)) return token;
+    const capitals = token === token.toUpperCase() && token.split('_').every((part) => /^[A-Z]{2,}$/.test(part));
+    return known.has(lower) || capitals ? readableColumnName(token) : token;
+  });
+}
+
 const capitalized = (text: string) => (text ? `${text.charAt(0).toUpperCase()}${text.slice(1)}` : text);
 /** A sentence ends once: a reading written as a question keeps its question mark ("…in 2015?", never "…in 2015?."). */
 export function endSentence(text: string): string {
@@ -434,7 +470,25 @@ export function readerWords(text: string): string {
   return text.replace(/\bcertified blocks\b/gi, 'certified saved queries').replace(/\bcertified block\b/gi, 'certified saved query');
 }
 
-/** What one row says, without its identifier columns when a name stands beside them. */
+/** English words that end in "key" and name no key. */
+const KEY_WORDS = new Set(['turkey', 'hockey', 'jockey', 'monkey', 'donkey', 'whiskey', 'lackey', 'malarkey']);
+
+/**
+ * A column of identifiers: GAME_ID, TEAM_ID, ID, a surrogate key (`*_KEY`), a key written as one word the way TPC-H
+ * writes them (N_NATIONKEY, C_CUSTKEY, O_ORDERKEY), or one in camel case (playerId, nationKey).
+ */
+export function identifierColumn(column: string): boolean {
+  const bare = column.replace(/["`[\]]/g, '').trim();
+  if (ID_COLUMN.test(bare) || /[a-z0-9](?:Id|ID|Key|KEY)$/.test(bare) && /[a-z]/.test(bare)) return true;
+  const last = (bare.split(/[_\s.]+/).filter(Boolean).pop() ?? '').toLowerCase();
+  return last.length > 3 && last.endsWith('key') && !KEY_WORDS.has(last);
+}
+
+/**
+ * What one row says, without its identifier columns when a name stands beside them: GAME_ID, TEAM_ID, N_NATIONKEY,
+ * and a label's own key (TEAM beside TEAM_NAME). "UNITED STATES: n nationkey 24, total order revenue …" read the
+ * nation's key out as a figure (V2, listing retake F3).
+ */
 function answerColumns(shown: string[], rows: Array<Record<string, unknown>>, metaOf: (column: string) => ResultColumnMeta | undefined): string[] {
   const textLike = (column: string) => {
     const meta = metaOf(column);
@@ -442,7 +496,10 @@ function answerColumns(shown: string[], rows: Array<Record<string, unknown>>, me
     const values = rows.slice(0, 20).map((row) => row[column]).filter((value) => value !== null && value !== undefined && value !== '');
     return values.length > 0 && values.every((value) => typeof value === 'string' && !/^-?\d+(?:\.\d+)?$/.test(value.trim()));
   };
-  const ids = shown.filter((column) => ID_COLUMN.test(column));
+  const stem = (column: string) => column.replace(/["`[\]]/g, '').trim().toLowerCase().replace(NAMING_SUFFIX, '');
+  // A label's key: the column the label names (TEAM beside TEAM_NAME), when it is not itself text.
+  const labelKeys = new Set(shown.filter((column) => LABEL_SUFFIX.test(column.replace(/["`[\]]/g, '').trim()) && textLike(column)).map(stem));
+  const ids = shown.filter((column) => identifierColumn(column) || (labelKeys.has(stem(column)) && !LABEL_SUFFIX.test(column.replace(/["`[\]]/g, '').trim()) && !textLike(column)));
   const named = shown.some((column) => !ids.includes(column) && textLike(column));
   // "2544 · LeBron James · 591" read the player's number aloud; the name says who it is (new-user test V12).
   return named ? shown.filter((column) => !ids.includes(column)) : shown;
@@ -499,7 +556,7 @@ function answerSentence(result: ExecutedRows, shown: string[], metaOf: (column: 
     const meta = metaOf(column);
     const text = formatValue(row[column], meta);
     const bare = column.replace(/["`[\]]/g, '').trim().replace(/\s+/g, '_');
-    return CODE_COLUMN.test(bare) || yearColumn(column, meta, result.rows) || meta?.kind === 'date' ? text : withThousands(text);
+    return CODE_COLUMN.test(bare) || identifierColumn(bare) || yearColumn(column, meta, result.rows) || meta?.kind === 'date' ? text : withThousands(text);
   };
   const labels = labelColumns(columns, result.rows, metaOf).slice(0, 3);
   const figures = columns.filter((column) => !labels.includes(column)).slice(0, 6);
@@ -534,7 +591,8 @@ export function composeAnsweredText(intent: AnalyticalIntentV1, result: Executed
 } = {}): string {
   // THREE PARTS, in this order (new-user test V12): the answer in one sentence, then how the question was read, then
   // one source line. No SQL in the text (the SQL tab shows it), no identifiers read out beside a name.
-  const reading = readerWords(intent.reading || describeIntent(intent, labelFor(vocabulary)));
+  const names = vocabularyNames(vocabulary);
+  const reading = readerWords(readingInLabels(intent.reading || describeIntent(intent, labelFor(vocabulary)), [...names.columns, ...result.columns], names.tables));
   const readingParts: string[] = [extras.readingNote ? endSentence(extras.readingNote) : `I read this as: ${endSentence(reading)}`];
   for (const line of extras.scope ?? []) readingParts.push(endSentence(capitalized(line.trim())));
   const answerParts: string[] = [];

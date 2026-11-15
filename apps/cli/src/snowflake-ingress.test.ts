@@ -1,12 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { request, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { resolveLocalOwner, type AgentRun } from '@zlens/agent';
 import type { QueryExecutor } from '@zlens/connectors';
 import { startLocalServer } from './local-runtime.js';
 import { sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, snowflakeSignedInUser, withSnowflakeUser } from './snowflake-ingress.js';
 import { localPersonIdentity, localPersonName } from './certification-receipt.js';
+import { captureReviewRequiredDraft } from './review-draft-capture.js';
 
 /**
  * ZLens inside Snowflake (the ZLens app): Snowflake signs the person in and names them in
@@ -74,6 +76,25 @@ describe('who is acting, inside Snowflake', () => {
   });
 });
 
+describe('who owns what Ask saves, inside Snowflake (V2, listing retake F4)', () => {
+  const answerRun = { id: 'run-sf-owner', question: 'How many games did the Warriors win in 2016?', requestedMode: 'ask', route: 'answer', status: 'completed', trustState: 'review_required', stopReason: 'completed',
+    startedAt: '2026-11-15T00:00:00Z', completedAt: '2026-11-15T00:00:01Z', steps: [], summary: 'Wins: 67.',
+    artifacts: [{ id: 'answer', kind: 'answer', title: 'Answer', trustState: 'review_required', payload: { kind: 'uncertified', reviewStatus: 'review_required', certification: 'review_required', sql: 'SELECT SUM(win) AS wins FROM team_game_facts WHERE season = 2016', result: { columns: ['wins'], rows: [{ wins: 67 }], rowCount: 1 } } }] } as unknown as AgentRun;
+
+  it('an automatic draft is owned by the signed-in Snowflake user, or by nobody, never by "zlens@local"', () => {
+    const root = mkdtempSync(join(tmpdir(), 'zlens-sf-owner-'));
+    roots.push(root);
+    // The container's own account, as an earlier version persisted it.
+    writeFileSync(join(root, 'dql.config.json'), JSON.stringify({ project: 'sf', identity: { owner: 'zlens@local' } }));
+    const draft = withSnowflakeUser({}, 'ANALYST', () => captureReviewRequiredDraft(root, answerRun));
+    expect(readFileSync(join(root, draft!.path), 'utf-8')).toMatch(/^\s*owner = "ANALYST"$/m);
+    expect(withSnowflakeUser({}, 'ANALYST', () => resolveLocalOwner(root))).toBe('ANALYST');
+    expect(withSnowflakeUser({}, undefined, () => resolveLocalOwner(root))).toBe('');
+    // Outside Snowflake, as before.
+    expect(withSnowflakeUser(undefined, 'ANALYST', () => resolveLocalOwner(root))).toBe('zlens@local');
+  });
+});
+
 describe('the server inside Snowflake', () => {
   async function start(host = '127.0.0.1') {
     const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-sf-ingress-'));
@@ -112,6 +133,13 @@ describe('the server inside Snowflake', () => {
     expect(await statusWithHost(call.port, '/api/connections', { 'Sf-Context-Current-User': 'ZLENS_TEST_EAST', Origin: `https://${host}`, Host: host })).toBe(200);
     const fromElsewhere = await call('/api/connections', { 'Sf-Context-Current-User': 'ZLENS_TEST_EAST', Origin: 'https://evil.example' });
     expect(fromElsewhere.status).toBe(403);
+  });
+
+  it('offers the signed-in user as the owner, never the container\'s own account (V2, listing retake F4)', async () => {
+    const call = await start();
+    const identity = await call('/api/identity', { 'Sf-Context-Current-User': 'ZLENS_TEST_EAST' });
+    expect(identity.status).toBe(200);
+    expect(await identity.json()).toMatchObject({ owner: 'ZLENS_TEST_EAST' });
   });
 
   it('starts on every interface with no shared token or origin list: Snowflake signs people in', async () => {

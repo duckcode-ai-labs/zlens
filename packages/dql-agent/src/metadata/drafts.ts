@@ -476,8 +476,12 @@ export function upsertReviewRequiredAnswerDraft(
   const atSlug = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : undefined;
   const slugIsAskDraft = atSlug !== undefined && automaticAskDraftState(atSlug) !== undefined;
   // The same question by its asked words, when the reading it is filed under came out worded differently.
+  // By its name, when it was filed in another drafts folder (under a Domain then, under none now, or the other way
+  // round): the answer names that draft and says how often it was asked, never a second draft of the same name
+  // (V2, tester V14: the Raptors answer named the old draft without "asked N times").
   const sameQuestion = slugIsAskDraft ? relativePath
-    : findReviewDraftByQuestion(projectRoot, rec.question) ?? (rec.askedQuestion ? findReviewDraftByQuestion(projectRoot, rec.askedQuestion) : undefined);
+    : findReviewDraftByQuestion(projectRoot, rec.question) ?? (rec.askedQuestion ? findReviewDraftByQuestion(projectRoot, rec.askedQuestion) : undefined)
+      ?? (atSlug === undefined ? findAutomaticDraftByName(projectRoot, slug) : undefined);
   if (sameQuestion) {
     const existingPath = join(projectRoot, sameQuestion);
     const existing = readFileSync(existingPath, 'utf-8');
@@ -498,7 +502,7 @@ export function upsertReviewRequiredAnswerDraft(
   }
   let freeSlug = slug;
   let target = { filePath, relativePath };
-  for (let n = 2; existsSync(target.filePath); n += 1) {
+  for (let n = 2; existsSync(target.filePath) || draftNameTaken(projectRoot, freeSlug); n += 1) {
     freeSlug = `${slug}_${n}`;
     target = resolveGeneratedDraftPath(projectRoot, { slug: freeSlug, proposedDomain });
   }
@@ -641,6 +645,27 @@ export function clearAutomaticAskDrafts(projectRoot: string): { removed: string[
     } catch { kept += 1; }
   }
   return { removed, kept };
+}
+
+/** The automatic Ask draft saved under this name in any drafts folder. */
+export function findAutomaticDraftByName(projectRoot: string, slug: string): string | undefined {
+  let found: string | undefined;
+  visitDraftFiles(projectRoot, (relativePath, filePath) => {
+    if (relativePath.split('/').pop() !== `${slug}.dql`) return;
+    try {
+      if (automaticAskDraftState(readFileSync(filePath, 'utf-8')) !== undefined) { found = relativePath; return true; }
+    } catch { /* an unreadable file is not a draft to reuse */ }
+  });
+  return found;
+}
+
+/** Whether any drafts folder already holds a saved query of this name. */
+function draftNameTaken(projectRoot: string, slug: string): boolean {
+  let taken = false;
+  visitDraftFiles(projectRoot, (relativePath) => {
+    if (relativePath.split('/').pop() === `${slug}.dql`) { taken = true; return true; }
+  });
+  return taken;
 }
 
 /** The automatic draft already saved for this question (by its words, case and closing punctuation ignored). */
