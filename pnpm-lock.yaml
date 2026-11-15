@@ -91,6 +91,9 @@ importers:
       openai:
         specifier: ^6.44.0
         version: 6.44.0(zod@4.6.7)
+      tar-stream:
+        specifier: ^2.2.0
+        version: 2.2.0
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.13

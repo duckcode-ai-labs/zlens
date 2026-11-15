@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { lstat, open, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
+import { packProject, unpackProject } from './project-archive.js';
 
 /**
  * Backups for the ZLens app for Snowflake (approved design B1–B6, 2026-11-09).
@@ -16,6 +17,9 @@ import { join, relative } from 'node:path';
  *
  * Checked live 2026-11-09: the app can snapshot its own volume and restore it; the container can PUT a file
  * into a customer stage granted READ, WRITE to the app, and the file outlives DROP APPLICATION.
+ *
+ * The app's image has no tar, gzip, sync or shell (distroless, #331): the export is written and unpacked inside
+ * Node (project-archive.ts), and the files are flushed with fsync before a snapshot (V14).
  */
 
 export type BackupQuery = (sql: string) => Promise<Array<Record<string, unknown>>>;
@@ -58,15 +62,31 @@ export interface SnowflakeAppBackupsOptions {
   keepSnapshots?: number;
   keepExports?: number;
   now?: () => Date;
-  /** Runs a command (tar, sync); replaced in tests. */
-  run?: (command: string, args: string[]) => void;
   /** Waits; replaced in tests. */
   sleep?: (ms: number) => Promise<void>;
 }
 
 export const SNAPSHOT_PREFIX = 'ZLENS_BACKUP_';
-/** What a project export leaves out: what ZLens rebuilds by itself, and the drivers it installs. */
-const EXPORT_EXCLUDES = ['./.dql/cache', './.dql/connectors', './.dql/runtimes', './node_modules', './.git', './.zlens-restore-*'];
+/**
+ * What a project export leaves out: what ZLens rebuilds by itself, the drivers it installs, and a restore still
+ * being unpacked (`.zlens-restore-*`, top level only). Paths are from the project folder, as `tar -C ROOT .`
+ * named them. `.dql/history` and the rest of `.dql` stay in.
+ */
+export const EXPORT_EXCLUDES = ['./.dql/cache', './.dql/connectors', './.dql/runtimes', './node_modules', './.git', './.zlens-restore-*'];
+
+/** Whether an export leaves out this path (relative to the project folder, with `/`). */
+export function excludedFromExport(path: string): boolean {
+  const clean = path.replace(/^\.\//, '');
+  return EXPORT_EXCLUDES.some((exclude) => {
+    const pattern = exclude.replace(/^\.\//, '');
+    if (pattern.endsWith('*')) {
+      const prefix = pattern.slice(0, -1);
+      const top = clean.split('/')[0]!;
+      return !prefix.includes('/') && top.startsWith(prefix);
+    }
+    return clean === pattern || clean.startsWith(`${pattern}/`);
+  });
+}
 /** What a restore keeps: the drivers ZLens installed, which the copy leaves out. */
 const KEPT_IN_DQL = new Set(['connectors', 'runtimes']);
 const STATE_FILE = join('.dql', 'local', 'snowflake-app-backup.json');
@@ -95,7 +115,6 @@ export class SnowflakeAppBackups {
   private readonly keepSnapshots: number;
   private readonly keepExports: number;
   private readonly now: () => Date;
-  private readonly run: (command: string, args: string[]) => void;
   private readonly sleep: (ms: number) => Promise<void>;
   private busy: Promise<unknown> | undefined;
 
@@ -107,7 +126,6 @@ export class SnowflakeAppBackups {
     this.keepSnapshots = options.keepSnapshots ?? 7;
     this.keepExports = options.keepExports ?? 14;
     this.now = options.now ?? (() => new Date());
-    this.run = options.run ?? ((command, args) => { execFileSync(command, args, { stdio: 'ignore' }); });
     this.sleep = options.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms)));
   }
 
@@ -132,7 +150,7 @@ export class SnowflakeAppBackups {
   /** Snapshot the volume now, wait until Snowflake can restore from it, and keep the newest `keepSnapshots`. */
   snapshotNow(): Promise<SnowflakeBackupSnapshot> {
     return this.once(async () => {
-      try { this.run('sync', []); } catch { /* flushing is best effort; SQLite's journal covers the rest */ }
+      await this.flushProject();
       const name = `${SNAPSHOT_PREFIX}${stamp(this.now())}`;
       await this.options.query(`CREATE SNAPSHOT IF NOT EXISTS ${this.schema}.${name} FROM SERVICE ${this.options.service} VOLUME "workspace" INSTANCE 0 COMMENT = 'ZLens daily backup'`);
       let snapshot: SnowflakeBackupSnapshot | undefined;
@@ -180,11 +198,11 @@ export class SnowflakeAppBackups {
     if (!iso) return true;
     const since = Date.parse(iso);
     // The backup's own record changes with every backup: it is not a change to the project.
-    const skip = new Set([...EXPORT_EXCLUDES.map((path) => path.replace(/^\.\//, '')), STATE_FILE]);
     const walk = (dir: string): boolean => {
       for (const name of readdirSync(dir)) {
         const path = join(dir, name);
-        if (skip.has(relative(this.options.workspace, path))) continue;
+        const rel = relative(this.options.workspace, path).split('\\').join('/');
+        if (rel === STATE_FILE.split('\\').join('/') || excludedFromExport(rel)) continue;
         const info = statSync(path);
         if (info.isDirectory() ? walk(path) : info.mtimeMs > since) return true;
       }
@@ -203,7 +221,7 @@ export class SnowflakeAppBackups {
       const dir = mkdtempSync(join(tmpdir(), 'zlens-export-'));
       const file = `zlens-${this.app.toLowerCase()}-${stamp(this.now())}.tar.gz`;
       try {
-        this.run('tar', ['-czf', join(dir, file), ...EXPORT_EXCLUDES.map((path) => `--exclude=${path}`), '-C', this.options.workspace, '.']);
+        await packProject(this.options.workspace, join(dir, file), excludedFromExport);
         await this.options.query(`PUT 'file://${join(dir, file)}' @${stage} AUTO_COMPRESS = FALSE OVERWRITE = TRUE`);
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -267,12 +285,12 @@ export class SnowflakeAppBackups {
         const archive = join(dir, file);
         if (!existsSync(archive)) throw new Error(`Snowflake did not return ${file}.`);
         // Unpack beside the project, on the same volume, and swap only once the whole copy is out: a copy that
-        // fails to unpack leaves the project as it was. (ZLens runs as a non-root user, so tar must not try to
-        // set times on folders it does not own: -m and --no-overwrite-dir.)
+        // fails to unpack, or is refused (a path outside the project, a link or a device), leaves the project as
+        // it was. Nothing changes owner, and files take the time they are unpacked.
         const staging = join(this.options.workspace, `.zlens-restore-${stamp(this.now())}`);
         mkdirSync(staging, { recursive: true });
         try {
-          this.run('tar', ['-xzf', archive, '-C', staging, '-m', '--no-same-owner', '--no-overwrite-dir']);
+          await unpackProject(archive, staging);
         } catch (error) {
           rmSync(staging, { recursive: true, force: true });
           throw new Error(`The copy ${file} did not unpack; the project is unchanged. ${error instanceof Error ? error.message : String(error)}`);
@@ -302,6 +320,33 @@ export class SnowflakeAppBackups {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+  }
+
+  /**
+   * Flush the project's files to the volume before Snowflake snapshots it (what `sync` did; the image has no
+   * sync). Best effort: SQLite's journal covers what a flush misses.
+   */
+  private async flushProject(): Promise<void> {
+    const flush = async (path: string): Promise<void> => {
+      try {
+        const handle = await open(path, 'r');
+        try { await handle.sync(); } finally { await handle.close(); }
+      } catch { /* best effort */ }
+    };
+    const walk = async (rel: string): Promise<void> => {
+      const dir = rel ? join(this.options.workspace, rel) : this.options.workspace;
+      let names: string[];
+      try { names = await readdir(dir); } catch { return; }
+      for (const name of names) {
+        const child = rel ? `${rel}/${name}` : name;
+        if (excludedFromExport(child)) continue;
+        const info = await lstat(join(this.options.workspace, child)).catch(() => undefined);
+        if (info?.isDirectory()) await walk(child);
+        else if (info?.isFile()) await flush(join(this.options.workspace, child));
+      }
+      await flush(dir);
+    };
+    await walk('');
   }
 
   private readState(): { lastSnapshotAt?: string; lastExportAt?: string; restoredFrom?: string; restoredAt?: string } {

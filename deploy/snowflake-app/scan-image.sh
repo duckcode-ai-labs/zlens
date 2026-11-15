@@ -23,6 +23,30 @@ docker run --rm --entrypoint /nodejs/bin/node "$image" -e '
   if (found.length) { console.error("not minimal, found: " + found.join(", ")); process.exit(1); }
   console.log("no shell, no package manager");'
 
+# V14: the copy to the backup stage ran tar, gzip and sync, which this image does not have. Every program the
+# app code runs must be in the image, or be a laptop-only use listed in check-programs.mjs.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "== Every program the app code runs is in the image"
+docker run --rm -v "$here/check-programs.mjs:/zlens-checks/check-programs.mjs:ro" --entrypoint /nodejs/bin/node "$image" \
+  /zlens-checks/check-programs.mjs /opt/dql
+
+echo "== The project copy for the backup stage is made and restored in the image"
+docker run --rm --entrypoint /nodejs/bin/node "$image" --input-type=module -e '
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { packProject, unpackProject } = await import("/opt/dql/dist/project-archive.js");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "zlens-copy-"));
+  fs.mkdirSync(path.join(root, ".dql", "history"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".dql", "history", "v1.dql"), "an earlier version");
+  fs.writeFileSync(path.join(root, "dql.config.json"), "{}");
+  const file = root + ".tar.gz";
+  await packProject(root, file, () => false);
+  const into = fs.mkdtempSync(path.join(os.tmpdir(), "zlens-restore-"));
+  await unpackProject(file, into);
+  if (fs.readFileSync(path.join(into, ".dql", "history", "v1.dql"), "utf8") !== "an earlier version") process.exit(1);
+  console.log("made and restored " + fs.statSync(file).size + " bytes with no tar or gzip");'
+
 echo "== Trivy: fixable critical and high CVEs"
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v zlens-trivy-cache:/root/.cache "$trivy_image" image \
   --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 --no-progress "$image"
