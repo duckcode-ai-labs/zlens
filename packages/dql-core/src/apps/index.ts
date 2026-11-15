@@ -161,6 +161,7 @@ export type {
 
 export {
   appNameFromGoal,
+  appNameFromGoalParts,
   APP_NAME_FROM_GOAL_MAX,
   APP_SOURCE_POLICY,
   createAppBuildDraft,

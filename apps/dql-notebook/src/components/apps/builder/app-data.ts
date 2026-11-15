@@ -199,9 +199,37 @@ export function dataTrustLabel(item: Pick<AppBlockRecommendation, 'trust' | 'sta
  * the owner keeps the data, the certifier vouched for it, and they are often
  * not the same person. Empty when no owner is recorded.
  */
-export function ownerWords(item: Pick<AppBlockRecommendation, 'owner'> & { ownerName?: string | null }): string {
-  const owner = item.ownerName?.trim() || certifierDisplayName(item.owner) || item.owner?.trim();
+export function ownerWords(
+  item: Pick<AppBlockRecommendation, 'owner'> & { ownerName?: string | null },
+  options: { snowflake?: boolean } = {},
+): string {
+  // In the app for Snowflake an identity of the server's own (its container user, "node@local", read "Node") or
+  // a laptop placeholder ("local") names nobody: the owner is said only when it is a real one (V13 retest).
+  const keep = (owner: string | null | undefined) => (options.snowflake && isPlaceholderOwner(owner) ? undefined : owner ?? undefined);
+  const named = keep(item.ownerName);
+  const identity = keep(item.owner);
+  const owner = named?.trim() || certifierDisplayName(identity) || identity?.trim();
   return owner ? `Owner: ${owner}` : '';
+}
+
+/** Owner names that are not a person: laptop placeholders, and a server's own user ("node@local"). */
+const PLACEHOLDER_OWNERS = new Set(['local', 'node', 'root', 'owner', 'unknown', 'anonymous', 'guest', 'nobody', 'app', 'zlens']);
+
+/** Whether an owner identity names nobody: empty, a placeholder ("local"), or a machine user ("node@local"). */
+export function isPlaceholderOwner(owner: string | null | undefined): boolean {
+  const value = owner?.trim().toLowerCase() ?? '';
+  return !value || value.endsWith('@local') || PLACEHOLDER_OWNERS.has(value);
+}
+
+/**
+ * The owner an App card names. In the app for Snowflake only a real owner (the Snowflake user who made it), or
+ * nothing: never "local" or the server's own user (V13 retest: shared Apps carried a "local" tag). Elsewhere the
+ * App's recorded owner, as before.
+ */
+export function appCardOwner(app: { ownerName?: string | null; owners?: readonly string[] | null }, snowflake: boolean): string | undefined {
+  if (!snowflake) return app.ownerName ?? app.owners?.[0] ?? 'owner@local';
+  const owner = [app.ownerName, ...(app.owners ?? [])].find((candidate) => !isPlaceholderOwner(candidate));
+  return owner?.trim() || undefined;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appBuildPreviewIntentFingerprint, appNameFromGoal, applyAppBuildDraftOperations, createAppBuildDraft, packDashboardLayoutItems } from './app-build-draft.js';
+import { appBuildPreviewIntentFingerprint, appNameFromGoal, appNameFromGoalParts, applyAppBuildDraftOperations, createAppBuildDraft, packDashboardLayoutItems } from './app-build-draft.js';
 import { parseDashboardDocument } from './dashboard-document.js';
 
 describe('AppBuildDraft', () => {
@@ -550,11 +550,26 @@ describe('appNameFromGoal', () => {
     expect(appNameFromGoal('Show me revenue by month')).toBe('Revenue by month');
     const cut = appNameFromGoal('Build a dashboard that shows revenue by region for the sales team and the trend of orders over the past twelve months');
     expect(cut.length).toBeLessThanOrEqual(60);
-    expect(cut).toBe('Revenue by region for the sales team and the trend of orders');
+    // V13: the first whole part of the list, not the description cut at 60 characters ("… and the trend of orders").
+    expect(cut).toBe('Revenue by region for the sales team');
     for (const goal of [v12, 'Track the Lakers top rebounders in 2009 and compare them with the Celtics over the same seasons']) {
       expect(appNameFromGoal(goal)).not.toMatch(/\b(?:in|the|of|to|and|from|did)$/i);
     }
     expect(appNameFromGoal('Warriors 2016 scoring')).toBe('Warriors 2016 scoring');
+  });
+
+  // V13 retest: "Top scorers in the 2016 playoffs and how many points", "Compare how the Golden State Warriors
+  // scored per game", "Give a coach one page with the Warriors' regular-season" and the fragment "Led the Los
+  // Angeles Lakers in rebounds in the 2009 season".
+  it('names the tester\'s five descriptions with complete titles, never cut between words', () => {
+    const named = (goal: string) => appNameFromGoalParts(goal);
+    expect(named('Help a Warriors fan see how the Golden State Warriors did in each season')).toEqual({ name: 'Golden State Warriors by season', cut: false });
+    expect(named('Show the top scorers in the 2016 playoffs and how many points each one scored')).toEqual({ name: 'Top scorers in the 2016 playoffs', cut: false });
+    expect(named('Compare how the Golden State Warriors scored per game in the 2016 regular season and in the 2016 playoffs')).toEqual({ name: 'Golden State Warriors points per game in 2016 regular season', cut: false });
+    expect(named('Show who led the Los Angeles Lakers in rebounds in the 2009 season')).toEqual({ name: 'Who led the Los Angeles Lakers in rebounds in 2009', cut: false });
+    expect(named("Give a coach one page with the Warriors' regular-season wins from 2014 to 2018 and their 2016 points per game in the regular season and the playoffs")).toEqual({ name: "Warriors' regular-season wins, 2014–2018", cut: false });
+    // With no whole part that fits, the name is cut between words and says so: the plan's title replaces it.
+    expect(named('Supercalifragilistic expialidocious analytics overview of everything everywhere all at once forever')).toMatchObject({ cut: true });
   });
 
   it('is the draft name when no name was given; a given name wins', () => {

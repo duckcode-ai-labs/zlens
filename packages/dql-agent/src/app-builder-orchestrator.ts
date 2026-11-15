@@ -18,6 +18,15 @@ import {
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
 import { readPlannerJson } from './app-builder-planner-json.js';
 import { readDashboardVizStyle, type DashboardVizStyle } from '@zlens/core';
+import {
+  namedInRequest,
+  namedInRequestFirst,
+  questionGroundedInRequest,
+  readableSourceTitle,
+  sourceAnswersQuestion,
+  sourceEvidenceAnswersQuestion,
+  subjectWords,
+} from './app-builder-source-match.js';
 
 export type AppBuilderComponentRole = AppBuildRequirement['role'];
 export type AppBuilderComponentView = 'kpi' | 'line' | 'bar' | 'table';
@@ -103,6 +112,11 @@ export interface AppBuilderBuildBrief {
   selectedSourceIds: string[];
   candidateSourceIds: string[];
   warnings: string[];
+  /**
+   * The App's name in the planner's words: a short complete title ("Warriors scoring, 2016"), never the start
+   * of the description cut off (V13). Absent when the planner gave none it could keep.
+   */
+  appTitle?: string;
 }
 
 export interface AppBuilderPlannerCompletionInput {
@@ -267,13 +281,17 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
       }
     }
   }
-  const { parsed, requirements, truncated } = reply;
+  const { parsed, truncated } = reply;
   if (!parsed) {
     throw new Error('APP_BUILD_PLANNER_OUTPUT_INVALID: the configured App Builder provider did not return valid JSON for the build brief.');
   }
-  if (requirements.length === 0) {
+  if (reply.requirements.length === 0) {
     throw new Error('APP_BUILD_PLANNER_OUTPUT_INVALID: the configured App Builder provider did not return grounded requirements.');
   }
+  // A question the planner wrote about something the request never names is not the person's question (V13:
+  // "the Golden State Warriors' points per game" for "the top scorers in the 2016 playoffs"): it reads as the
+  // request, and no pick covers it by fields the planner chose for its own question.
+  const requirements = groundedRequirements(reply.requirements, prompt);
   const providerId = typeof completion === 'string'
     ? undefined
     : appBuilderPlannerProviderId(completion?.providerId);
@@ -305,7 +323,8 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     dimensions: [],
     filters: [],
   }));
-  return ensureAppBuildStructure(ensureRequiredSources({
+  const appTitle = plannerAppTitle(objectValue(parsed.frame)?.title ?? parsed.title, prompt);
+  return ensureAppBuildStructure(withCertifiedAnswers(ensureRequiredSources({
     version: 1,
     planningMode: 'ai',
     plannerProvenance: {
@@ -325,7 +344,118 @@ export async function planAppBuildBrief(input: PlanAppBuildBriefInput): Promise<
     selectedSourceIds: Array.from(new Set(components.map((component) => component.sourceId))),
     candidateSourceIds: candidates.map((candidate) => candidate.sourceId),
     warnings: truncated ? [plannedComponents.length === 0 && components.length > 0 ? APP_BUILDER_TRUNCATED_PICKED_NOTE : APP_BUILDER_TRUNCATED_NOTE] : [],
-  }, candidates, requiredSourceIds), candidates, parsed);
+    ...(appTitle ? { appTitle } : {}),
+  }, candidates, requiredSourceIds), candidates, prompt), candidates, parsed);
+}
+
+/**
+ * The planner's requirements, each the person's own question: one that names something the request never
+ * names (see `questionGroundedInRequest`) reads as the request itself, with no fields of the planner's.
+ */
+function groundedRequirements(requirements: AppBuildRequirement[], prompt: string): AppBuildRequirement[] {
+  const asked = prompt.replace(/\s+/g, ' ').trim();
+  const question = asked.charAt(0).toUpperCase() + asked.slice(1);
+  return requirements.map((requirement) => questionGroundedInRequest(requirement.question, prompt)
+    ? requirement
+    : { ...requirement, question: question.length > 300 ? `${question.slice(0, 297)}…` : question, measures: [], dimensions: [], filters: [] });
+}
+
+/** Words an App title never ends on: a title cut after one reads as a sentence cut off. */
+const APP_TITLE_TAIL_WORDS = new Set([
+  'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'from', 'for', 'with', 'by', 'and', 'or', 'but', 'as', 'did', 'do',
+  'does', 'how', 'what', 'which', 'who', 'each', 'every', 'per', 'vs', 'versus', 'their', 'its', 'our', 'my', 'your',
+  'is', 'are', 'was', 'were', 'that', 'than', 'into', 'over', 'across', 'between', 'about', 'see', 'show', 'shown',
+]);
+
+/** The longest App title the planner may give. */
+export const APP_TITLE_MAX = 60;
+
+/**
+ * The App's name from the planner (V13: names were the description cut at 60 characters, "Give a coach one page
+ * with the Warriors' regular-season"). Kept only as a short complete title: at most 60 characters and 9 words,
+ * not a sentence, not ending on a word that needs more after it, and not the start of the request cut off.
+ */
+export function plannerAppTitle(raw: unknown, request: string): string | undefined {
+  if (typeof raw !== 'string' || raw.length > 400 || raw.includes('?')) return undefined;
+  // Quotes around it and punctuation after it go, by a loop: linear on any reply.
+  const spaced = raw.replace(/\s+/g, ' ').trim();
+  let start = 0;
+  let end = spaced.length;
+  while (start < end && '"\'“”‘’'.includes(spaced[start]!)) start += 1;
+  while (end > start && '"\'“”‘’.!:;,'.includes(spaced[end - 1]!)) end -= 1;
+  const title = spaced.slice(start, end).trim();
+  if (title.length < 3 || title.length > APP_TITLE_MAX || title.split(' ').length > 9) return undefined;
+  if (/[{}<>`]/.test(title)) return undefined;
+  const last = title.split(' ').pop()!.toLowerCase().replace(/[^a-z]/g, '');
+  if (APP_TITLE_TAIL_WORDS.has(last)) return undefined;
+  const plain = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const asked = plain(request);
+  if (plain(title).length < asked.length && asked.startsWith(plain(title))) return undefined;
+  return title.charAt(0).toUpperCase() + title.slice(1);
+}
+
+/**
+ * Each question still not covered gets the certified source whose own name and description answer it as it is
+ * (V13 retest: "Warriors Ppg Regular Vs Playoffs 2016" was listed below a plan that called that very question a
+ * gap, and a two-part request got a source for one part only). The source shows its result as it was certified.
+ */
+function withCertifiedAnswers(
+  brief: AppBuilderBuildBrief,
+  candidates: AppSourceCatalogRecord[],
+  prompt: string,
+): AppBuilderBuildBrief {
+  const covered = new Set(brief.components.flatMap((component) => component.requirementIds));
+  const taken = new Set(brief.components.map((component) => component.id));
+  const components = [...brief.components];
+  const certified = candidates.filter((candidate) => candidate.trust === 'certified' && candidate.eligibility.localPreview);
+  for (const requirement of brief.requirements) {
+    if (covered.has(requirement.id) || components.length >= 6 || !questionGroundedInRequest(requirement.question, prompt)) continue;
+    const ranked = certified
+      .map((candidate, index) => ({ candidate, index, match: sourceAnswersQuestion(requirement.question, candidate) }))
+      .filter((entry) => entry.match)
+      .sort((left, right) => Number(right.match === 'exact') - Number(left.match === 'exact') || left.index - right.index);
+    for (const { candidate } of ranked) {
+      const component = certifiedAnswerComponent(candidate, requirement, taken);
+      if (!component || !plannedComponentCoversRequirement(component, requirement, candidate)) continue;
+      taken.add(component.id);
+      components.push(component);
+      covered.add(requirement.id);
+      break;
+    }
+  }
+  if (components.length === brief.components.length) return brief;
+  return {
+    ...brief,
+    components,
+    selectedSourceIds: Array.from(new Set(components.map((component) => component.sourceId))),
+  };
+}
+
+/** A tile showing a certified source's result as it is (a saved query), or its best field query (a Dataset). */
+function certifiedAnswerComponent(
+  candidate: AppSourceCatalogRecord,
+  requirement: AppBuildRequirement,
+  taken: Set<string>,
+): AppBuilderPlannedComponent | undefined {
+  const descriptor = candidate.capabilities.dataset;
+  let id = `certified-${candidate.sourceId.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'source'}`;
+  for (let suffix = 2; taken.has(id); suffix += 1) id = `${id.replace(/-\d+$/, '')}-${suffix}`;
+  const query = descriptor && !descriptor.result ? deterministicDatasetQuery(descriptor, requirement, requirement.role) : undefined;
+  if (descriptor && !descriptor.result && !query) return undefined;
+  const grouped = descriptor ? datasetPhysicalFields(descriptor).some((field) => field.role !== 'attribute') : true;
+  const view: AppBuilderComponentView = requirement.role === 'detail' || requirement.role === 'evidence' || requirement.role === 'narrative'
+    ? 'table'
+    : requirement.role === 'kpi' && !grouped ? 'kpi' : requirement.role === 'trend' ? 'line' : 'bar';
+  return {
+    id,
+    title: readableSourceTitle(candidate.title),
+    sourceId: candidate.sourceId,
+    ...(query ? { query } : {}),
+    requirementIds: [requirement.id],
+    role: view === 'kpi' ? 'kpi' : view === 'table' ? 'detail' : view === 'line' ? 'trend' : 'breakdown',
+    view,
+    rationale: deterministicRationale(requirement.question, candidate),
+  };
 }
 
 /** What a tile shows: its data, its query, and whether it is a table or a chart, whatever its title. */
@@ -443,8 +573,8 @@ function ensureRequiredSources(
   const byId = new Map(candidates.map((candidate) => [candidate.sourceId, candidate]));
   const warnings = [...brief.warnings];
   const requirementsById = new Map(brief.requirements.map((requirement) => [requirement.id, requirement]));
-  const components = brief.components.map((component) => {
-    if (component.requirementIds.length === 0) return component;
+  const components = brief.components.flatMap((component): AppBuilderPlannedComponent[] => {
+    if (component.requirementIds.length === 0) return [component];
     const candidate = byId.get(component.sourceId);
     const requirementIds = component.requirementIds.filter((requirementId) => {
       const requirement = requirementsById.get(requirementId);
@@ -452,12 +582,22 @@ function ensureRequiredSources(
     });
     const removed = component.requirementIds.filter((requirementId) => !requirementIds.includes(requirementId));
     if (removed.length) {
-      warnings.push(partialCoverageNote(component.title, removed.flatMap((requirementId) => {
+      const questions = removed.flatMap((requirementId) => {
         const requirement = requirementsById.get(requirementId);
         return requirement ? [requirement.question] : [];
-      }), requirementIds.length, brief.requirements.length));
+      });
+      // A pick that answers none of the questions it was picked for is left out, so it is never listed beside
+      // them as a gap (V13 retest: every plan said its own pick "doesn't answer what you asked"). Data the
+      // author added stays, and the note says so.
+      // (The keyword planner's picks are suggestions beside notes, not gaps: they stay, as before.)
+      const added = requiredSourceIds.includes(component.sourceId);
+      if (requirementIds.length === 0 && brief.planningMode === 'ai' && !added) {
+        warnings.push(leftOutNote(component.title, questions, brief.requirements.length));
+        return [];
+      }
+      warnings.push(partialCoverageNote(component.title, questions, requirementIds.length, brief.requirements.length, brief.planningMode === 'ai' && added));
     }
-    return requirementIds.length === component.requirementIds.length ? component : { ...component, requirementIds };
+    return [requirementIds.length === component.requirementIds.length ? component : { ...component, requirementIds }];
   });
   const componentIds = new Set(components.map((component) => component.id));
   for (const sourceId of requiredSourceIds) {
@@ -833,15 +973,77 @@ function componentSatisfiesRequirement(
   requirement: AppBuildRequirement,
   candidate: AppSourceCatalogRecord,
 ): boolean {
+  return plannedComponentCoversRequirement(component, requirement, candidate);
+}
+
+/**
+ * Whether a planned tile answers a question: it shows the question's declared fields (its field query, or a
+ * saved query's result as it is), and those fields are the question's own. They are its own when the question
+ * names them, when the tile's query names every word of a question with no declared fields, or when the
+ * source's own name and description answer the question (V13 retest: "How did the Golden State Warriors
+ * perform in each season?" by WINS and SEASON from "Warriors Regular Season Wins 2014 2018", and "Who led the
+ * Lakers in rebounds in 2009?" by TOTAL_REBOUNDS, were each called a gap of their own pick). A question that
+ * names another measure of the source than the tile shows is never answered by it ("Profit margin" by revenue).
+ * The server checks proposals with the same rule, so a pick is never also listed as a gap.
+ */
+export function plannedComponentCoversRequirement(
+  component: Pick<AppBuilderPlannedComponent, 'query'>,
+  requirement: AppBuildRequirement,
+  candidate: AppSourceCatalogRecord,
+): boolean {
   const descriptor = candidate.capabilities.dataset;
-  if (!candidateSatisfiesStructuredRequirement(requirement, candidate)) {
-    // A question with no declared fields (the keyword planner's) is covered
-    // when the tile's own query names every word that matters in it:
-    // "Top 10 regions by net amount" by net_amount grouped by region.
-    const structured = requirement.measures.length > 0 || requirement.dimensions.length > 0 || requirement.filters.length > 0;
-    if (structured || !descriptor || !component.query || !datasetQueryNamesQuestion(requirement.question, component.query)) return false;
+  const structured = requirement.measures.length > 0 || requirement.dimensions.length > 0 || requirement.filters.length > 0;
+  const exact = sourceAnswersQuestion(requirement.question, candidate) === 'exact';
+  const shown = component.query
+    ? [...component.query.measures.map((selection) => selection.measure), ...component.query.dimensions.flatMap((dimension) => [dimension.field, dimension.timeGrain ?? ''])]
+    : [];
+  const ownWords = (exact || (structured && sourceEvidenceAnswersQuestion(requirement.question, candidate, shown)))
+    && !namesAnotherMeasure(requirement.question, component.query, descriptor);
+  // A filter on a field the data does not have is one its rows already keep to when its own words say so
+  // ("the Warriors" for a saved query of the Warriors' wins).
+  const effective = ownWords && descriptor
+    ? { ...requirement, filters: requirement.filters.filter((field) => datasetHasField(descriptor, field)) }
+    : requirement;
+  if (descriptor) {
+    if (component.query) {
+      if (!datasetPlannedQueryCoversRequirement(component.query, effective, descriptor)) return false;
+    } else {
+      // A saved query's result as it is: the question's fields are its columns, or its own words answer it exactly.
+      if (!descriptor.result) return false;
+      if (!datasetResultCoversRequirement(effective, descriptor) && !exact) return false;
+    }
   }
-  return !descriptor || Boolean(component.query && datasetPlannedQueryCoversRequirement(component.query, requirement, descriptor));
+  if (candidateSatisfiesStructuredRequirement(effective, candidate)) return true;
+  // A question with no declared fields (the keyword planner's) is covered
+  // when the tile's own query names every word that matters in it:
+  // "Top 10 regions by net amount" by net_amount grouped by region.
+  if (!structured && descriptor && component.query && datasetQueryNamesQuestion(requirement.question, component.query)) return true;
+  return ownWords;
+}
+
+/** Whether a Dataset has a field or measure by this name. */
+function datasetHasField(descriptor: DatasetDescriptor, name: string): boolean {
+  return [...datasetMeasures(descriptor), ...datasetPhysicalFields(descriptor)]
+    .some((field) => field.status === 'approved' && sameDatasetName(name, field.name, field.qualifiedId));
+}
+
+/** Whether a saved query's result, as it is, has every field the question declares. */
+function datasetResultCoversRequirement(requirement: AppBuildRequirement, descriptor: DatasetDescriptor): boolean {
+  return [...requirement.measures, ...requirement.dimensions, ...requirement.filters].every((field) => datasetHasField(descriptor, field));
+}
+
+/**
+ * Whether the question names a measure of the source that the tile does not show, and none it does: "Profit
+ * margin" over a tile of revenue from data with both.
+ */
+function namesAnotherMeasure(question: string, query: TileQuery | undefined, descriptor: DatasetDescriptor | undefined): boolean {
+  if (!descriptor || !query) return false;
+  const asked = subjectWords(question);
+  const shown = new Set(query.measures.flatMap((selection) => Array.from(subjectWords(selection.measure.replace(/^(?:min|max|avg|sum|count)_/i, '')))));
+  if (Array.from(shown).some((word) => asked.has(word))) return false;
+  return datasetMeasures(descriptor)
+    .filter((measure) => measure.status === 'approved' && !query.measures.some((selection) => sameDatasetName(selection.measure, measure.name, measure.qualifiedId)))
+    .some((measure) => Array.from(subjectWords(measure.name.replace(/^(?:min|max|avg|sum|count)_/i, ''))).some((word) => !shown.has(word) && asked.has(word)));
 }
 
 /** Words about how to show a number, not which number: "top 10 … as a KPI". */
@@ -1037,11 +1239,25 @@ export function sourceKindAndTrust(candidate: Pick<AppSourceCatalogRecord, 'kind
 
 const RATIONALE_IGNORED_WORDS = new Set(['all', 'any', 'are', 'but', 'each', 'how', 'into', 'our', 'over', 'per', 'show', 'than', 'that', 'their', 'this', 'what', 'when', 'which', 'who', 'why', 'your']);
 
-/** A note for a tile kept in the plan that answers only part of the request. */
-function partialCoverageNote(title: string, questions: string[], keptCount: number, requirementCount: number): string {
+/** A note for a pick left out of the plan because it answers none of its questions. */
+function leftOutNote(title: string, questions: string[], requirementCount: number): string {
+  const name = plannerSourceName(title);
+  const question = questions[0];
+  return requirementCount > 1 && question && question.length <= 120 && questions.length === 1
+    ? `${name} was left out: it doesn't answer “${question}”.`
+    : `${name} was left out: it doesn't answer what you asked.`;
+}
+
+/** A note for a tile kept in the plan that answers only part of the request, or data the author added that answers none of it. */
+function partialCoverageNote(title: string, questions: string[], keptCount: number, requirementCount: number, added = false): string {
   const name = plannerSourceName(title);
   const question = questions[0];
   const quotable = requirementCount > 1 && question && question.length <= 120;
+  if (keptCount === 0 && added) {
+    return quotable && questions.length === 1
+      ? `You added ${name}, but it doesn't answer “${question}”.`
+      : `You added ${name}, but it doesn't answer what you asked.`;
+  }
   if (keptCount === 0) {
     return quotable && questions.length === 1
       ? `${name} doesn't answer “${question}”. Add data that does, or remove that question.`
@@ -1168,12 +1384,14 @@ function appBuilderSystemPrompt(): string {
     'query uses only the approved Dataset fields and measures on that source card, in exactly this shape: {"dimensions":[{"field":"SEASON"}],"measures":[{"measure":"WINS"}],"filters":[{"field":"GAME_TYPE","op":"eq","values":["Playoffs"]}]}. dimensions and measures are arrays of objects, never of strings; a KPI has "dimensions":[]. op is eq, neq, in, not_in, gt, gte, lt, lte, between, or contains, and values is always an array ("between" takes [from, to]). Filter only on a value the request or the card names; for a name, use contains with its most telling word ("Warriors"), since the stored value may be shorter or longer.',
     'style is optional chart styling: {labels?: none|last|all, format?: number|compact|currency|percent, sort?: none|asc|desc, stack?: boolean, referenceLines?: [{value, label?}], bands?: [{from, to, label?}]}. Add a reference line or band only for a target or threshold the user stated; never invent one.',
     'pages: [{id, title, componentIds[], sections:[{id,title,kind,componentIds[]}]}]. section kind is exec_summary, kpi_band, insight, or appendix. Every component must appear on one page.',
-    'frame: {goal, decision?, audience?, metrics[], dimensions[], grain?, timeRange?, comparison?, filters[], desiredOutput?, clarificationQuestions?}, each value short.',
+    'frame: {title, goal, decision?, audience?, metrics[], dimensions[], grain?, timeRange?, comparison?, filters[], desiredOutput?, clarificationQuestions?}, each value short. title is the App\'s name: a short complete title of at most 6 words that says what the App shows ("Warriors scoring, 2016"), never a sentence and never the start of the request.',
     'filters, navigation, crossFilters and detailDrills are [] unless the request asks for a filter, linked charts or a drill.',
     'filters: [{id,label,field,scope,pageId?,componentIds[]}]. field must be one exact approved physical Dataset field for every named component; scope is page or app.',
     'navigation: [{fromComponentId,toPageId}]. crossFilters: [{fromComponentId,fromField,toComponentId,toField}], where fromField is an exact selected dimension output and toField is an exact approved physical target field on the same page.',
     'detailDrills: [{pageId,componentId,fields[]}], where every field is an exact approved physical Dataset field. Never write SQL, joins, source revisions, results, or trust claims.',
     'Prefer the fewest components that cover the request, at most 6, and never two that show the same numbers. Prefer data already limited to what the request names over adding filters. Ask a clarification only when a material choice cannot be made from supplied evidence.',
+    'A card with answersPartOfRequest true is certified data whose name and description match a part of the request: when it answers that part, use it for that part with a query of its own columns as they are. Give each part of a request with several parts its own requirement and its own component.',
+    'Each requirement question is a part of the request in its words: never a question about something the request does not name. When no card answers a part, keep the requirement and give it no component.',
   ].join('\n');
 }
 
@@ -1184,7 +1402,8 @@ function appBuilderUserPrompt(input: PlanAppBuildBriefInput, candidates: AppSour
     requiredSourceIds: input.requiredSourceIds,
     domain: input.domain,
     audience: input.audience,
-    candidateCards: candidates.map((candidate) => ({
+    // Certified data whose own name names part of the request comes first, and says so (V13 retest).
+    candidateCards: namedInRequestFirst(input.prompt, candidates).map((candidate) => ({
       sourceId: candidate.sourceId,
       qualifiedIdentity: candidate.qualifiedIdentity,
       title: candidate.title,
@@ -1193,6 +1412,7 @@ function appBuilderUserPrompt(input: PlanAppBuildBriefInput, candidates: AppSour
       lifecycle: candidate.lifecycle,
       trust: candidate.trust,
       eligibleForLocalPreview: candidate.eligibility.localPreview,
+      ...(candidate.trust === 'certified' && namedInRequest(input.prompt, candidate) ? { answersPartOfRequest: true } : {}),
       capabilities: plannerCapabilities(candidate),
       evidence: candidate.reasons,
     })),
@@ -1299,12 +1519,19 @@ function normalizeComponents(
     // fall back to a legacy block tile when its governed descriptor cannot
     // express the requested component. A saved query's result fields
     // (design D1) are not a row-level contract: its result shows as it is,
-    // but only for a component that names no fields. One whose fields the
-    // source lacks is refused before Apply (V11: a bar of lifetime_value
-    // over Top Customers blanked App Studio).
-    if (candidate.capabilities.dataset && !query && (!candidate.capabilities.dataset.result || record.query !== undefined)) return [];
+    // for a component that names no fields, or only the saved query's own
+    // columns in a query that can't be shown to keep one row per group (V13
+    // retest: points per game by GAME_TYPE from the certified "Warriors Ppg
+    // Regular Vs Playoffs 2016" was dropped, and the plan called it a gap).
+    // One whose fields the source lacks is refused before Apply (V11: a bar
+    // of lifetime_value over Top Customers blanked App Studio).
+    const dataset = candidate.capabilities.dataset;
+    const asIs = Boolean(dataset?.result) && !query && (record.query === undefined || plannerQueryReadsOnlyResultColumns(record.query, dataset!));
+    if (dataset && !query && !asIs) return [];
     // Style is presentation only: malformed fields are dropped, never fatal.
-    const style = readDashboardVizStyle(record.style, `components[${index}].style`, () => undefined);
+    // A line is drawn in time order, never sorted by its values (V13: seasons 2018, 2017, 2014, 2016, 2015).
+    const read = readDashboardVizStyle(record.style, `components[${index}].style`, () => undefined);
+    const style = read && (view === 'line' || role === 'trend') && read.sort ? withoutSort(read) : read;
     const title = plainPlannerText(stringValue(record.title) ?? id);
     // A split the title or its questions ask for is applied (V11: "Wins by Season and Game Type" added up every game type).
     const split = query && candidate.capabilities.dataset
@@ -1341,6 +1568,29 @@ export function plainPlannerText(text: string): string {
     .replace(/\bsourceId\b/g, 'data')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+/** A chart style without its sort. */
+function withoutSort(style: DashboardVizStyle): DashboardVizStyle | undefined {
+  const { sort: _sort, ...rest } = style;
+  return Object.keys(rest).length ? rest : undefined;
+}
+
+/**
+ * Whether a planner's tile query reads only columns of a saved query's result, with filters only on columns the
+ * result shows row by row: shown as the saved query's result as it is, it shows what was asked.
+ */
+function plannerQueryReadsOnlyResultColumns(raw: unknown, descriptor: DatasetDescriptor): boolean {
+  const query = normalizeTileQuery(plannerTileQuery(raw));
+  if (!query || (query.calculations?.length ?? 0) > 0) return false;
+  const physical = datasetPhysicalFields(descriptor).filter((field) => field.status === 'approved');
+  const measures = datasetMeasures(descriptor).filter((field) => field.status === 'approved');
+  const isField = (name: string) => physical.some((field) => sameDatasetName(name, field.name, field.qualifiedId));
+  const isMeasure = (name: string) => measures.some((field) => sameDatasetName(name, field.name, field.qualifiedId)) || isField(name);
+  if (query.measures.length === 0) return false;
+  return query.dimensions.every((dimension) => isField(dimension.field))
+    && query.measures.every((selection) => isMeasure(selection.measure))
+    && (query.filters ?? []).every((filter) => isField(filter.field) && query.dimensions.some((dimension) => sameDatasetName(filter.field, dimension.field, dimension.field)));
 }
 
 function normalizedDatasetQuery(

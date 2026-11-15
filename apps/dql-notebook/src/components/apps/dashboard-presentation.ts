@@ -53,6 +53,52 @@ export function prepareStakeholderItems(
 }
 
 /**
+ * The tiles a reader sees on a page told in story sections: every tile, the not-certified-yet ones too (they are
+ * badged in their own section), but the same numbers once (V13 retest: "Warriors 2016 scoring" said a tile was
+ * hidden while both near-duplicate charts still showed).
+ */
+export function prepareStoryItems(
+  items: DashboardLayoutItem[],
+  tileResults: Map<string, DashboardRunTile>,
+): DashboardLayoutItem[] {
+  return items.filter((item) => !isRepeatedResultStakeholderTile(item, items, tileResults));
+}
+
+/** How many of a page's tiles a reader does not see, and why: not certified yet, or the same numbers as another tile. */
+export function stakeholderHiddenCounts(
+  items: DashboardLayoutItem[],
+  shown: DashboardLayoutItem[],
+  tileResults: Map<string, DashboardRunTile>,
+): { notCertified: number; repeats: number } {
+  const shownIds = new Set(shown.map((item) => item.i));
+  let notCertified = 0;
+  let repeats = 0;
+  for (const item of items) {
+    if (shownIds.has(item.i)) continue;
+    if (isStakeholderHiddenReviewTile(item) || isReviewRequiredAiPinStakeholderTile(item, tileResults.get(item.i))) notCertified += 1;
+    else repeats += 1;
+  }
+  return { notCertified, repeats };
+}
+
+/**
+ * The line a reader sees when tiles are hidden, saying how many and why, from the tiles actually hidden (V13
+ * retest: it said "a certified tile already answers the same question" while both tiles showed). Undefined when
+ * none is hidden.
+ */
+export function stakeholderHiddenNote(counts: { notCertified: number; repeats: number }): string | undefined {
+  const total = counts.notCertified + counts.repeats;
+  if (total === 0) return undefined;
+  const lead = `${total} tile${total === 1 ? ' is' : 's are'} hidden from this stakeholder view`;
+  const why = counts.repeats === 0
+    ? ` because ${total === 1 ? 'it is' : 'they are'} not certified yet`
+    : counts.notCertified === 0
+      ? ` because ${total === 1 ? 'it shows' : 'they show'} the same numbers as another tile on this page`
+      : `: ${counts.notCertified} not certified yet, and ${counts.repeats} showing the same numbers as another tile`;
+  return `${lead}${why}. Switch to Edit to see everything on this page.`;
+}
+
+/**
  * A chart that shows exactly the numbers of a chart before it on the page, from the same data and with the same
  * trust (V12: the tester's "Warriors 2016 scoring" showed "Max POINTS PER GAME by game type" beside "POINTS PER
  * GAME by game type", the same two bars of one saved query). A reader sees it once; the author still sees both

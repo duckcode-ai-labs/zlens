@@ -49,6 +49,10 @@ import {
   removeEmptyAppCopies,
   appIntroForReaders,
   loadStoredAppBuildDraft,
+  appDraftContentEditCount,
+  isEmptyNewAppShell,
+  plannedAppName,
+  plannedPageIntro,
 } from './apps-api.js';
 
 const tempDirs: string[] = [];
@@ -563,6 +567,119 @@ describe('Apps command center API helpers', () => {
     expect(recoveries.map((recovery) => recovery.draft.id).sort()).toEqual([2, 3, 4, 5, 8].map((n) => copies.get(n)!.id).sort());
     // A second start finds nothing more to move.
     expect(removeEmptyAppCopies(root)).toEqual([]);
+  });
+
+  // V13 retest: "(3)" had no tile but two pre-filled sources, stayed in the Apps list, and its Continue planned again.
+  it('moves an empty "(n)" copy with pre-filled picks to the trash too, and keeps one with a page or tile edit', () => {
+    const root = createProject();
+    const v8Name = 'Help a Warriors fan see how the Golden State Warriors did in';
+    const v8Goal = 'Help a Warriors fan see how the Golden State Warriors did in each season.';
+    const v8 = createStoredAppBuildDraft(root, { name: v8Name, goal: v8Goal, authoringMode: 'ai', template: 'operational_dashboard' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, v8));
+    const pick = (id: string, title: string): AppBuildDraftSource => ({ id, kind: 'block', sourceRef: `blocks/${id}.dql`, trustState: 'review_required', reviewStatus: 'required', qualifiedIdentity: `nba::block::${title}` });
+    const copy = (n: number) => createStoredAppBuildDraft(root, { name: `${v8Name} (${n})`, goal: v8Goal, authoringMode: 'ai', template: 'operational_dashboard' });
+    const edit = (draft: AppBuildDraft, operations: AppBuildDraftOperation[]) => {
+      const next = applyAppBuildDraftOperations(draft, draft.revision, operations);
+      writeStoredAppBuildDraft(root, next, { expectedRevision: draft.revision, operations });
+      return next;
+    };
+    const three = edit(copy(3), [
+      { type: 'upsert_source', source: pick('wins-by-game-type', 'warriors_wins_by_game_type') },
+      { type: 'upsert_source', source: pick('local-team-game-facts', 'local_team_game_facts') },
+    ]);
+    const renamedPage = copy(4);
+    edit(renamedPage, [{ type: 'upsert_page', page: { ...renamedPage.pages[0]!, metadata: { ...renamedPage.pages[0]!.metadata, title: 'Seasons' } } }]);
+    const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+    try {
+      // Picking data counts as no edit; a page edit does.
+      expect(appDraftContentEditCount(storage.listAppBuildOperations(three.id))).toBe(0);
+      expect(isEmptyNewAppShell(three, 0)).toBe(true);
+      expect(appDraftContentEditCount(storage.listAppBuildOperations(renamedPage.id))).toBe(1);
+    } finally {
+      storage.close();
+    }
+    expect(removeEmptyAppCopies(root)).toEqual([`${v8Name} (3)`]);
+    expect(loadStoredAppBuildDraft(root, three.id)).toBeNull();
+    expect(loadStoredAppBuildDraft(root, renamedPage.id)).not.toBeNull();
+    // In the trash with its picks, so it can be restored.
+    const trash = join(root, '.dql', 'local', 'trash', 'app-drafts');
+    const recovered = readdirSync(trash).map((dir) => JSON.parse(readFileSync(join(trash, dir, 'recovery.json'), 'utf-8')) as { draft: AppBuildDraft });
+    expect(recovered.find((entry) => entry.draft.id === three.id)?.draft.sources.map((source) => source.id)).toEqual(['wins-by-game-type', 'local-team-game-facts']);
+  });
+
+  // V13 retest: names were the description cut at 60 characters, and the intro repeated the name and the description.
+  it('names a described App with the plan\'s title or its picks, and writes an intro that says what the page shows', () => {
+    const root = createProject();
+    const goal = "Give a coach one page with the Warriors' regular-season wins from 2014 to 2018 and their 2016 points per game in the regular season and the playoffs";
+    const draft = createStoredAppBuildDraft(root, { goal, authoringMode: 'ai', template: 'operational_dashboard' });
+    expect(draft.name).toBe("Warriors' regular-season wins, 2014–2018");
+    expect(plannedAppName(root, draft, 'Warriors wins and 2016 scoring', [])).toBe('Warriors wins and 2016 scoring');
+    // A whole first part names it already: no title from the plan, no new name.
+    expect(plannedAppName(root, draft, undefined, ['Warriors Regular Season Wins 2014 2018'])).toBeUndefined();
+    // A name the author typed, or an App with tiles, keeps its name.
+    const typed = createStoredAppBuildDraft(root, { name: 'Coach page', goal, authoringMode: 'ai', template: 'operational_dashboard' });
+    expect(plannedAppName(root, typed, 'Warriors wins and 2016 scoring', [])).toBeUndefined();
+    const withTile = { ...draft, pages: [{ ...draft.pages[0]!, layout: { ...draft.pages[0]!.layout, items: [...draft.pages[0]!.layout.items, { i: 'wins', x: 0, y: 2, w: 6, h: 3, viz: { type: 'bar' as const }, sourceId: 'wins' }] } }] };
+    expect(plannedAppName(root, withTile, 'Warriors wins and 2016 scoring', [])).toBeUndefined();
+    // A description with no part short enough is cut between words: the picks name it.
+    const long = createStoredAppBuildDraft(root, { goal: 'Supercalifragilistic expialidocious overview of everything anyone could possibly want to know', authoringMode: 'ai', template: 'operational_dashboard' });
+    expect(plannedAppName(root, long, undefined, ['Warriors PPG Regular vs Playoffs 2016'])).toBe('Warriors PPG Regular vs Playoffs 2016');
+    expect(plannedAppName(root, long, undefined, ['Warriors Wins', 'Warriors PPG 2016'])).toBe('Warriors Wins and Warriors PPG 2016');
+    // A title another App already has is numbered.
+    createStoredAppBuildDraft(root, { name: 'Warriors scoring', goal: 'Scoring', authoringMode: 'manual' });
+    expect(plannedAppName(root, draft, 'Warriors scoring', [])).toBe('Warriors scoring (2)');
+
+    const sources = new Map([
+      ['wins', { name: 'Warriors Regular Season Wins 2014 2018', certified: true, kind: 'saved query' as const }],
+      ['ppg', { name: 'Warriors PPG Regular vs Playoffs 2016', certified: true, kind: 'saved query' as const }],
+    ]);
+    const intro = { i: 'template-introduction', title: 'Intro', text: { markdown: `# ${draft.name}\n\n${goal}.` } };
+    expect(plannedPageIntro('Warriors wins and 2016 scoring', [intro, { title: 'Warriors Wins 2014-2018', sourceId: 'wins' }], sources))
+      .toBe('# Warriors wins and 2016 scoring\n\nThis page shows Warriors Wins 2014-2018, from the certified saved query Warriors Regular Season Wins 2014 2018.');
+    expect(plannedPageIntro('Coach page', [{ title: 'Wins', sourceId: 'wins' }, { title: 'Points per game', sourceId: 'ppg' }], sources))
+      .toBe('# Coach page\n\nThis page shows Wins and Points per game, from 2 certified sources: Warriors Regular Season Wins 2014 2018 and Warriors PPG Regular vs Playoffs 2016.');
+    expect(plannedPageIntro('Coach page', [intro], sources)).toBeUndefined();
+  });
+
+  it('applies a Describe with AI plan with its title, an intro from its picks, every pick covering a question, and a line kept in time order', async () => {
+    const root = createProject();
+    writeBlock(root, 'warriors-ppg.dql', {
+      name: 'warriors_ppg_regular_vs_playoffs_2016', domain: 'nba', status: 'certified', tags: ['nba'], chart: 'bar',
+      description: "Compare the Golden State Warriors' points per game in the 2016 regular season and in the 2016 playoffs.",
+      query: "SELECT 'Playoffs' AS GAME_TYPE, 119.3 AS POINTS_PER_GAME",
+    });
+    const goal = 'Compare how the Golden State Warriors scored per game in the 2016 regular season and in the 2016 playoffs';
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', { goal, authoringMode: 'ai', template: 'operational_dashboard', domain: 'nba' });
+    const draft = (created.payload as any).draft as AppBuildDraft;
+    const catalog = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=50`, 'GET', {});
+    const ppg = (catalog.payload as any).items.find((item: any) => item.name === 'warriors_ppg_regular_vs_playoffs_2016');
+    const provider = async () => JSON.stringify({
+      requirements: [{ id: 'r1', question: "How did the Golden State Warriors' points per game compare between the 2016 regular season and the 2016 playoffs?", role: 'breakdown', measures: [], dimensions: [], filters: [] }],
+      components: [{ id: 'c1', title: 'Warriors PPG: Regular Season vs Playoffs (2016)', sourceId: ppg.sourceId, requirementIds: ['r1'], role: 'trend', view: 'line', style: { sort: 'asc', labels: 'all' }, rationale: 'Side by side.' }],
+      frame: { title: 'Warriors 2016 PPG: Regular vs Playoffs', goal },
+    });
+    const proposed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
+      prompt: goal, expectedRevision: draft.revision, proposalHash: draft.proposalHash, pageId: draft.pages[0]!.id, mode: 'add',
+    }, { planAppBuild: provider });
+    expect(proposed.status).toBe(201);
+    const proposal = (proposed.payload as any).proposal;
+    expect(proposal.operations[0]).toEqual({ type: 'set_name', name: 'Warriors 2016 PPG: Regular vs Playoffs' });
+    const requirements = proposal.operations.find((operation: any) => operation.type === 'set_requirements');
+    expect(requirements.coverage).toEqual([expect.objectContaining({ requirementId: 'r1', status: 'covered', sourceIds: [ppg.sourceId] })]);
+    expect(proposal.warnings).toEqual([]);
+    const page = proposal.operations.find((operation: any) => operation.type === 'upsert_page').page;
+    const tile = page.layout.items.find((item: any) => item.sourceId === ppg.sourceId);
+    expect(tile.viz).toEqual({ type: 'line', style: { labels: 'all' } });
+    expect(page.layout.items.find((item: any) => item.text).text.markdown)
+      .toBe('# Warriors 2016 PPG: Regular vs Playoffs\n\nThis page shows Warriors PPG: Regular Season vs Playoffs (2016), from the certified saved query Warriors PPG Regular vs Playoffs 2016.');
+
+    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+      mode: 'ai', expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash, proposalId: proposal.id, selectedSourceIds: proposal.defaultSelectedSourceIds,
+    });
+    expect(composed.status).toBe(200);
+    const applied = (composed.payload as any).draft as AppBuildDraft;
+    expect(applied.name).toBe('Warriors 2016 PPG: Regular vs Playoffs');
+    expect(applied.coverage.map((entry) => entry.status)).toEqual(['covered']);
   });
 
   it('opens a described App with an intro in the author\'s words, not a stock sentence (V12)', () => {
@@ -2652,7 +2769,9 @@ describe('Apps command center API helpers', () => {
     expect(JSON.parse(readFileSync(join(root, '.dql', 'local', 'app-builds', aiDraft.id, 'proposals', `${proposal.id}.json`), 'utf8'))).toMatchObject({
       plannerProvenance: proposal.plannerProvenance,
     });
-    expect(proposal.summary).toMatchObject({ requirements: 2, covered: 0, gaps: 2, certifiedSources: 0 });
+    // V13 retest: the picked regional orders block covers "Orders by region" (its own words say so); it is never
+    // picked while that question is listed as a gap. Order growth is still one.
+    expect(proposal.summary).toMatchObject({ requirements: 2, covered: 1, gaps: 1, certifiedSources: 0 });
     expect(proposal.defaultSelectedSourceIds).toEqual([draftSource.sourceId]);
 
     const contextProposal = {
@@ -2955,7 +3074,7 @@ describe('Apps command center API helpers', () => {
       ],
       filters: [{ id: 'region', label: 'Region', field: 'region', scope: 'app', componentIds: ['revenue-kpi', 'regional-revenue', 'wrong-coverage', 'orders-kpi'] }],
       navigation: [{ fromComponentId: 'regional-revenue', toPageId: 'details' }],
-      crossFilters: [{ fromComponentId: 'regional-revenue', fromField: 'region', toComponentId: 'wrong-coverage', toField: 'region' }],
+      crossFilters: [{ fromComponentId: 'regional-revenue', fromField: 'region', toComponentId: 'revenue-kpi', toField: 'region' }],
       detailDrills: [{ pageId: 'details', componentId: 'orders-kpi', fields: ['region'] }],
     });
 
@@ -2972,8 +3091,12 @@ describe('Apps command center API helpers', () => {
     expect(pageOperation.page.layout.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ i: 'revenue-kpi', sourceId: source.sourceId, sourceRevision: source.sourceRevision, query: { dimensions: [], measures: [{ measure: 'revenue' }] } }),
       expect.objectContaining({ i: 'regional-revenue', sourceId: source.sourceId, query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] } }),
-      expect.objectContaining({ i: 'wrong-coverage', sourceId: source.sourceId, query: { dimensions: [], measures: [{ measure: 'revenue' }] } }),
     ]));
+    // V13 retest: a tile that answers none of the questions it was planned for is left out, and the note says so;
+    // it is never added while its question is listed as a gap.
+    expect(pageOperation.page.layout.items.some((item: any) => item.i === 'wrong-coverage')).toBe(false);
+    // (Its title says what it shows: revenue.)
+    expect(proposal.warnings).toContain('Revenue was left out: it doesn\'t answer “Order count”.');
     expect(pageOperation.page.layout.items.every((item: any) => item.block === undefined)).toBe(true);
     expect(pageOperation.page.sections).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'kpis', kind: 'kpi_band' }),
@@ -3046,7 +3169,6 @@ describe('Apps command center API helpers', () => {
     expect(saved.pages[0].layout.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ i: 'revenue-kpi', query: expect.objectContaining({ measures: [{ measure: 'revenue' }] }) }),
       expect.objectContaining({ i: 'regional-revenue', query: expect.objectContaining({ dimensions: [{ field: 'region' }] }) }),
-      expect.objectContaining({ i: 'wrong-coverage', query: expect.objectContaining({ measures: [{ measure: 'revenue' }] }) }),
     ]));
     expect(saved.pages.find((page: any) => page.id === 'details')).toMatchObject({
       metadata: { title: 'Order details' },

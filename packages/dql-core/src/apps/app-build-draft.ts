@@ -253,11 +253,16 @@ const NAME_TAIL_WORDS = new Set([
 /** How a request starts before it says what it is about: "Help a Warriors fan see how …", "Show me …". */
 const NAME_LEAD_INS = [
   /^(?:please\s+)?help\s+(?:\S+\s+){0,4}?(?:see|understand|track|follow|know|check|review|explore|monitor|compare|find)\s+/i,
+  // "Give a coach one page with …", "Give me a view of …" (V13).
+  /^(?:please\s+)?give\s+(?:\S+\s+){0,3}?(?:page|view|dashboard|report|app|summary)\s+(?:with|of|showing|on|about|for)\s+/i,
   /^(?:please\s+)?(?:show|give|tell)\s+(?:me|us|them)\s+/i,
   /^(?:please\s+)?show\s+/i,
+  // "Compare how the Warriors scored …" is about the Warriors' scoring (V13).
+  /^(?:please\s+)?compare\s+how\s+/i,
   /^(?:please\s+)?(?:build|create|make|design)\s+(?:me\s+|us\s+)?(?:a|an)\s+(?:\S+\s+){0,2}?(?:dashboard|app|page|report|view)\s+(?:that\s+shows|showing|for|of|about|on|with|to\s+(?:show|see|track))\s+/i,
   /^I\s+(?:want|need|would\s+like)\s+(?:to\s+)?(?:see|know|track|understand|follow)\s+/i,
-  /^(?:how|what|which|where|when|who)\s+/i,
+  // Not "who": "Who led the Lakers in rebounds" without it is a fragment (V13: "Led the Los Angeles Lakers …").
+  /^(?:how|what|which|where|when)\s+/i,
   /^(?:the|a|an)\s+/i,
 ];
 
@@ -291,9 +296,17 @@ function withoutDanglingTail(text: string): string {
  * the"), "did in each season" read as "by season", and never ending on a word like "in" or "the".
  */
 export function appNameFromGoal(goal: string | undefined | null, max = APP_NAME_FROM_GOAL_MAX): string {
+  return appNameFromGoalParts(goal, max).name;
+}
+
+/**
+ * The name `appNameFromGoal` gives, and whether it had to be cut between words to fit (`cut`): such a name is
+ * a placeholder, replaced by the planner's title or one built from the picks once AI has planned (V13).
+ */
+export function appNameFromGoalParts(goal: string | undefined | null, max = APP_NAME_FROM_GOAL_MAX): { name: string; cut: boolean } {
   // Bounded: a name is read from the first 1,000 characters of a description.
   const firstLine = String(goal ?? '').slice(0, 1000).split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
-  if (!firstLine) return '';
+  if (!firstLine) return { name: '', cut: false };
   let name = firstLine;
   // A long line is named by its first clause: what comes before ": the details".
   if (name.length > max) {
@@ -309,13 +322,37 @@ export function appNameFromGoal(goal: string | undefined | null, max = APP_NAME_
     .replace(/\b(?:did|do|does|performed|perform|fared|went|are\s+doing|is\s+doing|have\s+done|has\s+done)\s+(?:in\s+|over\s+|across\s+|during\s+)?(?:each|every)\s+(season|year|month|quarter|week|day|game)\b/i, 'by $1')
     .replace(/ (?:from|between) (\d{4}) (?:to|and|through|-|–) (\d{4})\b/i, ', $1–$2');
   name = trimEndOf(name, '.!?');
+  // Too long: the first part of a list ("Top scorers in the 2016 playoffs" of "… and how many points each one
+  // scored"), never a sentence cut off mid-phrase when a whole part fits (V13).
   if (name.length > max) {
-    const cut = name.slice(0, max + 1);
-    const atWord = cut.lastIndexOf(' ');
-    name = atWord >= Math.floor(max / 2) ? cut.slice(0, atWord) : name.slice(0, max);
+    // The first part of a list ("Top scorers in the 2016 playoffs" of "… and how many points each one scored"),
+    // in shorter words for the same thing when it does not fit ("in the 2009 season" is "in 2009"), never a
+    // sentence cut off mid-phrase when a whole part fits (V13).
+    const firstParts = (text: string): string => {
+      let head = '';
+      for (const part of text.split(/\s+(?:and|plus|as well as)\s+/i)) {
+        const next = head ? `${head} and ${part}` : part;
+        if (next.length > max) break;
+        head = next;
+      }
+      return head && head.split(' ').length >= 2 ? head : text;
+    };
+    const shorter = (text: string): string => text
+      .replace(/\bin the (\d{4}) season\b/gi, 'in $1')
+      .replace(/\bin the (\d{4})\b/gi, 'in $1')
+      .replace(/\bscored per game\b/gi, 'points per game');
+    const first = firstParts(name);
+    name = first.length <= max ? first : firstParts(shorter(name));
+  }
+  let cut = false;
+  if (name.length > max) {
+    const end = name.slice(0, max + 1);
+    const atWord = end.lastIndexOf(' ');
+    name = atWord >= Math.floor(max / 2) ? end.slice(0, atWord) : name.slice(0, max);
+    cut = true;
   }
   name = withoutDanglingTail(name);
-  return name.charAt(0).toUpperCase() + name.slice(1);
+  return { name: name.charAt(0).toUpperCase() + name.slice(1), cut };
 }
 
 export function createAppBuildDraft(input: {

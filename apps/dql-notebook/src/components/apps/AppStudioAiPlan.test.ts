@@ -5,6 +5,7 @@ import {
   appStudioProposalSourceAddMode,
   appStudioProposalRequiredSourceIds,
   appStudioPlannerProvenanceLabel,
+  appStudioProposalAppName,
   appStudioAiDataModel,
   appStudioAiPickedHeading,
   appStudioBuildPagesLabel,
@@ -270,5 +271,15 @@ describe('AI source names', () => {
       operations: [{ type: 'upsert_source', source: { id: 's1', kind: 'block', sourceRef: 'blocks/top_customers.dql', qualifiedIdentity: 'orders::block::top_customers::17ade6f52b3f8d9cb9c9', trustState: 'certified', reviewStatus: 'not_required' } }],
     } as unknown as AppStudioAiProposal;
     expect(summarizeAppStudioAiPlan(proposal).sources[0]!.label).toBe('Top Customers');
+  });
+});
+
+describe('the App name a plan gives (V13 retest)', () => {
+  it('is the plan\'s set_name, kept when it builds pages, and nothing when the App keeps its name', () => {
+    const plain = aiProposal();
+    const named = { ...plain, operations: [{ type: 'set_name' as const, name: 'Warriors wins and 2016 scoring' }, ...plain.operations] };
+    expect(appStudioProposalAppName(named)).toBe('Warriors wins and 2016 scoring');
+    expect(appStudioProposalAppName(plain)).toBeUndefined();
+    expect(operationsForSelectedAppStudioSources(named, new Set(named.defaultSelectedSourceIds))[0]).toEqual({ type: 'set_name', name: 'Warriors wins and 2016 scoring' });
   });
 });

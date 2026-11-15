@@ -156,7 +156,8 @@ describe('App builder fixes from new-user test V9', () => {
       expect(kpi.body.ok, kpi.text).not.toBe(true);
       expect(kpi.text).toContain("Averages can't be added up: Points per game is worked out on each row");
       expect(kpi.text).not.toContain('Dataset MCP');
-      expect(kpi.text).not.toContain('252');
+      // The sum 123.5 + 128.5 as a number of its own, never the digits inside an id or a hash ("…1d252cb…").
+      expect(kpi.text).not.toMatch(/(?<![0-9a-z.])252(?![0-9a-z])/i);
       const byType = await call(base, '/api/app-datasets/tile-preview', { sourceId: ppgBlock.sourceId, query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }], respectsGlobalFilters: true } });
       expect(byType.body.ok, byType.text).toBe(true);
       expect(byType.body.result.rows.map((row: any) => [row.GAME_TYPE, Number(row.POINTS_PER_GAME)]).sort()).toEqual([['Playoffs', 128.5], ['Regular season', 123.5]]);

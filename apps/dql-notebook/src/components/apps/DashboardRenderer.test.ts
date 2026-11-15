@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { kpiRowsAreAverages, mergeDashboardTileChartConfig, normalizeDashboardChartType, summarizeDashboardKpiResult } from './dashboard-chart-config';
 import { autoLayoutDashboardItems } from './dashboard-layout';
 import { formatDashboardValue } from './dashboard-format';
-import { isRepeatedResultStakeholderTile, prepareStakeholderItems } from './dashboard-presentation';
+import { isRepeatedResultStakeholderTile, prepareStakeholderItems, prepareStoryItems, stakeholderHiddenCounts, stakeholderHiddenNote } from './dashboard-presentation';
 import { CHART_TYPE_OPTIONS } from '../output/ChartOutput';
 
 async function dashboardHelpers() {
@@ -560,6 +560,22 @@ describe('A reader sees a chart of the same numbers from the same data once', ()
     const other = new Map(results);
     other.set('ppg', blockTile(rows(['GAME_TYPE', 'POINTS_PER_GAME'], [{ GAME_TYPE: 'Regular Season', POINTS_PER_GAME: 110 }, { GAME_TYPE: 'Playoffs', POINTS_PER_GAME: 119.2857142857 }])));
     expect(prepareStakeholderItems(items as never, other as never, 12).map((item) => item.i)).toEqual(['intro', 'max-ppg', 'ppg', 'ppg-table', 'wins']);
+  });
+
+  // V13 retest: "1 tile is hidden … because a certified tile already answers the same question" while both showed.
+  it('says how many tiles are hidden and why, from what the page really shows', () => {
+    const visible = prepareStakeholderItems(items as never, results as never, 12);
+    const counts = stakeholderHiddenCounts(items as never, visible, results as never);
+    expect(counts).toEqual({ notCertified: 0, repeats: 1 });
+    expect(stakeholderHiddenNote(counts)).toBe('1 tile is hidden from this stakeholder view because it shows the same numbers as another tile on this page. Switch to Edit to see everything on this page.');
+    // A page told in story sections shows the same numbers once too, so its line counts the same tile.
+    const story = prepareStoryItems(items as never, results as never);
+    expect(story.map((item) => item.i)).toEqual(['intro', 'max-ppg', 'ppg-table', 'wins']);
+    expect(stakeholderHiddenCounts(items as never, story, results as never)).toEqual({ notCertified: 0, repeats: 1 });
+    // Nothing hidden: no line. Both reasons: each said.
+    expect(stakeholderHiddenNote(stakeholderHiddenCounts(items as never, items as never, results as never))).toBeUndefined();
+    expect(stakeholderHiddenNote({ notCertified: 2, repeats: 0 })).toBe('2 tiles are hidden from this stakeholder view because they are not certified yet. Switch to Edit to see everything on this page.');
+    expect(stakeholderHiddenNote({ notCertified: 1, repeats: 1 })).toBe('2 tiles are hidden from this stakeholder view: 1 not certified yet, and 1 showing the same numbers as another tile. Switch to Edit to see everything on this page.');
   });
 
   it('never hides a tile with other trust or from other data, nor a single number that happens to agree', () => {

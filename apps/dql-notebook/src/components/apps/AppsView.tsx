@@ -78,6 +78,8 @@ import {
   shallowEqualRecords,
 } from './app-dashboard-filters';
 import { DashboardRenderer } from './DashboardRenderer';
+import { appCardOwner } from './builder/app-data';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { PersonaSwitcher } from './PersonaSwitcher';
 import {
   addDashboardFilterToDocument,
@@ -1486,6 +1488,7 @@ function AppCard({
   runTrust?: AppRunTrust | null;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const snowflake = useSnowflakeApp();
   const draftCount = app.drafts?.length ?? 0;
   const seal = appCardSeal({ lifecycle: app.lifecycle, certification: app.certification, draftCount, runTrust, publishedTrust: app.tileTrust, certifiedBy: app.certifiedBy, certifiedAt: app.certifiedAt });
   const certified = seal.certified;
@@ -1540,7 +1543,7 @@ function AppCard({
         </div> : null}
       </div>
       <div className="dql-app-card-depth">
-        <span>{primaryOwner(app)}</span>
+        <span>{appCardOwner(app, snowflake) ?? ''}</span>
         <button type="button" className="dql-app-card-act" onClick={onOpen} title="View app" aria-label={`View ${app.name}`}>
           <Eye size={12} /> View
         </button>
@@ -3203,10 +3206,6 @@ export function libraryCounts(apps: Array<Pick<AppSummary, 'id' | 'publicationIn
     shared,
     fav: apps.filter((app) => favorites.has(app.id)).length,
   };
-}
-
-function primaryOwner(app: AppSummary): string {
-  return app.ownerName ?? app.owners?.[0] ?? 'owner@local';
 }
 
 function shortHash(value: string): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, APP_BUILDER_TRUNCATED_PICKED_NOTE, deterministicDatasetQuery, plainPlannerText, plannerTileQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
+import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, APP_BUILDER_TRUNCATED_PICKED_NOTE, deterministicDatasetQuery, plainPlannerText, plannerAppTitle, plannerTileQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
 import { savedQueryResultDescriptor, type AppBuildRequirement, type DatasetDescriptor } from '@zlens/core';
 
@@ -269,8 +269,10 @@ describe('App Builder orchestrator', () => {
       }),
     });
 
-    expect(brief.components).toEqual([expect.objectContaining({ sourceId: revenueCandidate.sourceId, requirementIds: [] })]);
-    expect(brief.warnings).toEqual(['Revenue trend doesn\'t answer what you asked. Add data that does.']);
+    // V13: a pick that answers none of its questions is left out, never listed beside them as a gap.
+    expect(brief.components).toEqual([]);
+    expect(brief.selectedSourceIds).toEqual([]);
+    expect(brief.warnings).toEqual(['Revenue trend was left out: it doesn\'t answer what you asked.']);
   });
 
   it('keeps an explicitly required deterministic source without claiming unsupported coverage', async () => {
@@ -863,6 +865,145 @@ describe('Describe with AI on Cortex (V12 retest: 0 of 3 plans, and plans that l
     expect(system).toContain('Start the reply with { and end it with }');
     expect(system).toContain('requirements, components, pages, frame');
     expect(system).toContain('{"dimensions":[{"field":"SEASON"}],"measures":[{"measure":"WINS"}],"filters":[{"field":"GAME_TYPE","op":"eq","values":["Playoffs"]}]}');
+  });
+});
+
+// The tester's certified saved queries (V13 retest, report section 3), with the replies Cortex gave on the stand-in.
+describe('Describe with AI for the V13 retest: picks that are gaps, missed exact matches, and App names', () => {
+  const savedQuery = (sourceId: string, name: string, description: string, columns: Array<{ name: string; type: string }>, groupBy: string[]): AppSourceCatalogRecord => ({
+    ...source(sourceId, name, 'certified'),
+    domain: 'nba',
+    description,
+    capabilities: {
+      measures: [], dimensions: [], outputs: columns.map((column) => column.name), filters: [], allowedVisualizations: [], parameters: [],
+      dataset: savedQueryResultDescriptor({
+        sourceId, sourceRevision: `sha256:${name}`, savedQuery: name, qualifiedId: `nba::block::${name}`,
+        lifecycle: 'certified', certified: true, typesFrom: 'probe', columns, groupBy,
+      })!,
+    },
+  });
+  const winsByYear = savedQuery('app:block:nba:wins-2014-2018', 'warriors_regular_season_wins_2014_2018', 'Golden State Warriors regular-season wins per season, 2014-2018 (regular season games only).', [{ name: 'SEASON', type: 'BIGINT' }, { name: 'WINS', type: 'BIGINT' }], ['SEASON']);
+  const wins2016 = savedQuery('app:block:nba:wins-2016', 'warriors_regular_season_wins_2016', 'Golden State Warriors wins in the 2016 regular season (regular-season games only).', [{ name: 'WINS', type: 'BIGINT' }], []);
+  const ppg = savedQuery('app:block:nba:ppg-2016', 'warriors_ppg_regular_vs_playoffs_2016', "Compare the Golden State Warriors' points per game in the 2016 regular season and in the 2016 playoffs.", [{ name: 'GAME_TYPE', type: 'VARCHAR' }, { name: 'POINTS_PER_GAME', type: 'DOUBLE' }], []);
+  const lakers = savedQuery('app:block:nba:lakers-2009', 'lakers_top_3_rebounders_2009', "Who were the Lakers' top 3 rebounders in the 2009 season?", [{ name: 'PLAYER_ID', type: 'BIGINT' }, { name: 'PLAYER_NAME', type: 'VARCHAR' }, { name: 'TOTAL_REBOUNDS', type: 'BIGINT' }], ['PLAYER_ID', 'PLAYER_NAME']);
+  const candidates = [ppg, wins2016, winsByYear, lakers];
+  const plan = (prompt: string, reply: unknown) => planAppBuildBrief({
+    prompt, candidates, requiredSourceIds: [], sourcePolicy: 'include_review_required', complete: async () => ({ content: JSON.stringify(reply), providerId: 'cortex' }),
+  });
+  /** Every pick covers a question, and no question it was picked for is left uncovered. */
+  const consistent = (brief: Awaited<ReturnType<typeof planAppBuildBrief>>) => {
+    const covered = new Set(brief.components.flatMap((component) => component.requirementIds));
+    return brief.components.every((component) => component.requirementIds.length > 0)
+      && !brief.warnings.some((warning) => /doesn't answer what you asked\. Add data that does/.test(warning))
+      && brief.components.every((component) => component.requirementIds.every((id) => covered.has(id)));
+  };
+
+  it('covers a question with the pick whose own words answer it, though the question does not spell its fields (B4)', async () => {
+    // Try 1: "Warriors Wins by Season doesn't answer what you asked" while it was the plan's only pick.
+    const tryOne = await plan('Help a Warriors fan see how the Golden State Warriors did in each season', {
+      requirements: [{ id: 'r1', question: 'How did the Golden State Warriors perform in each season (2014-2018)?', role: 'trend', measures: ['WINS'], dimensions: ['SEASON'], filters: [] }],
+      components: [{ id: 'c1', title: 'Warriors Wins by Season', sourceId: winsByYear.sourceId, query: { dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }], filters: [] }, requirementIds: ['r1'], role: 'trend', view: 'line', style: { labels: 'last', sort: 'asc' }, rationale: 'Wins per season.' }],
+    });
+    expect(tryOne.components.map((component) => [component.sourceId, component.requirementIds])).toEqual([[winsByYear.sourceId, ['r1']]]);
+    expect(tryOne.warnings).toEqual([]);
+    expect(consistent(tryOne)).toBe(true);
+    // Try 4: TOTAL_REBOUNDS by PLAYER_NAME for "Who led the Lakers in rebounds".
+    const tryFour = await plan('Show who led the Los Angeles Lakers in rebounds in the 2009 season', {
+      requirements: [{ id: 'r1', question: 'Who led the Los Angeles Lakers in rebounds in the 2009 season?', role: 'breakdown', measures: ['TOTAL_REBOUNDS'], dimensions: ['PLAYER_NAME'], filters: [] }],
+      components: [{ id: 'c1', title: 'Lakers Top Rebounders (2009)', sourceId: lakers.sourceId, query: { dimensions: [{ field: 'PLAYER_NAME' }], measures: [{ measure: 'TOTAL_REBOUNDS' }] }, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'Ranks the rebounders.' }],
+    });
+    expect(tryFour.components.map((component) => component.requirementIds)).toEqual([['r1']]);
+    expect(consistent(tryFour)).toBe(true);
+    // A filter on a field the saved query does not have is one its rows already keep to ("the Warriors").
+    const filtered = await plan("Give a coach one page with the Warriors' regular-season wins from 2014 to 2018", {
+      requirements: [{ id: 'r1', question: "What were the Warriors' regular-season wins each season from 2014 to 2018?", role: 'trend', measures: ['WINS'], dimensions: ['SEASON'], filters: ['TEAM', 'GAME_TYPE'] }],
+      components: [{ id: 'c1', title: 'Warriors Regular-Season Wins, 2014-2018', sourceId: winsByYear.sourceId, query: { dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }] }, requirementIds: ['r1'], role: 'trend', view: 'line', rationale: 'Wins.' }],
+    });
+    expect(filtered.components.map((component) => component.requirementIds)).toEqual([['r1']]);
+  });
+
+  it('shows a certified saved query as it is when its average can\'t be shown to keep one row per group, and covers the question (B5, try 3)', async () => {
+    // What Cortex sent for try 3: POINTS_PER_GAME by GAME_TYPE. V13 dropped it and called the question a gap.
+    const brief = await plan('Compare how the Golden State Warriors scored per game in the 2016 regular season and in the 2016 playoffs', {
+      requirements: [{ id: 'r1', question: "How did the Golden State Warriors' points per game compare between the 2016 regular season and the 2016 playoffs?", role: 'breakdown', measures: ['POINTS_PER_GAME'], dimensions: ['GAME_TYPE'], filters: [] }],
+      components: [{ id: 'c1', title: 'Warriors PPG: Regular Season vs Playoffs (2016)', sourceId: ppg.sourceId, query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }], filters: [] }, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'Side by side.' }],
+      frame: { title: 'Warriors 2016 PPG: Regular vs Playoffs', goal: 'Compare' },
+    });
+    expect(brief.components).toEqual([expect.objectContaining({ sourceId: ppg.sourceId, requirementIds: ['r1'], view: 'bar' })]);
+    expect(brief.components[0]!.query).toBeUndefined();
+    expect(brief.appTitle).toBe('Warriors 2016 PPG: Regular vs Playoffs');
+    expect(consistent(brief)).toBe(true);
+    // A query on a field the saved query does not have is still refused, as before (V11).
+    const refused = await plan('Compare how the Golden State Warriors scored per game in the 2016 regular season and in the 2016 playoffs', {
+      requirements: [{ id: 'r1', question: 'Warriors rebounds per game in 2016', role: 'kpi', measures: ['REBOUNDS'], dimensions: [], filters: [] }],
+      components: [{ id: 'c1', title: 'Rebounds', sourceId: ppg.sourceId, query: { dimensions: [], measures: [{ measure: 'REBOUNDS' }] }, requirementIds: ['r1'], role: 'kpi', view: 'kpi', rationale: 'No.' }],
+    });
+    expect(refused.components).toEqual([]);
+  });
+
+  it('gives each part of a request the certified saved query that answers it exactly, never a near one (B5, try 5)', async () => {
+    // The tester's try 5 picked the wins and missed the points per game.
+    const brief = await plan("Give a coach one page with the Warriors' regular-season wins from 2014 to 2018 and their 2016 points per game in the regular season and the playoffs", {
+      requirements: [
+        { id: 'r1', question: "What were the Warriors' regular-season wins each season from 2014 to 2018?", role: 'trend', measures: ['WINS'], dimensions: ['SEASON'], filters: [] },
+        { id: 'r2', question: "What was the Warriors' points per game in 2016, regular season vs playoffs?", role: 'breakdown', measures: ['PPG'], dimensions: [], filters: [] },
+      ],
+      components: [{ id: 'c1', title: 'Warriors Regular-Season Wins, 2014-2018', sourceId: winsByYear.sourceId, query: { dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }] }, requirementIds: ['r1'], role: 'trend', view: 'line', rationale: 'Wins.' }],
+    });
+    expect(brief.components.map((component) => [component.sourceId, component.requirementIds])).toEqual([
+      [winsByYear.sourceId, ['r1']],
+      [ppg.sourceId, ['r2']],
+    ]);
+    // Shown as it was certified, under a readable name, and never the 2016 wins saved query.
+    expect(brief.components[1]).toMatchObject({ title: 'Warriors PPG Regular vs Playoffs 2016', view: 'bar' });
+    expect(brief.components[1]!.query).toBeUndefined();
+    expect(brief.selectedSourceIds).not.toContain(wins2016.sourceId);
+    expect(brief.pages.flatMap((page) => page.componentIds)).toContain(brief.components[1]!.id);
+    expect(consistent(brief)).toBe(true);
+  });
+
+  it('reads a question the planner wrote about something the request never names as the request, and picks nothing for it (try 2)', async () => {
+    // Cortex on the stand-in: "the Golden State Warriors' points per game" for "the top scorers in the 2016 playoffs".
+    const prompt = 'Show the top scorers in the 2016 playoffs and how many points each one scored';
+    const brief = await plan(prompt, {
+      requirements: [{ id: 'req1', question: "What was the Golden State Warriors' points per game in the 2016 playoffs?", role: 'kpi', measures: ['POINTS_PER_GAME'], dimensions: [], filters: ['GAME_TYPE'] }],
+      components: [{ id: 'comp1', title: 'Warriors 2016 Playoffs Points Per Game', sourceId: ppg.sourceId, query: { dimensions: [{ field: 'GAME_TYPE' }], measures: [{ measure: 'POINTS_PER_GAME' }] }, requirementIds: ['req1'], role: 'kpi', view: 'kpi', rationale: 'Closest.' }],
+    });
+    expect(brief.requirements.map((requirement) => requirement.question)).toEqual([prompt]);
+    expect(brief.components).toEqual([]);
+    expect(brief.warnings).toEqual([expect.stringMatching(/was left out: it doesn't answer what you asked\.$/)]);
+  });
+
+  it('shows the planner certified data named in the request first, and asks for one requirement and component per part', async () => {
+    const complete = vi.fn(async () => JSON.stringify({ requirements: [{ id: 'r1', question: 'Warriors points per game', role: 'kpi', measures: [], dimensions: [], filters: [] }] }));
+    await planAppBuildBrief({
+      prompt: 'Compare how the Golden State Warriors scored per game in the 2016 regular season and in the 2016 playoffs',
+      candidates: [lakers, wins2016, ppg], requiredSourceIds: [], sourcePolicy: 'include_review_required', complete,
+    });
+    const cards = JSON.parse(complete.mock.calls[0]![0].user).candidateCards as Array<{ title: string; answersPartOfRequest?: boolean }>;
+    expect(cards.map((card) => [card.title, card.answersPartOfRequest ?? false])).toEqual([
+      ['warriors_ppg_regular_vs_playoffs_2016', true],
+      ['lakers_top_3_rebounders_2009', false],
+      ['warriors_regular_season_wins_2016', false],
+    ]);
+    expect(complete.mock.calls[0]![0].system).toMatch(/answersPartOfRequest true/);
+    expect(complete.mock.calls[0]![0].system).toMatch(/title is the App's name/);
+  });
+
+  it('keeps the planner\'s App title only as a short complete title, and draws a line in time order (B6, B7)', async () => {
+    expect(plannerAppTitle('Warriors scoring, 2016', 'Compare how the Warriors scored')).toBe('Warriors scoring, 2016');
+    // The request cut off, too long, a question, or ending on a word that needs more: none is a title.
+    expect(plannerAppTitle("Give a coach one page with the Warriors' regular-season", "Give a coach one page with the Warriors' regular-season wins from 2014 to 2018")).toBeUndefined();
+    expect(plannerAppTitle('Golden State Warriors regular season and playoff points per game in 2016 compared', 'x')).toBeUndefined();
+    expect(plannerAppTitle('Who led the Lakers?', 'x')).toBeUndefined();
+    expect(plannerAppTitle('Warriors wins by', 'x')).toBeUndefined();
+    expect(plannerAppTitle(42, 'x')).toBeUndefined();
+    // A trend's line never keeps a sort by value (V13: seasons 2018, 2017, 2014, 2016, 2015).
+    const brief = await plan('Help a Warriors fan see how the Golden State Warriors did in each season', {
+      requirements: [{ id: 'r1', question: 'How did the Golden State Warriors do in each season?', role: 'trend', measures: ['WINS'], dimensions: ['SEASON'], filters: [] }],
+      components: [{ id: 'c1', title: 'Warriors Wins by Season', sourceId: winsByYear.sourceId, query: { dimensions: [{ field: 'SEASON' }], measures: [{ measure: 'WINS' }] }, requirementIds: ['r1'], role: 'trend', view: 'line', style: { labels: 'last', sort: 'asc' }, rationale: 'Wins.' }],
+    });
+    expect(brief.components[0]!.style).toEqual({ labels: 'last' });
   });
 });
 
