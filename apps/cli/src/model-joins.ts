@@ -15,7 +15,7 @@ import { looksLikePlaceholder, profileRelationshipOnWarehouse } from '@zlens/age
 import type { WarehouseCatalogRelationV1, WarehouseCatalogSnapshotV1 } from '@zlens/core';
 import { canonicalColumn, columnVocabulary } from './model-layers.js';
 import type { ReadHint } from './read-budget.js';
-import { KEY_LIKE_NAME, joinSignature, nameOnlyObjection, type DiscoveredEntity, type DiscoveredRelationship, type WarehouseDiscoveryReport, type WithheldRelationship } from './warehouse-model-discovery.js';
+import { KEY_LIKE_NAME, columnStem, joinSignature, nameOnlyObjection, type DiscoveredEntity, type DiscoveredRelationship, type WarehouseDiscoveryReport, type WithheldRelationship } from './warehouse-model-discovery.js';
 
 /** `hint.sample`: the statement's subject, which a read budget may read from a sample (`read-budget.ts`). */
 type Run = (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>;
@@ -186,7 +186,8 @@ export async function draftIdentityJoins(
 /**
  * The columns of `from` that can hold `key` of `to`: the same name once
  * made comparable (`details_game_id` for `game_id`, `season` for
- * `season_id`), or a role, a prefix that names no table (`opponent_team_id`,
+ * `season_id`, `L_PARTKEY` for `PS_PARTKEY` when each table prefixes its own
+ * columns), or a role, a prefix that names no table (`opponent_team_id`,
  * `home_team_id` for `team_id`).
  */
 function columnsFor(
@@ -196,12 +197,15 @@ function columnsFor(
   vocabulary: ReturnType<typeof columnVocabulary>,
 ): Array<{ column: string; role?: string }> {
   const keyName = canonicalColumn(key, vocabulary, to.name);
+  const keyStem = columnStem(to, key);
   const suffixes = [...new Set([key.toLowerCase(), keyName, keyName.endsWith('_id') ? keyName : `${keyName}_id`])];
   const found: Array<{ column: string; role?: string }> = [];
   for (const column of from.columns) {
     if (column.type && MEASURE_TYPE.test(column.type.trim())) continue;
     const lower = column.name.toLowerCase();
-    if (canonicalColumn(column.name, vocabulary, from.name) === keyName) {
+    // A stem counts when a prefix was taken off one side or both (O_CUSTKEY, C_CUSTKEY).
+    const stem = columnStem(from, column.name);
+    if (canonicalColumn(column.name, vocabulary, from.name) === keyName || (stem === keyStem && (stem !== lower || keyStem !== key.toLowerCase()))) {
       found.push({ column: column.name });
       continue;
     }

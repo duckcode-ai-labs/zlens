@@ -17,7 +17,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolveWarehouseRelation, tableEntityKey, type WarehouseCatalogRelationV1, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
-import { KEY_LIKE_NAME, NON_KEY_TYPE, statementTables, type DiscoveredEntity, type WarehouseDiscoveryReport } from './warehouse-model-discovery.js';
+import { KEY_LIKE_NAME, NON_KEY_TYPE, ownKeyColumn, statementTables, type DiscoveredEntity, type WarehouseDiscoveryReport } from './warehouse-model-discovery.js';
 import type { ReadHint } from './read-budget.js';
 
 /** Where a table sits in the pipeline. `final` is a modeled fact or dimension. */
@@ -125,6 +125,14 @@ const PERIOD_NAME = /^(season|year|fiscal_year|month|week|quarter|period|date|da
 /** Coarse periods first: a season or year says what a table covers better than a date does. */
 export const COARSE_PERIOD = /^(season|year|fiscal_year)(_id)?$|_(season|year)$/i;
 const TEXT_TYPE = /^(varchar|char|text|string|nvarchar|character)/i;
+/** Free text: unique per row by chance, never what a row is (TPC-H's C_COMMENT, C_ADDRESS). */
+const FREE_TEXT_NAME = /(^|_)(comments?|description|address|addr|notes?|remarks?|memo|message|body|text|summary)$/i;
+/**
+ * Whole numbers and uuids, Snowflake's NUMBER included: a tie-break between
+ * key-named columns only. Discovery's own key type leaves NUMBER out, since
+ * Snowflake reports a measure as NUMBER too.
+ */
+const WHOLE_NUMBER_OR_UUID = /^(int|integer|bigint|smallint|tinyint|hugeint|ubigint|uinteger|usmallint|utinyint|serial|bigserial|smallserial|uuid|number)\b/i;
 const DATE_TYPE = /^date\b/i;
 /** Repeated rows a near identity may have: 0.5%. Above it, the columns are not what a row is. */
 const NEAR_UNIQUE_SHARE = 0.005;
@@ -253,13 +261,14 @@ export async function findRowIdentity(
     .filter((hint): hint is { columns: string[]; source: 'declared_key' | 'dbt_test' } => hint.columns.length > 0 && hint.columns.every(Boolean));
   // Tier 0: declared or named like a key; tier 1: a period; tier 2 (only when
   // nothing else identifies a row): a short text label, such as a team name.
+  // Free text (a comment, an address) is never a label: unique by chance.
   const tierOf = new Map<string, number>();
   for (const column of relation.columns) {
     if (DBT_META_COLUMN.test(column.name)) continue;
     const type = column.type?.trim() ?? '';
     if (KEY_LIKE_NAME.test(column.name) && !(type && NON_KEY_TYPE.test(type))) tierOf.set(column.name, 0);
     else if (isPeriodColumn(column)) tierOf.set(column.name, 1);
-    else if (TEXT_TYPE.test(type)) tierOf.set(column.name, 2);
+    else if (TEXT_TYPE.test(type) && !FREE_TEXT_NAME.test(column.name)) tierOf.set(column.name, 2);
   }
   for (const hint of hints) for (const column of hint.columns) if (!tierOf.has(column) || tierOf.get(column)! > 0) tierOf.set(column, 0);
   const ranked = [...tierOf.keys()].sort((a, b) => tierOf.get(a)! - tierOf.get(b)! || a.localeCompare(b));
@@ -290,9 +299,13 @@ export async function findRowIdentity(
   // Smallest first. Within a size, a unique set wins, else the set with the
   // fewest repeats, if they are few. Columns other tables share first
   // ((player_id, season) before (career_season_number, player_id), team_id
-  // before opponent_team_id), then keys before periods, then the coarsest
-  // combination: (player_id, season) before (player_id, first_game_date).
+  // before opponent_team_id), then keys before periods, then a single column
+  // named as the table's own key (C_CUSTKEY in CUSTOMER) and stored as a whole
+  // number, then the coarsest combination: (player_id, season) before
+  // (player_id, first_game_date).
   const shared = (set: string[]) => set.reduce((sum, column) => sum + (options.sharedBy?.(column) ?? 0), 0);
+  const typeOf = (name: string) => columnNamed(name)?.type?.trim() ?? '';
+  const ownKey = (set: string[]) => (set.length === 1 ? (ownKeyColumn(relation, set[0]!) ? 2 : 0) + (WHOLE_NUMBER_OR_UUID.test(typeOf(set[0]!)) ? 1 : 0) : 0);
   const usable = [...distinct.keys()].filter((column) => distinct.get(column)! > 1 || rows === 1);
   for (const withLabels of [false, true]) {
     const pool = usable.filter((column) => withLabels || tierOf.get(column)! < 2);
@@ -301,7 +314,7 @@ export async function findRowIdentity(
       const sets = combinations(pool, size)
         .filter((set) => !withLabels || set.some((column) => tierOf.get(column) === 2))
         .filter((set) => set.reduce((product, column) => product * distinct.get(column)!, 1) >= rows * (1 - NEAR_UNIQUE_SHARE))
-        .sort((a, b) => shared(b) - shared(a) || tierSum(a, tierOf) - tierSum(b, tierOf) || product(a, distinct) - product(b, distinct) || a.join().localeCompare(b.join()))
+        .sort((a, b) => shared(b) - shared(a) || tierSum(a, tierOf) - tierSum(b, tierOf) || ownKey(b) - ownKey(a) || product(a, distinct) - product(b, distinct) || a.join().localeCompare(b.join()))
         .slice(0, MAX_COMBINATIONS_PER_SIZE);
       if (sets.length === 0) continue;
       const counts = size === 1 ? sets.map((set) => distinct.get(set[0]!)!) : await groups(sets);

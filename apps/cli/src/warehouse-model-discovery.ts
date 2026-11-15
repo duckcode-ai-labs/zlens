@@ -219,8 +219,82 @@ export interface WarehouseDiscoveryReport {
 const EVIDENCE_ORDER: RelationshipEvidenceSource[] = ['declared_foreign_key', 'view_join', 'query_history', 'row_identity', 'shared_key', 'named_for_table', 'same_name'];
 /** Column types that are never join keys: measures, flags and timestamps. */
 export const NON_KEY_TYPE = /^(double|float|real|decimal|numeric|money|bool|boolean|date|time|timestamp|datetime|interval|json|jsonb|blob|bytea|array|struct|map)/i;
-/** A column named like a key: `id`, `<thing>_id`, `_key`, `_code`, `_uuid`, `_ref`, `_number`, `_no`. */
-export const KEY_LIKE_NAME = /^(id|uuid|key)$|_(id|key|code|uuid|ref|number|no)$/i;
+/**
+ * A column named like a key: `id`, `<thing>_id`, `_key`, `_code`, `_uuid`,
+ * `_ref`, `_number`, `_no`, a surrogate `_sk`, or a key written as one word,
+ * as TPC-H and Kimball-style warehouses name them (`C_CUSTKEY`, `CustomerKey`,
+ * `L_LINENUMBER`). Without it, a TPC-H copy with no declared keys was drafted
+ * as one row per comment or address (V2 review, F1).
+ */
+export const KEY_LIKE_NAME = /^(id|uuid|key)$|_(id|key|code|uuid|ref|number|no|sk)$|[a-z](key|number)$/i;
+
+/** Share of a table's columns that must start with one prefix for it to be the table's column prefix. */
+const COLUMN_PREFIX_SHARE = 0.8;
+const columnPrefixes = new WeakMap<object, string | null>();
+
+/**
+ * The prefix a table starts its column names with, as TPC-H and TPC-DS do
+ * (`C_CUSTKEY`, `C_NAME` in CUSTOMER; `PS_PARTKEY` in PARTSUPP): one to three
+ * letters and an underscore on at least 80% of the columns (two or more),
+ * letters the table's name starts with and holds in that order. Undefined
+ * when the columns share no such prefix.
+ */
+export function columnPrefix(relation: Pick<WarehouseCatalogRelationV1, 'name' | 'columns'>): string | undefined {
+  const cached = columnPrefixes.get(relation);
+  if (cached !== undefined) return cached ?? undefined;
+  const names = relation.columns.map((column) => column.name.toLowerCase()).filter((name) => !name.startsWith('dbt_'));
+  const counts = new Map<string, number>();
+  for (const name of names) {
+    const prefix = /^([a-z]{1,3})_[a-z0-9]/.exec(name)?.[1];
+    if (prefix) counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+  }
+  const [prefix, count] = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0] ?? [];
+  const table = relation.name.toLowerCase();
+  // The prefix's letters spell the table's initials: `ps` in partsupp, `ss` in store_sales.
+  const initials = (name: string) => {
+    if (!prefix || name[0] !== prefix[0]) return false;
+    let at = 0;
+    for (const letter of prefix) {
+      at = name.indexOf(letter, at);
+      if (at < 0) return false;
+      at += 1;
+    }
+    return true;
+  };
+  const found = prefix && count! >= 2 && count! >= names.length * COLUMN_PREFIX_SHARE && (initials(table) || initials(table.replace(TABLE_PREFIX, ''))) ? prefix : undefined;
+  columnPrefixes.set(relation, found ?? null);
+  return found;
+}
+
+/**
+ * A column's name without its table's column prefix (`O_CUSTKEY` → `custkey`,
+ * as `C_CUSTKEY` → `custkey`), lower case: the name two tables share when each
+ * prefixes its own columns. A bare `id` or `key` left after the prefix names
+ * the table's own row, so the whole name is kept.
+ */
+export function columnStem(relation: Pick<WarehouseCatalogRelationV1, 'name' | 'columns'>, column: string): string {
+  const lower = column.toLowerCase();
+  const prefix = columnPrefix(relation);
+  if (!prefix || !lower.startsWith(`${prefix}_`)) return lower;
+  const stem = lower.slice(prefix.length + 1);
+  return /^(id|key|uuid|pk|sk)$/.test(stem) ? lower : stem;
+}
+
+/**
+ * Named as the table's own key: `id`, `<table>_id`, `<table>_key`, or, after a
+ * column prefix, the table's name or an abbreviation of it before `key` or
+ * `id` (`C_CUSTKEY` in CUSTOMER, `O_ORDERKEY` in ORDERS).
+ */
+export function ownKeyColumn(relation: Pick<WarehouseCatalogRelationV1, 'name' | 'columns'>, column: string): boolean {
+  const lower = column.toLowerCase();
+  const prefix = columnPrefix(relation);
+  const stem = prefix && lower.startsWith(`${prefix}_`) ? lower.slice(prefix.length + 1) : lower;
+  if (/^(id|key|uuid|pk|sk)$/.test(stem)) return true;
+  const thing = /^(.+?)_?(id|key|uuid|sk)$/.exec(stem)?.[1];
+  if (!thing || thing.length < 3) return false;
+  const table = singular(relation.name.toLowerCase().replace(TABLE_PREFIX, ''));
+  return thing === table || thing === table.replace(/_/g, '') || (!thing.includes('_') && !table.includes('_') && table.startsWith(thing));
+}
 /** Types a surrogate key is stored as: whole numbers and uuids. */
 const KEY_TYPE = /^(int|integer|bigint|smallint|tinyint|hugeint|ubigint|uinteger|usmallint|utinyint|serial|bigserial|smallserial|uuid)\b/i;
 
@@ -697,10 +771,12 @@ export function recordDiscoveryDecisions(projectRoot: string, decisions: Discove
  */
 /**
  * Joins the data proves, for a warehouse that declares no keys. A column name
- * shared by several tables is a key where it is unique and never null in one
- * of them, and a join where the other tables' values are found there (at most
- * 5% missing). Names are only where to look: whether a column is a key is
- * decided by the data, never by how it is spelled. Aggregates only.
+ * shared by several tables (once a table's own column prefix is taken off:
+ * TPC-H's O_CUSTKEY and C_CUSTKEY share CUSTKEY) is a key where it is unique
+ * and never null in one of them, and a join where the other tables' values
+ * are found there (at most 5% missing). Names are only where to look: whether
+ * a column is a key is decided by the data, never by how it is spelled.
+ * Aggregates only.
  */
 export async function inferSharedKeyJoins(
   report: WarehouseDiscoveryReport,
@@ -718,7 +794,8 @@ export async function inferSharedKeyJoins(
     for (const column of relation.columns) {
       if (column.type && NON_KEY_TYPE.test(column.type)) continue;
       if (!keyLikeColumn(relation, column)) continue;
-      const key = column.name.toLowerCase();
+      // Tables that prefix their own columns share a key by its stem: O_CUSTKEY and C_CUSTKEY.
+      const key = columnStem(relation, column.name);
       holders.set(key, [...(holders.get(key) ?? []), { relation, column: column.name }]);
     }
   }
