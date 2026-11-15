@@ -43,6 +43,7 @@ const ReadinessPage = lazy(() => import('../readiness/ReadinessPage').then((modu
 const AgentLogPage = lazy(() => import('../agent/AgentLogPage').then((module) => ({ default: module.AgentLogPage })));
 const AskTracePage = lazy(() => import('../agent/AskTracePage').then((module) => ({ default: module.AskTracePage })));
 const AskObservabilityPage = lazy(() => import('../agent/AskObservabilityPage').then((module) => ({ default: module.AskObservabilityPage })));
+const HistoryPage = lazy(() => import('../history/HistoryPage').then((module) => ({ default: module.HistoryPage })));
 const DbtFirstModelingPage = lazy(() => import('../modeling/DbtFirstModelingPage').then((module) => ({ default: module.DbtFirstModelingPage })));
 const HomeSummary = lazy(() => import('../home/HomeSummary').then((module) => ({ default: module.HomeSummary })));
 const AppsView = lazy(() => import('../apps/AppsView').then((module) => ({ default: module.AppsView })));
@@ -388,6 +389,9 @@ export function AppShell() {
               </>
             ) : state.mainView === 'host_page' ? (
               <HostPageView />
+            ) : state.mainView === 'history' ? (
+              // V15: the app for Snowflake's History (its left bar's Govern slot); elsewhere Source control has it.
+              snowflakeApp ? <HistoryPage /> : <GitPage />
             ) : state.mainView === 'ask_observability' ? (
               <AskObservabilityPage />
             ) : state.mainView === 'ask_trace' && state.askTraceRunId ? (

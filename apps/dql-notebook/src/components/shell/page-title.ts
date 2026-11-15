@@ -25,6 +25,7 @@ export const PAGE_NAMES: Record<MainView, string> = {
   modeling: 'Modeling',
   help: 'Help',
   host_page: 'ZLens',
+  history: 'History',
 };
 
 /**

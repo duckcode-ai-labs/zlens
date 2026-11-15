@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type SnowflakeAppBackups } from '../../api/client';
 import type { Theme } from '../../themes/notebook-theme';
+import { HistoryStorageNote } from '../history/HistoryStorageNote';
 
 /** "ZLENS_BACKUP_20261109_220000" as a date a person reads. */
 export function backupLabel(name: string, createdOn?: string): string {
@@ -132,6 +133,8 @@ export function SnowflakeAppBackupsPanel({ t, initial }: { t: Theme; initial: Sn
           </div>
         )}
       </div>
+      {/* V15: how much room History's versions take on the volume these backups copy. */}
+      <HistoryStorageNote t={t} />
       {message && <div role="status" style={{ ...muted, marginTop: 10, color: 'var(--status-success)' }}>{message}</div>}
       {error && <div role="alert" style={{ ...muted, marginTop: 10, color: t.error }}>{error}</div>}
     </div>

@@ -4411,6 +4411,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return requestUncached<T>(path, options);
 }
 
+/** The same JSON request, for API modules kept in files of their own (api/history.ts). */
+export function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
+  return request<T>(path, options);
+}
+
 async function requestUncached<T>(path: string, options?: RequestInit): Promise<T> {
   let res: Response;
   try {

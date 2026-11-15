@@ -179,7 +179,7 @@ export interface ParamConfig {
 }
 export type SidebarPanel = 'files' | 'schema' | 'block_library' | 'connection' | 'lineage' | 'git' | 'apps' | 'readiness' | 'skills' | 'domains' | 'settings' | null;
 export type DevPanelTab = 'logs' | 'errors';
-export type MainView = 'home' | 'ask' | 'notebook' | 'business_artifact' | 'lineage' | 'lineage_detail' | 'block_studio' | 'imports' | 'connection' | 'git' | 'apps' | 'readiness' | 'skills' | 'domains' | 'modeling' | 'settings' | 'ask_trace' | 'ask_observability' | 'help' | 'host_page';
+export type MainView = 'home' | 'ask' | 'notebook' | 'business_artifact' | 'lineage' | 'lineage_detail' | 'block_studio' | 'imports' | 'connection' | 'git' | 'apps' | 'readiness' | 'skills' | 'domains' | 'modeling' | 'settings' | 'ask_trace' | 'ask_observability' | 'help' | 'host_page' | 'history';
 
 export type GlobalAiAudience = 'stakeholder' | 'analyst';
 
@@ -206,7 +206,7 @@ export interface GlobalAiState {
   autoRun?: { text: string; mode?: string; nonce: number };
 }
 export type AppWorkspaceExperience = 'view' | 'build';
-export type AppWorkspaceSection = 'dashboards' | 'notebooks' | 'research' | 'ai' | 'drafts' | 'settings';
+export type AppWorkspaceSection = 'dashboards' | 'notebooks' | 'research' | 'ai' | 'drafts' | 'settings' | 'history';
 export type LineageReturnTarget =
   | {
       view: 'apps';

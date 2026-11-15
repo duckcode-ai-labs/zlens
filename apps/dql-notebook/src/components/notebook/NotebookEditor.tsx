@@ -37,6 +37,7 @@ import {
 import { extractSqlFromText } from "../../utils/block-studio";
 import { useQueryExecution } from "../../hooks/useQueryExecution";
 import { useSnowflakeApp } from "../../snowflake-app/snowflake-app-mode";
+import { openHistory } from "../history/history-navigation";
 import { notebookAiScopeHint, notebookBreadcrumbParts } from "../../snowflake-app/snowflake-app-words";
 
 interface NotebookEditorProps {
@@ -674,6 +675,8 @@ function NotebookToolbar({
         )}
       </button>
 
+      <NotebookVersionsButton t={t} />
+
       {/* Meta info */}
       <span
         style={{
@@ -693,6 +696,42 @@ function NotebookToolbar({
         )}
       </span>
     </div>
+  );
+}
+
+/**
+ * The app for Snowflake keeps every save as a version (V15 History): this notebook's versions, compare and restore.
+ * ("History" beside it is the notebook AI's own history.)
+ */
+function NotebookVersionsButton({ t }: { t: Theme }) {
+  const snowflakeApp = useSnowflakeApp();
+  const path = useNotebookStore((store) => store.activeFile?.path);
+  const dispatch = useDispatch();
+  if (!snowflakeApp || !path || !path.endsWith('.dqlnb')) return null;
+  return (
+    <button
+      type="button"
+      title="Every saved version of this notebook: compare and restore"
+      onClick={() => openHistory(dispatch, { page: 'item', path })}
+      style={{
+        height: 26,
+        border: `1px solid ${t.btnBorder}`,
+        background: t.btnBg,
+        color: t.textSecondary,
+        borderRadius: 6,
+        padding: '0 9px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        fontWeight: 700,
+        fontFamily: t.font,
+        cursor: 'pointer',
+      }}
+    >
+      <Clock3 size={14} strokeWidth={2} aria-hidden="true" />
+      Versions
+    </button>
   );
 }
 

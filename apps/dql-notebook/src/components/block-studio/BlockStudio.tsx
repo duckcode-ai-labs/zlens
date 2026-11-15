@@ -125,6 +125,9 @@ import { getTypeColor } from '../../utils/type-colors';
 import { BlockParameterControls } from '../parameters/BlockParameterControls';
 import type { BlockEntry } from '../blocks/block-types';
 import { buildCatalogFooter } from '../panels/build-footer';
+import { ItemHistory } from '../history/ItemHistory';
+import { openHistory } from '../history/history-navigation';
+import { takeBlockHistoryTab } from '../history/history-route';
 
 type ExplorerTab = 'blocks' | 'semantic' | 'database';
 type ResultTab = 'results' | 'parameters' | 'lineage' | 'save' | 'history';
@@ -667,6 +670,13 @@ export function BlockStudio() {
   useEffect(() => {
     if (resultTab === 'history' && !historyLoaded) loadBlockHistory();
   }, [historyLoaded, loadBlockHistory, resultTab]);
+  // Opened from History: show this saved query's History tab.
+  useEffect(() => {
+    if (takeBlockHistoryTab(state.activeBlockPath)) {
+      setResultTab('history');
+      setBottomPaneCollapsed(false);
+    }
+  }, [state.activeBlockPath]);
 
   const handleDraftChange = (draft: string) => {
     setRunError(null);
@@ -2096,7 +2106,21 @@ export function BlockStudio() {
               t={t}
             />
           )}
-          {resultTab === 'history' && (
+          {resultTab === 'history' && snowflakeApp && state.activeBlockPath ? (
+            <ItemHistory
+              path={state.activeBlockPath}
+              t={t}
+              refreshToken={`${state.activeBlockPath}:${historySourceFingerprint ?? ''}`}
+              onCompare={(from, to) => openHistory(dispatch, { page: 'compare', path: state.activeBlockPath!, from, to, back: 'item' })}
+              onRestored={() => {
+                const path = state.activeBlockPath;
+                if (!path) return;
+                const file = state.files.find((candidate) => candidate.path === path) ?? { name: path.split('/').pop() ?? path, path, type: 'block' as const, folder: 'blocks' };
+                void api.openBlockStudio(path).then((payload) => dispatch({ type: 'OPEN_BLOCK_STUDIO', file, payload })).catch(() => undefined);
+              }}
+            />
+          ) : null}
+          {resultTab === 'history' && !(snowflakeApp && state.activeBlockPath) && (
             <HistoryPanel
               entries={historyEntries}
               loaded={historyLoaded}

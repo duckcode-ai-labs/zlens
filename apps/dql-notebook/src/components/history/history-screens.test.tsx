@@ -1,0 +1,242 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { TooltipProvider } from '@zlens/ui';
+import type { HistoryCompare, HistoryFeedEntry, HistoryItem, HistoryRunCompare, HistoryStatus } from '../../api/history';
+import { themes } from '../../themes/notebook-theme';
+import { ActivityBar } from '../shell/ActivityBar';
+import { HostUiProvider } from '../../host/host-ui';
+import { setSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { CompareView, runSummary } from './CompareVersions';
+import { ChangeLine } from './HistoryPage';
+import { historyStorageWords } from './HistoryStorageNote';
+import { ItemHistoryView } from './ItemHistory';
+import { historyRoute, requestBlockHistoryTab, setHistoryRoute, takeBlockHistoryTab } from './history-route';
+import {
+  actionLabel, authorLabel, dayLabel, formatBytes, groupByDay, historySql, initials, itemLabel, restorableVersion, whenLabel,
+} from './history-words';
+
+/**
+ * V15 History screens in the ZLens app for Snowflake: the left bar's History item, the project's changes, the
+ * History tab of an item, and Compare (design: history-canvas Main, ItemHistory, Compare, Rails).
+ */
+const t = themes.paper;
+const noop = () => undefined;
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  setSnowflakeApp(false);
+});
+
+function rail(): string {
+  vi.stubGlobal('window', { localStorage: { getItem: () => '1', setItem: () => undefined } });
+  return renderToStaticMarkup(<TooltipProvider><HostUiProvider initial={{ host: false }}><ActivityBar /></HostUiProvider></TooltipProvider>);
+}
+
+const names = (html: string) => [...html.matchAll(/aria-label="([^"]+)"/g)].map((match) => match[1]!).filter((name) => !/sidebar rail$/.test(name));
+
+describe('the left bar', () => {
+  it('puts History in Source control\'s slot in the Govern group, in the app for Snowflake only', () => {
+    expect(names(rail())).toEqual(['Apps', 'Ask', 'Notebooks', 'Saved queries', 'Lineage', 'Modeling', 'Ask observability', 'Source control', 'Settings', 'Help']);
+    setSnowflakeApp(true);
+    expect(names(rail())).toEqual(['Ask', 'Apps', 'Notebooks', 'Saved queries', 'Lineage', 'Modeling', 'Ask observability', 'History', 'Settings', 'Help']);
+  });
+});
+
+describe('the words', () => {
+  const now = new Date(2026, 10, 14, 18, 0);
+  it('names days, times and people as the screens do', () => {
+    expect(dayLabel(new Date(2026, 10, 14, 16, 13).toISOString(), now)).toBe('Today · Sat 14 Nov');
+    expect(dayLabel(new Date(2026, 10, 13, 9, 2).toISOString(), now)).toBe('Yesterday · Fri 13 Nov');
+    expect(dayLabel(new Date(2026, 10, 11, 14, 20).toISOString(), now)).toBe('Wed 11 Nov');
+    expect(dayLabel(new Date(2025, 10, 11, 14, 20).toISOString(), now)).toBe('Tue 11 Nov 2025');
+    expect(whenLabel(new Date(2026, 10, 14, 10, 42).toISOString(), now)).toBe('Today 10:42');
+    expect(whenLabel(new Date(2026, 10, 11, 14, 20).toISOString(), now)).toBe('11 Nov 14:20');
+    expect(initials('TEST_ADMIN')).toBe('TA');
+    expect(initials('jsmith')).toBe('JS');
+    expect(authorLabel({ name: 'AI (Ask)', kind: 'ai', askedBy: 'JSMITH' }, false)).toBe('AI (Ask) for JSMITH');
+    expect(authorLabel({ name: 'AI (Ask)', kind: 'ai' })).toBe('AI');
+    expect(formatBytes(1536)).toBe('1.5 KB');
+    expect(formatBytes(1024 ** 3 * 1.25)).toBe('1.3 GB');
+    const groups = groupByDay([{ at: new Date(2026, 10, 14, 16).toISOString() }, { at: new Date(2026, 10, 14, 9).toISOString() }, { at: new Date(2026, 10, 11, 9).toISOString() }], now);
+    expect(groups.map((group) => [group.label, group.entries.length])).toEqual([['Today · Sat 14 Nov', 2], ['Wed 11 Nov', 1]]);
+    expect(historySql('ZLENS_APP')).toContain('FROM ZLENS_APP.app_public.history');
+  });
+
+  it('says what a line did: cleared drafts, an upgrade\'s clean-up, a restore of the version before a removal', () => {
+    const base = { by: { name: 'JSMITH', kind: 'person' as const }, count: 45 };
+    expect(actionLabel({ ...base, change: 'removed', action: 'clear-drafts' })).toBe('cleared');
+    expect(itemLabel({ items: [], count: 45, kind: 'saved_query', action: 'clear-drafts' })).toBe('45 automatic Ask drafts');
+    expect(actionLabel({ ...base, by: { name: 'ZLens', kind: 'zlens' }, change: 'removed', action: 'upgrade' })).toMatch(/upgrade/);
+    expect(itemLabel({ items: [], count: 5, kind: 'app', action: 'upgrade' })).toBe('5 apps');
+    expect(actionLabel({ ...base, count: 1, change: 'created', action: 'ask', by: { name: 'AI (Ask)', kind: 'ai' } })).toBe('drafted');
+    expect(restorableVersion({ change: 'removed', version: 4 })).toBe(3);
+    expect(restorableVersion({ change: 'edited', version: 2 })).toBe(2);
+  });
+});
+
+const certifiedLine: HistoryFeedEntry = {
+  id: 'c1:blocks/nba/wins.dql',
+  commit: 'c1',
+  at: new Date(2026, 10, 14, 16, 13).toISOString(),
+  by: { name: 'TEST_ADMIN', kind: 'person' },
+  action: 'certify',
+  change: 'certified',
+  kind: 'saved_query',
+  items: [{ key: 'blocks/nba/wins.dql', current: 'blocks/nba/wins.dql', name: 'warriors_regular_wins', kind: 'saved_query', version: 3, certified: true, removed: false, isCurrentVersion: true }],
+  count: 1,
+  version: 3,
+  certified: true,
+  detail: 'Matches warriors_wins.xlsx · every value compared',
+  canCompare: true,
+  canRestore: false,
+};
+
+describe('a line in the project\'s History', () => {
+  it('says when, who, what and which item, with the version and CERTIFIED pills', () => {
+    const html = renderToStaticMarkup(<ChangeLine entry={certifiedLine} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(html).toContain('16:13');
+    expect(html).toContain('>TA<');
+    expect(html).toContain('TEST_ADMIN');
+    expect(html).toContain('certified');
+    expect(html).toContain('warriors_regular_wins');
+    expect(html).toContain('Saved query · Matches warriors_wins.xlsx');
+    expect(html).toContain('CERTIFIED');
+    expect(html).toContain('v3');
+    expect(html).toContain('>Compare<');
+    // The current version has nothing to restore.
+    expect(html).not.toContain('Restore');
+  });
+
+  it('offers Restore of the version before a removal, and lists a clean-up\'s items', () => {
+    const removed: HistoryFeedEntry = {
+      ...certifiedLine, id: 'c2', action: 'delete', change: 'removed', certified: false, detail: 'It can be restored from History', canCompare: false, canRestore: true, version: 4,
+      items: [{ ...certifiedLine.items[0]!, version: 4, removed: true }],
+    };
+    const html = renderToStaticMarkup(<ChangeLine entry={removed} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(html).toContain('removed');
+    expect(html).toContain('aria-label="Restore v3 of warriors_regular_wins"');
+    const cleared: HistoryFeedEntry = {
+      ...removed, id: 'c3', action: 'clear-drafts', count: 2, version: undefined,
+      items: [{ ...removed.items[0]!, key: 'a', name: 'draft_a', version: 2 }, { ...removed.items[0]!, key: 'b', name: 'draft_b', version: 2 }],
+    };
+    const closed = renderToStaticMarkup(<ChangeLine entry={cleared} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(closed).toContain('cleared');
+    expect(closed).toContain('2 automatic Ask drafts');
+    const open = renderToStaticMarkup(<ChangeLine entry={cleared} first t={t} expanded onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(open).toContain('draft_a');
+    expect(open).toContain('draft_b');
+  });
+});
+
+const item: HistoryItem = {
+  item: { key: 'blocks/nba/wins.dql', kind: 'saved_query', name: 'wins', removed: false, currentVersion: 5 },
+  banner: { draft: 5, certified: 4 },
+  versions: [
+    { version: 5, commit: 'e', path: 'blocks/_drafts/nba/wins-0123456789abcdef.dql', at: new Date(2026, 10, 14, 10, 42).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, change: 'edited', detail: 'Draft edit of certified v4. SQL changed. Not certified yet', state: 'draft', current: true, canRestore: false },
+    { version: 4, commit: 'd', path: 'blocks/nba/wins.dql', at: new Date(2026, 10, 11, 14, 20).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, change: 'certified', detail: 'Matches warriors_wins.xlsx', state: 'certified', current: false, canRestore: true },
+    { version: 1, commit: 'a', path: 'blocks/nba/wins.dql', at: new Date(2026, 10, 10, 17, 29).toISOString(), by: { name: 'AI (Ask)', kind: 'ai', askedBy: 'TEST_ADMIN' }, change: 'drafted', detail: 'From Ask: "How many games?"', state: 'draft', current: false, canRestore: true },
+  ],
+};
+
+describe('the History tab', () => {
+  it('shows the banner for a draft edit of a certified version, the versions table and what restore does', () => {
+    const html = renderToStaticMarkup(<ItemHistoryView item={item} t={t} selected={[4, 5]} onToggle={noop} onCompare={noop} onView={noop} onRestore={noop} onCloseView={noop} />);
+    expect(html).toContain('v5 is an edit of certified v4 and is not certified yet. Compare the two, then certify v5 or restore v4.');
+    expect(html).toContain('Compare v4 and v5');
+    expect(html).toContain('2 versions selected');
+    for (const header of ['Version', 'Saved', 'By', 'What changed', 'State']) expect(html).toContain(`>${header}</th>`);
+    expect(html).toContain('AI (Ask) for TEST_ADMIN');
+    expect(html).toContain('>Certified<');
+    expect(html).toContain('>Draft<');
+    expect(html).toContain('>Current<');
+    expect(html).toContain('aria-label="Restore v4"');
+    expect(html).not.toContain('aria-label="Restore v5"');
+    expect(html).toContain('Restoring never changes an old version: it saves a copy as the next version (v6), as a draft. Certified versions stay exactly as they were certified, with their receipts.');
+  });
+});
+
+const compare: HistoryCompare = {
+  item: item.item,
+  from: { version: 4, commit: 'd', path: 'blocks/nba/wins.dql', at: new Date(2026, 10, 11, 14, 20).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, state: 'certified', certifiedBy: 'TEST_ADMIN', oldReport: 'Matches warriors_wins.xlsx · every value compared' },
+  to: { version: 5, commit: 'e', path: 'blocks/_drafts/nba/wins-0123456789abcdef.dql', at: new Date(2026, 10, 14, 10, 42).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, state: 'draft' },
+  sql: {
+    changed: 1,
+    lines: [
+      { kind: 'same', text: 'SELECT season, wins', oldNumber: 1, newNumber: 1 },
+      { kind: 'removed', text: '  AND season BETWEEN 2014 AND 2018', oldNumber: 2 },
+      { kind: 'added', text: '  AND season BETWEEN 2014 AND 2019', newNumber: 2 },
+    ],
+  },
+  fields: [
+    { field: 'description', label: 'Description', before: 'Wins, 2014–2018', after: 'Wins, 2014–2019', changed: true },
+    { field: 'owner', label: 'Owner', before: 'TEST_ADMIN', after: 'TEST_ADMIN', changed: false },
+    { field: 'tags', label: 'Tags', before: '', after: '', changed: false },
+    { field: 'chart', label: 'Chart', before: 'bar', after: 'bar', changed: false },
+  ],
+  files: [],
+};
+
+const run: HistoryRunCompare = {
+  from: { columns: ['SEASON', 'WINS'], rowCount: 5 },
+  to: { columns: ['SEASON', 'WINS'], rowCount: 6 },
+  keyColumns: ['SEASON'],
+  valueColumns: ['WINS'],
+  rows: [
+    { key: [2018], from: [57], to: [57], state: 'same' },
+    { key: [2019], from: null, to: [15], state: 'new' },
+  ],
+  summary: { same: 5, changed: 0, new: 1, removed: 0 },
+};
+
+describe('Compare', () => {
+  it('shows both versions, the SQL line diff, the fields, the result run now, and Restore and Certify', () => {
+    const html = renderToStaticMarkup(<CompareView compare={compare} item={item} run={run} from={4} to={5} t={t} onRestore={noop} onRunBoth={noop} onCertify={noop} onBack={noop} />);
+    expect(html).toContain('Compare v4 and v5');
+    expect(html).toContain('What changed between the certified version and the draft edit');
+    expect(html).toContain('Restore v4 as v6');
+    expect(html).toContain('Certify v5');
+    expect(html).toContain('Old report: Matches warriors_wins.xlsx');
+    expect(html).toContain('Not compared with the old report yet');
+    expect(html).toContain('SQL · 1 line changed');
+    expect(html).toContain('Description changed');
+    expect(html).toContain('Result · 1 new row, 5 rows the same');
+    expect(html).toContain('Owner, tags and chart unchanged');
+    expect(html).toContain('data-diff="removed"');
+    expect(html).toContain('data-diff="added"');
+    expect(html).toContain('v4 WINS');
+    expect(html).toContain('data-row-state="new"');
+    expect(html).toContain('Back to History');
+    expect(runSummary(run, 4, 5)).toBe('The 5 rows in v4 come out the same. v5 adds 1.');
+  });
+
+  it('offers Run both before anything ran, and no Certify for an older draft', () => {
+    const html = renderToStaticMarkup(<CompareView compare={compare} item={{ ...item, item: { ...item.item, currentVersion: 6 } }} run={null} from={4} to={5} t={t} onRestore={noop} onRunBoth={noop} onCertify={noop} onBack={noop} />);
+    expect(html).toContain('Run both');
+    expect(html).not.toContain('Certify v5');
+  });
+});
+
+describe('Settings » Backups: the room History takes', () => {
+  it('says how much, warns from 1 GiB, and whether the SQL log was written', () => {
+    const status: HistoryStatus = { enabled: true, versions: 12, items: 4, sizeBytes: 300 * 1024, warnAtBytes: 1024 ** 3, sizeWarning: false, sqlLog: { state: 'written', table: 'ZLENS_APP.CORE.HISTORY_LOG', pending: 0, lastWrittenAt: '2026-11-14T00:00:00Z' } };
+    expect(historyStorageWords(status)).toEqual({
+      line: 'History keeps 12 versions of 4 items and takes 300 KB of the app\'s volume.',
+      log: 'Its change log is readable with SQL in ZLENS_APP.app_public.history.',
+    });
+    const big = historyStorageWords({ ...status, sizeBytes: 1.5 * 1024 ** 3, sizeWarning: true, sqlLog: { ...status.sqlLog, state: 'skipped' } });
+    expect(big.warning).toMatch(/over 1\.0 GB/);
+    expect(big.log).toMatch(/could not be written.*History itself works/);
+  });
+});
+
+describe('where History goes next', () => {
+  it('keeps its page apart from the store, and opens a saved query\'s History tab once', () => {
+    setHistoryRoute({ page: 'compare', path: 'blocks/a.dql', from: 1, to: 2 });
+    expect(historyRoute()).toEqual({ page: 'compare', path: 'blocks/a.dql', from: 1, to: 2 });
+    requestBlockHistoryTab('blocks/a.dql');
+    expect(takeBlockHistoryTab('blocks/b.dql')).toBe(false);
+    expect(takeBlockHistoryTab('blocks/a.dql')).toBe(true);
+    expect(takeBlockHistoryTab('blocks/a.dql')).toBe(false);
+    setHistoryRoute({ page: 'feed' });
+  });
+});
