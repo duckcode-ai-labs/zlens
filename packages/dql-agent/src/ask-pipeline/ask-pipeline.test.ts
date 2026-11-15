@@ -1091,7 +1091,8 @@ describe('the units contract of a result', () => {
     const counts = describeResultColumns(make({ measures: [{ ref: 'metric:orders.order_count_sum' }, { ref: 'metric:orders.count_order_items' }] }), { columns: ['order_count_sum', 'count_order_items'], rows: [] }, local);
     expect(counts.map((item) => item.kind)).toEqual(['count', 'count']);
     const growth = buildVocabularyIndex({ metrics: [{ name: 'revenue_growth_mom', model: 'order_item', type: 'derived', expr: '(current_revenue - revenue_prev_month)*100/revenue_prev_month' }] });
-    expect(describeResultColumns(make({ measures: [{ ref: 'metric:order_item.revenue_growth_mom' }] }), { columns: ['revenue_growth_mom'], rows: [] }, growth)[0]).toMatchObject({ kind: 'percent', unit: 'percentage_points' });
+    // A growth rate the formula multiplies by 100 is a percent on the 0-100 scale, not percentage points (V13, Q14).
+    expect(describeResultColumns(make({ measures: [{ ref: 'metric:order_item.revenue_growth_mom' }] }), { columns: ['revenue_growth_mom'], rows: [] }, growth)[0]).toMatchObject({ kind: 'percent', unit: 'percent' });
   });
   it('an aggregated Boolean is a number, and only an unaggregated Boolean is a flag (Codex E09)', () => {
     const booleans = buildVocabularyIndex({
@@ -3048,7 +3049,7 @@ describe('two governed sources: certified blocks and authored semantics; everyth
     expect(reasons[0]).not.toContain('/var/folders');
   });
 
-  it('a percent the AI-written SQL already multiplied by 100 is shown as points, not multiplied again', async () => {
+  it('a percent the AI-written SQL already multiplied by 100 is not multiplied again, and reads as a percent', async () => {
     const provider: AgentProvider = { name: 'ollama', available: async () => true, generate: async () => JSON.stringify({ version: 1, kind: 'analytics', reading: 'Growth from July to August.', measures: [{ ref: 'column:dev.orders.amount', aggregation: 'sum', alias: 'july' }, { ref: 'column:dev.orders.amount', aggregation: 'sum', alias: 'august' }, { ref: 'change:growth', alias: 'growth_pct', change: { base: 'july', comparison: 'august', as: 'percent' } }], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'scalar' }) };
     const outcome = await runAskPipeline({
       question: 'growth from July to August', vocabulary, provider, clauseCoverage: false, explorationAuto: true,
@@ -3057,8 +3058,10 @@ describe('two governed sources: certified blocks and authored semantics; everyth
     });
     expect(outcome.kind).toBe('answered');
     if (outcome.kind !== 'answered') return;
-    expect(outcome.result.columnsMeta?.find((meta) => meta.name === 'growth_pct')).toMatchObject({ kind: 'percent', unit: 'percentage_points' });
+    expect(outcome.result.columnsMeta?.find((meta) => meta.name === 'growth_pct')).toMatchObject({ kind: 'percent', unit: 'percent' });
     expect(outcome.text).not.toContain('806');
+    expect(outcome.text).toContain('growth percent: 8.1%.');
+    expect(outcome.text).not.toContain(' pp');
   });
 
   it('a governed reading the semantic engine cannot compile goes to AI SQL without a repair re-ask', async () => {

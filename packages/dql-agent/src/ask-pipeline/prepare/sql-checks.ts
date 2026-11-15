@@ -425,6 +425,80 @@ export function groupedColumns(sql: string): GroupedColumn[] {
   return out;
 }
 
+/** The select lists at depth 0 of a statement (comments removed): the outer query, not a CTE body or a subquery. */
+function outerSelectLists(text: string): string[] {
+  const lists: string[] = [];
+  let depth = 0;
+  let quoted: string | undefined;
+  let start = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (quoted) { if (char === quoted) quoted = undefined; continue; }
+    if (char === '\'' || char === '"') { quoted = char; continue; }
+    if (char === '(') { depth += 1; continue; }
+    if (char === ')') { depth -= 1; continue; }
+    if (depth !== 0 || !/[A-Za-z]/.test(char) || (index > 0 && /[\w$]/.test(text[index - 1]!))) continue;
+    const word = /^[A-Za-z_]+/.exec(text.slice(index))![0].toLowerCase();
+    if (word === 'select') start = index + word.length;
+    else if (word === 'from' && start >= 0) { lists.push(text.slice(start, index)); start = -1; }
+    index += word.length - 1;
+  }
+  return lists;
+}
+
+/**
+ * Whether a statement SHOWS a column: names it in its outer select list. A column only filtered on
+ * (`WHERE p.player_name ILIKE '%Durant%'`) is not shown: the answer still lists the player's id (new-user test V13,
+ * Q11). A select list of `*`, or one this cannot read, counts a column named anywhere, as before.
+ */
+export function shownInSelect(sql: string, column: string): boolean {
+  const text = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const lists = outerSelectLists(text);
+  if (lists.length === 0 || lists.some((list) => /(?:^|[\s,.])\*\s*(?:,|$)/.test(list))) return mentionsColumn(sql, column);
+  return lists.some((list) => mentionsColumn(list, column));
+}
+
+/**
+ * WHAT A STATEMENT SHOWS. Each plain column of the outermost select list (every branch of a UNION), with the
+ * relation it is read from (aliases resolved, CTEs left out) and the name it is shown under. An expression is not
+ * a column and is skipped; `SELECT *` shows nothing this can name. Best effort, like groupedColumns: what this
+ * cannot read is not reported, so a check built on it never fails a statement it misread.
+ */
+export function selectedColumns(sql: string): Array<GroupedColumn & { shownAs: string }> {
+  const text = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const ctes = new Set([...text.matchAll(/(?:\bwith\b(?:\s+recursive\b)?|,)\s*([A-Za-z_][\w$]*)(?:\s*\([^)]*\))?\s+as\s*\(/gi)].map((match) => match[1]!.toLowerCase()));
+  const aliases = new Map<string, string>();
+  const relations: string[] = [];
+  for (const match of text.matchAll(new RegExp(String.raw`\b(?:from|join)\s+${RELATION_TOKEN}(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?`, 'gi'))) {
+    const relation = match[1]!;
+    if (ctes.has(relation.replace(/"/g, '').toLowerCase())) continue;
+    const alias = match[2] && !NOT_ALIAS.has(match[2].toLowerCase()) ? match[2] : undefined;
+    aliases.set(tableName(relation).toLowerCase(), relation);
+    if (alias) aliases.set(alias.toLowerCase(), relation);
+    if (!relations.includes(relation)) relations.push(relation);
+  }
+  const lists = outerSelectLists(text);
+  const out: Array<GroupedColumn & { shownAs: string }> = [];
+  for (const list of lists) {
+    for (const written of topLevelItems(list.replace(/^\s*(?:distinct|all)\b/i, '').replace(/^\s*top\s+\d+\b/i, ''))) {
+      // The name it is shown under: the last word of an aliased item (`p.SEASON AS season_year`).
+      const aliased = withoutAlias(written) !== written.trim();
+      const shownAs = aliased ? written.trim().split(/\s+/).pop()!.replace(/"/g, '') : undefined;
+      const column = SIMPLE_COLUMN.exec(withoutAlias(written));
+      if (!column) continue;
+      const qualifier = column[1]?.replace(/"/g, '');
+      const name = column[2]!.replace(/"/g, '');
+      if (name === '*') continue;
+      const relation = qualifier ? aliases.get(qualifier.toLowerCase()) : relations.length === 1 ? relations[0] : undefined;
+      if (qualifier && !relation) continue;
+      if (!out.some((existing) => existing.column.toLowerCase() === name.toLowerCase() && existing.relation === relation)) {
+        out.push({ column: name, ...(relation ? { relation } : {}), ...(qualifier ? { qualifier } : {}), shownAs: shownAs || name });
+      }
+    }
+  }
+  return out;
+}
+
 /** Whether a statement reads a column anywhere (bare or qualified, quoted or not). */
 export function mentionsColumn(sql: string, column: string): boolean {
   const escaped = column.replace(/"/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -525,4 +599,96 @@ export function withRowGuard(sql: string, maxRows: number): string {
   if (/\blimit\s+\d+(\s+offset\s+\d+)?\s*$/i.test(trimmed) || /\bfetch\s+(first|next)\s+\d+\s+rows?\s+only\s*$/i.test(trimmed)) return trimmed;
   if (sqlReturnsOneRow(trimmed)) return trimmed;
   return `${trimmed}\nLIMIT ${maxRows}`;
+}
+
+/** A stated year applied as the calendar year of a date column: `EXTRACT(YEAR FROM f.GAME_DATE) = 2015`. */
+export interface CalendarYearFilter {
+  /** The condition as written in the statement. */
+  text: string;
+  /** The date column, with its qualifier when it has one (`f.GAME_DATE`). */
+  expression: string;
+  qualifier?: string;
+  column: string;
+  year: string;
+  /** The relation the column is read from, as the statement names it: by its qualifier, or the one table read. */
+  relation?: string;
+}
+
+const DATE_COLUMN = String.raw`((?:"[^"]+"|[A-Za-z_$][\w$]*)\.)?("[^"]+"|[A-Za-z_$][\w$]*)`;
+
+/**
+ * Where a statement reads a stated year as a CALENDAR year of a date column: EXTRACT(YEAR FROM d) = 2015, YEAR(d),
+ * DATE_PART('year', d), DATE_TRUNC('year', d) = '2015-01-01', TO_CHAR(d, 'YYYY') = '2015', d BETWEEN '2015-01-01'
+ * AND '2015-12-31', or d >= '2015-01-01' AND d < '2016-01-01'. Text the statement does not write this way is not
+ * reported.
+ */
+export function calendarYearFilters(sql: string, year: string): CalendarYearFilter[] {
+  if (!/^\d{4}$/.test(year)) return [];
+  const next = String(Number(year) + 1);
+  const quotedYear = String.raw`'?${year}'?(?![\d-])`;
+  const date = (value: string) => String.raw`(?:(?:date|timestamp)\s*)?'${value}(?:[ T]00:00:00(?:\.0+)?)?'(?:\s*::\s*(?:date|timestamp))?`;
+  const patterns = [
+    String.raw`\bextract\s*\(\s*year\s+from\s+${DATE_COLUMN}\s*\)\s*=\s*${quotedYear}`,
+    String.raw`\byear\s*\(\s*${DATE_COLUMN}\s*\)\s*=\s*${quotedYear}`,
+    String.raw`\bdate_part\s*\(\s*'?year'?\s*,\s*${DATE_COLUMN}\s*\)\s*=\s*${quotedYear}`,
+    String.raw`\bdate_trunc\s*\(\s*'?year'?\s*,\s*${DATE_COLUMN}\s*\)\s*=\s*${date(`${year}-01-01`)}`,
+    String.raw`\bto_char\s*\(\s*${DATE_COLUMN}\s*,\s*'yyyy'\s*\)\s*=\s*'${year}'`,
+    String.raw`(?<![\w$."])${DATE_COLUMN}\s+between\s+${date(`${year}-01-01`)}\s+and\s+${date(`${year}-12-31`)}`,
+  ];
+  const found: CalendarYearFilter[] = [];
+  const aliases = relationAliases(sql);
+  const tables = [...new Set(aliases.values())];
+  const add = (match: RegExpExecArray) => {
+    const qualifier = match[1] ? match[1].slice(0, -1).replace(/"/g, '') : undefined;
+    const column = match[2]!.replace(/"/g, '');
+    if (found.some((item) => item.text === match[0])) return;
+    const relation = qualifier ? aliases.get(qualifier.toLowerCase()) : tables.length === 1 ? tables[0] : undefined;
+    found.push({ text: match[0], expression: `${match[1] ?? ''}${match[2]}`, ...(qualifier ? { qualifier } : {}), column, year, ...(relation ? { relation } : {}) });
+  };
+  for (const pattern of patterns) for (const match of sql.matchAll(new RegExp(pattern, 'gi'))) add(match);
+  // A range written as two comparisons on the same column.
+  const range = new RegExp(String.raw`(?<![\w$."])${DATE_COLUMN}\s*>=\s*${date(`${year}-01-01`)}\s+and\s+((?:"[^"]+"|[A-Za-z_$][\w$]*)\.)?("[^"]+"|[A-Za-z_$][\w$]*)\s*(?:<\s*${date(`${next}-01-01`)}|<=\s*${date(`${year}-12-31`)})`, 'gi');
+  for (const match of sql.matchAll(range)) {
+    if ((match[2] ?? '').replace(/"/g, '').toLowerCase() !== (match[4] ?? '').replace(/"/g, '').toLowerCase()) continue;
+    add(match);
+  }
+  return found;
+}
+
+/** The column of a table that holds its season, by name: SEASON, then SEASON_YEAR, then SEASON_ID. */
+export function seasonColumnOf(columns: string[]): string | undefined {
+  for (const wanted of ['season', 'season_year', 'season_id']) {
+    const found = columns.find((column) => column.replace(/["`[\]]/g, '').toLowerCase() === wanted);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * Whether a question means the CALENDAR year rather than the season: it says so ("calendar year 2015"), or it
+ * names a month or a date of that year ("in March 2015", "2015-03-01").
+ */
+export function asksCalendarYear(question: string, year: string): boolean {
+  if (/\bcalendar\b/i.test(question)) return true;
+  const month = String.raw`(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)`;
+  return new RegExp(String.raw`\b${month}\.?\s+(?:\d{1,2}(?:st|nd|rd|th)?,?\s+)?${year}\b|\b${year}-\d{2}(?:-\d{2})?\b|\b\d{1,2}/\d{1,2}/${year}\b`, 'i').test(question);
+}
+
+/**
+ * The statement with each calendar-year condition replaced by the season it means: `EXTRACT(YEAR FROM f.GAME_DATE)
+ * = 2015` becomes `f.SEASON = 2015` when the table behind `f` has a SEASON column (new-user test V13, PO-2: a SQL
+ * written from the words after a slow reading counted the 2014-15 playoffs, 16 wins, for "2015", while every other
+ * answer reads SEASON: 15). `seasonColumnFor` names the season column for a condition, or undefined to keep it.
+ */
+export function withSeasonForCalendarYear(sql: string, year: string, seasonColumnFor: (filter: CalendarYearFilter) => string | undefined): { sql: string; replaced: Array<CalendarYearFilter & { season: string }> } {
+  let rewritten = sql;
+  const replaced: Array<CalendarYearFilter & { season: string }> = [];
+  for (const filter of calendarYearFilters(sql, year)) {
+    const season = seasonColumnFor(filter);
+    if (!season) continue;
+    const qualifier = /^\s*((?:"[^"]+"|[A-Za-z_$][\w$]*)\.)/.exec(filter.expression)?.[1] ?? '';
+    rewritten = rewritten.replace(filter.text, `${qualifier}${season} = ${year}`);
+    replaced.push({ ...filter, season });
+  }
+  return { sql: rewritten, replaced };
 }

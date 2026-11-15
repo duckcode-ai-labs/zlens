@@ -70,6 +70,11 @@ import {
   statedValues,
   blocksNamedByQuestion,
   withRowGuard,
+  asksCalendarYear,
+  groupedColumns,
+  calendarYearFilters,
+  seasonColumnOf,
+  withSeasonForCalendarYear,
   physicalRelationText,
   type PhysicalIdentifierPartV1,
   renderCard,
@@ -89,7 +94,7 @@ import {
 import { parseTablePicks, tableIndexLines, tableIndexMessages, TABLE_INDEX_PICKS } from './table-index.js';
 import { modelAnswerGroups, routeQuestionToAreas, type ModelRoute } from './model-routing.js';
 import { buildProjectVocabulary, buildVocabularySource, draftedMeaningRelations, embeddedManifestRelations, namedBlockNotServed, normalizeRelationName, warehouseFirstCatalog, type VocabularySourceInput } from './vocabulary-source.js';
-import { groupingKeyLabels, keyLabelLine, keyLabels, unnamedGroupingKeys, unnamedKeyFailure, type EntityKey, type KeyLabel, type KeyReference } from './key-labels.js';
+import { askedThingLine, groupingKeyLabels, keyLabelLine, keyLabels, unlistedAskedThings, unlistedThingFailure, unnamedGroupingKeys, unnamedKeyFailure, type EntityKey, type KeyLabel, type KeyReference, type UnlistedThing } from './key-labels.js';
 import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certifiedJoinViolations, classifySqlJoins, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipEdges, modelingRelationshipTables, sharedParentShortcuts, type LedgerJoin } from './join-relationships.js';
 import { readEnv } from '@zlens/core';
 import { readValueProfile, renderColumnProfile } from '../value-profile.js';
@@ -569,6 +574,8 @@ const KIND_DATES = new Map<string, Promise<CodeKinds['dates']>>();
  */
 interface KindNames { names?: Record<string, string>; words?: Record<string, string[]>; pending?: Promise<void>; /** A failed call is asked again after this time. */ retryAt?: number }
 const KIND_NAMES = new Map<string, KindNames>();
+/** Whether a table's name column ever differs from its key, per connection (a season name that is the season does not). */
+const LABEL_DIFFERS = new Map<string, boolean>();
 const kindNamesKey = (connection: ConnectionConfig, kinds: CodeKinds) => `${connectionKey(connection)}|${kinds.code.toLowerCase()}|${kinds.values.map((value) => value.first).join('')}`;
 /** How long a naming call may run, beside the reading or after the run that started it. */
 const KIND_NAMING_MS = 90_000;
@@ -2671,7 +2678,40 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const entityKeys: EntityKey[] = current.entries
         .filter((entry) => entry.kind === 'entity' && entry.physical?.relation && entry.physical.column)
         .map((entry) => ({ name: entry.ref.split('.').pop()!, type: entry.entityType ?? '', relation: entry.physical!.relation, column: entry.physical!.column! }));
-      const labelsFor = (keys: KeyReference[]): KeyLabel[] => keyLabels(keys, { edges: mapEdges, entities: entityKeys, relations: physicalTables, columnsOf: knownColumns, resolve: warehouseTable });
+      const probeOne = async (sql: string): Promise<boolean> => {
+        if (!connection) return false;
+        const options = { maxRows: 1, ...(request.signal ? { signal: request.signal } : {}), ...(request.runBudget ? { deadlineMs: Math.min(8_000, request.runBudget.remainingMs()) } : {}) };
+        const result = deps.executor.executePositional
+          ? await deps.executor.executePositional(sql, [], connection, options)
+          : await deps.executor.executeQuery(sql, [], {}, connection, options);
+        return (result.rows?.length ?? 0) > 0;
+      };
+      // A NAME THAT ONLY REPEATS ITS KEY NAMES NOTHING. DIM_SEASONS.SEASON_NAME holds the season itself ("2007" for
+      // 2007): asking for it added a column that repeats the season while the player and the team stayed IDs
+      // (new-user test V13, Q8 "2003 · 2003 · 93" and Q11). The warehouse says whether a label ever differs from
+      // its key; one that never does is no label, and a key named only by it is readable as it is.
+      const repeatingLabels = new Set<string>();
+      const checkedLabels = new Set<string>();
+      const labelId = (item: KeyLabel) => `${physicalRelationIdentity(item.labelRelation)}|${item.labelKey.toLowerCase()}|${item.label.toLowerCase()}`;
+      const settleLabels = async (items: KeyLabel[]): Promise<void> => {
+        for (const item of items) {
+          const id = labelId(item);
+          if (checkedLabels.has(id) || !connection) continue;
+          checkedLabels.add(id);
+          const cacheKey = `${connectionKey(connection)}|${id}`;
+          let differs = LABEL_DIFFERS.get(cacheKey);
+          if (differs === undefined) {
+            try {
+              differs = await probeOne(`SELECT 1 FROM ${item.labelRelation} WHERE ${item.label} IS NOT NULL AND CAST(${item.label} AS VARCHAR(400)) <> CAST(${item.labelKey} AS VARCHAR(400))`);
+              if (LABEL_DIFFERS.size > 2_000) LABEL_DIFFERS.clear();
+              LABEL_DIFFERS.set(cacheKey, differs);
+            } catch { differs = true; }
+          }
+          if (!differs) repeatingLabels.add(id);
+        }
+      };
+      const labelsFor = (keys: KeyReference[]): KeyLabel[] => keyLabels(keys, { edges: mapEdges, entities: entityKeys, relations: physicalTables, columnsOf: knownColumns, resolve: warehouseTable })
+        .filter((item) => !repeatingLabels.has(labelId(item)));
       const readingKeys: KeyReference[] = (intent?.groupBy ?? []).flatMap((group) => {
         const entry = current.get(group.ref) ?? current.resolve(group.ref);
         const keyLike = group.role === 'key' || entry?.kind === 'entity' || entry?.roles.includes('key');
@@ -2681,11 +2721,24 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       });
       const keyLines: string[] = [];
       const namingTables: string[] = [];
+      await settleLabels(keyLabels(readingKeys, { edges: mapEdges, entities: entityKeys, relations: physicalTables, columnsOf: knownColumns, resolve: warehouseTable }));
       for (const item of labelsFor(readingKeys)) {
         const missing = [item.keyRelation, item.labelRelation].filter((relation) => !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
         if (missing.length === 0) continue;
         for (const relation of missing) { relations.push(relation); namingTables.push(relation); }
         keyLines.push(keyLabelLine(item));
+      }
+      // THE THINGS THE QUESTION ASKS TO LIST ("which teams") are listed by name. When the table that names them is
+      // not among the chosen tables, it is added and the draft is told where the names are before it is written
+      // (new-user test V13, Q11: a count of teams per season instead of the teams); the check after the draft holds
+      // every statement to it either way.
+      const askedNames = (): UnlistedThing[] => unlistedAskedThings('', question, { tables: [...relations, ...physicalTables], label: labelsFor, columnsOf: knownColumns });
+      await settleLabels(askedNames().map((item) => item.label));
+      for (const item of askedNames()) {
+        const missing = [item.label.keyRelation, item.label.labelRelation].filter((relation) => !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
+        if (missing.length === 0) continue;
+        for (const relation of missing) { relations.push(relation); namingTables.push(relation); }
+        keyLines.push(askedThingLine(item));
       }
       // THE WHOLE SCHEMA WHEN IT FITS. On a warehouse-first project the synced
       // catalog is the entire account of the data, and a plain text-to-SQL
@@ -3214,7 +3267,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         const fenced = /```(?:sql)?\s*([\s\S]*?)```/i.exec(raw);
         // The earlier values the model read by position are the real ones again in what it drafted.
         const drafted = (fenced ? fenced[1]! : raw).trim();
-        const sql = drafted ? await withBothNameParts(priorMask ? priorMask.restoreText(drafted) : drafted) : drafted;
+        const sql = drafted ? await withSeasonYears(await withBothNameParts(priorMask ? priorMask.restoreText(drafted) : drafted)) : drafted;
         if (!sql) { dispatch.outcome = 'error'; return { error: 'the provider returned no SQL' }; }
         dispatch.outcome = 'sql';
         const runtimeSchema = runtimeSchemaForVocabulary(current)
@@ -3268,14 +3321,6 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         const bare = column.replace(/^["`\[]|["`\]]$/g, '');
         return keyDialect ? keyDialect.quoteIdentifier(bare) : `"${bare.replace(/"/g, '')}"`;
       };
-      const probeOne = async (sql: string): Promise<boolean> => {
-        if (!connection) return false;
-        const options = { maxRows: 1, ...(request.signal ? { signal: request.signal } : {}), ...(request.runBudget ? { deadlineMs: Math.min(8_000, request.runBudget.remainingMs()) } : {}) };
-        const result = deps.executor.executePositional
-          ? await deps.executor.executePositional(sql, [], connection, options)
-          : await deps.executor.executeQuery(sql, [], {}, connection, options);
-        return (result.rows?.length ?? 0) > 0;
-      };
       // A NAME IS MATCHED BY ALL OF ITS PARTS when either part alone picks other rows: "Los Angeles Lakers" as
       // NICKNAME ILIKE '%Lakers%' OR CITY ILIKE '%Los Angeles%' counts the Clippers too (V12 gate, G3). The
       // warehouse says whether the parts pick the same rows ("Golden State" OR "Warriors" is one team either way);
@@ -3294,6 +3339,48 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
         return fixed;
       };
+      // A YEAR IS A SEASON WHERE THE TABLES KEEP ONE. "How many playoff games did the Warriors win in 2015?" written
+      // from the words after a slow reading read 2015 as the calendar year of GAME_DATE (the 2014-15 playoffs: 16)
+      // while every other answer reads SEASON (15) (new-user test V13, PO-2). A stated year applied to a date's
+      // calendar year is applied to the table's season column instead, when it has one that holds that year, unless
+      // the question says calendar year or names a month or a date. The answer says which season it read.
+      const seasonReads = new Map<string, { column: string; season: string }>();
+      // Only SQL written from the words: a reading the AI made says which year it means, and the draft follows it.
+      const fromWords = !intent?.reading?.trim();
+      const withSeasonYears = async (sql: string): Promise<string> => {
+        if (!fromWords) return sql;
+        let fixed = sql;
+        for (const item of stated.filter((value) => value.kind === 'year')) {
+          if (asksCalendarYear(question, item.value)) continue;
+          const seasons = new Map<string, string>();
+          for (const filter of calendarYearFilters(fixed, item.value)) {
+            if (!filter.relation) continue;
+            const season = seasonColumnOf(knownColumns(warehouseTable(filter.relation) ?? filter.relation));
+            if (!season) continue;
+            let holds = false;
+            try { holds = await probeOne(`SELECT 1 FROM ${filter.relation} WHERE ${season} = ${item.value}`); } catch { holds = false; }
+            if (holds) seasons.set(filter.text, season);
+          }
+          if (seasons.size === 0) continue;
+          const rewritten = withSeasonForCalendarYear(fixed, item.value, (filter) => seasons.get(filter.text));
+          for (const replaced of rewritten.replaced) {
+            seasonReads.set(item.value, { column: replaced.column, season: replaced.season });
+            hostStep({ phase: 'schema', title: `Read ${item.value} as the ${item.value} season, not the calendar year`, state: 'done', detail: `the table keeps ${replaced.season}, which the other answers read; the calendar year of ${replaced.column} would count another season's games` });
+          }
+          fixed = rewritten.sql;
+        }
+        return fixed;
+      };
+      // Which season a stated year was read as, said beside the reading: always after a rewrite above, and when the
+      // SQL was written from the words alone (no reading said "season").
+      const seasonCaveats = (sql: string): string[] => stated.filter((value) => value.kind === 'year').flatMap((item) => {
+        const read = seasonReads.get(item.value);
+        const applied = new RegExp(`(?:^|[^\\w$])"?(season|season_year|season_id)"?\\s*=\\s*'?${item.value}'?(?![\\d])`, 'i').exec(sql);
+        if (!applied) return [];
+        if (read) return [`caveat: it reads ${item.value} as the ${item.value} season (${applied[1]!.toUpperCase()} ${item.value}), not the calendar year of ${read.column}`];
+        if (!fromWords || /\bseasons?\b/i.test(question)) return [];
+        return [`caveat: it reads ${item.value} as the ${item.value} season (${applied[1]!.toUpperCase()} ${item.value}), not the calendar year`];
+      });
       // A YEAR READ THROUGH THE MODEL'S OWN RULE. "The 2008 playoffs" written as SEASON = 2007, because a rule
       // says those rows fall in the calendar year after their SEASON, applies 2008: the answer says how it read it
       // instead of refusing it as "does not apply 2008" (V12 gate, K4).
@@ -3438,13 +3525,25 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       };
       // A statement that groups by a key whose rows have a reachable name it
       // does not show (key-labels.ts), recorded as a check for the run views.
-      const unnamedKeysOf = (sql: string): KeyLabel[] => {
+      // NAMES, NOT IDS, for every id the answer groups by or shows (player, team, game where a name exists), and
+      // the names of the things the question asks to list. A label that only repeats its key never counts (V13, Q11).
+      type Unnamed = { keys: KeyLabel[]; things: UnlistedThing[]; problems: string[] };
+      const unnamedKeysOf = async (sql: string, record = true): Promise<Unnamed> => {
+        const options = { edges: mapEdges, entities: entityKeys, relations: physicalTables, columnsOf: knownColumns, resolve: warehouseTable };
+        await settleLabels(groupingKeyLabels(sql, question, (keys) => keyLabels(keys, options), knownColumns));
+        const thingOptions = { tables: [...relations, ...physicalTables], label: labelsFor, columnsOf: knownColumns };
+        await settleLabels(unlistedAskedThings(sql, question, { ...thingOptions, label: (keys: KeyReference[]) => keyLabels(keys, options) }).map((item) => item.label));
         const grouped = groupingKeyLabels(sql, question, labelsFor, knownColumns);
-        const found = unnamedGroupingKeys(sql, question, labelsFor, knownColumns);
-        if (grouped.length > 0) {
-          state.hostChecks.push({ id: 'key_labels', label: 'Shows names, not bare keys', passed: found.length === 0, message: found.length ? unnamedKeyFailure(found[0]!) : `shows ${[...new Set(grouped.map((item) => item.label))].join(', ')} for what it groups by`, attempt: state.checkRound });
+        const keys = unnamedGroupingKeys(sql, question, labelsFor, knownColumns);
+        const things = unlistedAskedThings(sql, question, thingOptions);
+        const problems = [...things.map(unlistedThingFailure), ...keys.map(unnamedKeyFailure)];
+        // Recorded when there is something to judge, and after a statement that failed it (the fix is seen to pass).
+        const judgedBefore = state.hostChecks.some((check) => check.id === 'key_labels');
+        if (record && (grouped.length > 0 || things.length > 0 || judgedBefore)) {
+          const shownLabels = [...new Set(grouped.map((item) => item.label))];
+          state.hostChecks.push({ id: 'key_labels', label: 'Shows names, not bare keys', passed: problems.length === 0, message: problems[0] ?? (shownLabels.length ? `shows ${shownLabels.join(', ')} for the ids it shows` : 'shows names for what the question asks to list'), attempt: state.checkRound });
         }
-        return found;
+        return { keys, things, problems };
       };
       const includeRelations = async (wanted: string[]): Promise<void> => {
         const fresh = [...new Set(wanted)].filter((relation) => !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
@@ -3475,28 +3574,32 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         if (!drafted || !('sql' in drafted)) return drafted;
         let chosen = drafted;
         let failures = await failedChecks(chosen.sql);
-        let unnamed = unnamedKeysOf(chosen.sql);
-        if (failures.length > 0 || unnamed.length > 0) {
-          const problems = [...failures, ...unnamed.map(unnamedKeyFailure)];
+        let unnamed = await unnamedKeysOf(chosen.sql);
+        if (failures.length > 0 || unnamed.problems.length > 0) {
+          const problems = [...failures, ...unnamed.problems];
           hostStep({ phase: 'schema', title: 'The drafted SQL failed a check: asking the AI to fix it', state: 'failed', detail: problems.join('; ') });
           // The tables that name those keys are drafted over the second time.
-          await includeRelations(unnamed.flatMap((item) => [item.keyRelation, item.labelRelation]));
+          await includeRelations([...unnamed.keys, ...unnamed.things.map((item) => item.label)].flatMap((item) => [item.keyRelation, item.labelRelation]));
           const repaired = await attemptDraft(`The previous statement was not run because ${problems.join('; ')}. Fix exactly that and keep everything else the question asks.`);
           // Bare keys alone never refuse a statement that is otherwise right:
           // when the fix fails, the first statement runs and the answer says
           // what identifies its rows.
           const keysOnly = failures.length === 0;
+          const firstUnnamed = unnamed;
           if (!repaired || !('sql' in repaired)) {
             if (!keysOnly) return repaired;
           } else {
             const repairedFailures = await failedChecks(repaired.sql);
-            if (repairedFailures.length === 0) chosen = repaired;
+            // A repair for names is taken only when it names more: one that adds a season's name while the player
+            // and the team stay ids is no repair (V13, Q11).
+            const repairedUnnamed = repairedFailures.length === 0 ? await unnamedKeysOf(repaired.sql, false) : undefined;
+            if (repairedFailures.length === 0 && (!keysOnly || repairedUnnamed!.problems.length < firstUnnamed.problems.length)) chosen = repaired;
             else if (!keysOnly) return { refused: repairedFailures.join('; ') };
             // The first statement stands; its own checks are the ones recorded last.
             else await failedChecks(chosen.sql);
           }
           failures = [];
-          unnamed = unnamedKeysOf(chosen.sql);
+          unnamed = await unnamedKeysOf(chosen.sql);
         }
         // ONE KIND, OR EVERY KIND (new-user test B1, and the V8 retest, 2026-11-10). A coded key's first character
         // tells kinds of rows apart (a game type). A statement that counts every kind, because it reads a table the
@@ -3527,7 +3630,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
               const secondFailures = await failedChecks(second.sql);
               if (secondFailures.length === 0) {
                 chosen = second;
-                unnamed = unnamedKeysOf(chosen.sql);
+                unnamed = await unnamedKeysOf(chosen.sql);
               } else {
                 // The first statement stands; its own checks are the ones recorded last.
                 await failedChecks(chosen.sql);
@@ -3586,11 +3689,13 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(required.length ? [`required filters present: ${required.map((item) => item.text).join(', ')}`] : []),
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
             ...kindCaveats,
+            ...seasonCaveats(chosen.sql),
             ...shiftedYears(chosen.sql).map((item) => `caveat: it reads ${item.year} as ${item.column} ${item.value}: ${item.kinds} are played in the calendar year after their ${item.column}, so those of ${item.year} are ${item.column} ${item.value}; to count ${item.column} ${item.year} instead, say "the ${item.year} ${item.column.toLowerCase()}"`),
             ...(correctedReading !== undefined ? [`reading: ${correctedReading}`] : []),
             ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
-            ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
+            ...unnamed.things.map((item) => `caveat: it does not list the ${item.thing}s by name; ${tableName(item.label.labelRelation)!.replace(/"/g, '')}.${item.label.label} names them, and the statement could not be made to show it`),
+            ...unnamed.keys.map((item) => `caveat: ${groupedColumns(chosen.sql).some((grouped) => grouped.column.toLowerCase() === item.key.toLowerCase()) ? `the rows are grouped by ${item.key}` : `it shows ${item.key}`}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
           ],
         };
       };

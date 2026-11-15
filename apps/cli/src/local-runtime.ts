@@ -18668,7 +18668,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               // Graduated trust, Tier 2: a review-required answer leaves a
               // durable, de-duplicated draft block for a person to review and
               // certify. Same for every Ask surface (UI, CLI, MCP answer_question).
-              const reviewDraft = captureReviewDraft ? captureReviewRequiredDraft(projectRoot, personRun) : undefined;
+              // A follow-up's draft is found again by the question it followed (the turn before this one).
+              let priorQuestion: string | undefined;
+              if (captureReviewDraft && conversationStore && parsed.request!.threadId) {
+                try {
+                  priorQuestion = (await conversationStore.recentTurns(parsed.request!.threadId, 2))
+                    .filter((turn) => turn.agentRunId !== personRun.id)
+                    .sort((left, right) => right.seq - left.seq)[0]?.question;
+                } catch { priorQuestion = undefined; }
+              }
+              const reviewDraft = captureReviewDraft ? captureReviewRequiredDraft(projectRoot, personRun, priorQuestion ? { priorQuestion } : {}) : undefined;
               const run = reviewDraft ? { ...personRun, reviewDraft } : personRun;
               // The engine persists before the host can validate the DQL wrapper;
               // replace that row with the server-owned capability atomically.

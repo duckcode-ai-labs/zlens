@@ -29,6 +29,7 @@ ZLens keeps no draft for a refusal.
 | **Nothing in this project answers this question** | Add or review the missing metric, dimension, relationship or table, then ask again. |
 | **No matching data**, for a period, a name or a set of filters | The query would run, but nothing matches. Check the spelling or widen the filter. |
 | **One detail is missing** | Answer the question Ask asks (shown as **Needs clarification**), and it carries on. |
+| **Which measure do you mean, and over which period?** | The question names no measure or no period ("How are our stores doing lately?"). Ask asks back instead of saying the data lacks it. Name what to measure and the period. |
 | A certified relationship or approved allocation is needed | Ask will not invent a join between tables. Define the relationship in **Modeling**. |
 | No AI model is configured | Set up an [AI provider](../get-started/ai-provider.md). Ask needs one to read the question. |
 | AI-written SQL is turned off for this project | Only certified saved queries and semantic metrics can answer. Certify a saved query for the question. |

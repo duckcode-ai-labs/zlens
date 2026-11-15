@@ -127,7 +127,7 @@ export function formatDisplayValue(
     if (identifier !== undefined) return identifier;
   }
   const numeric = numericValue(value);
-  // Percentage points are a difference of percentages, never re-scaled.
+  // Percentage points are a difference of two percentages, never re-scaled; a share is a percent (below).
   if (options.meta?.kind === 'percent' && options.meta.unit === 'percentage_points' && numeric !== undefined) {
     return `${new Intl.NumberFormat('en-US', { maximumFractionDigits: options.meta.decimals ?? 1 }).format(numeric)} pp`;
   }
@@ -170,8 +170,9 @@ export function formatDisplayValue(
       }).format(numeric);
     }
     if (kind === 'percent') {
-      // A declared fraction is a fraction whatever its magnitude; only an undeclared value is guessed.
-      const normalized = options.meta?.unit === 'fraction' ? numeric : Math.abs(numeric) <= 1 ? numeric : numeric / 100;
+      // A declared fraction is a fraction whatever its magnitude, a declared percent is already on the 0-100 scale
+      // (58.8 is 58.8%, never "58.8 pp": V13, Q14); only an undeclared value is guessed.
+      const normalized = options.meta?.unit === 'fraction' ? numeric : options.meta?.unit === 'percent' ? numeric / 100 : Math.abs(numeric) <= 1 ? numeric : numeric / 100;
       return new Intl.NumberFormat('en-US', { style: 'percent', ...(fixed !== undefined ? { minimumFractionDigits: fixed } : {}), maximumFractionDigits: fixed ?? options.meta?.decimals ?? 2 }).format(normalized);
     }
     if (fixed !== undefined && !compact) return new Intl.NumberFormat('en-US', { minimumFractionDigits: fixed, maximumFractionDigits: fixed }).format(numeric);

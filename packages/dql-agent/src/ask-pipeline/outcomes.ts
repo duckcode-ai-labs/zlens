@@ -152,11 +152,30 @@ export function labelFor(vocabulary: VocabularyIndex): (ref: string) => string {
 /** An ISO instant at UTC midnight is a calendar date; it is never rendered through the host timezone. */
 const UTC_MIDNIGHT = /^(\d{4}-\d{2}-\d{2})T00:00:00(?:\.0+)?(?:Z|\+00:00)$/;
 
+/**
+ * A column that holds the DIFFERENCE between two percentages: only that is said in percentage points ("+5.2 pp").
+ * A share or a rate written on the 0-100 scale is still a percent: "58.8%", never "58.8 pp" (new-user test V13,
+ * Q14). "Percent change" is a percent too (growth of 8.1%), so "change" alone does not make a difference.
+ */
+const PERCENT_DIFFERENCE_NAME = /(^|_)(pp|percentage_points?|pct_pts?|pct_points?|point_change|points_change)(_|$)|(^|_)(pct|percent|percentage|rate|share)_(diff|difference|delta|gap|spread)(_|$)|(^|_)(diff|difference|delta|gap|spread)_(in_|of_)?(pct|percent|percentage|rate|share)(_|$)/i;
+export function percentDifferenceColumn(name: string): boolean {
+  return PERCENT_DIFFERENCE_NAME.test(name.replace(/["`[\]]/g, '').replace(/\s+/g, '_'));
+}
+
+/**
+ * The unit of a percent column whose values are already on the 0-100 scale (the SQL multiplied by 100): a percent,
+ * unless the column is a difference between two percentages, which is said in percentage points.
+ */
+export function scaledPercentUnit(name: string): 'percent' | 'percentage_points' {
+  return percentDifferenceColumn(name) ? 'percentage_points' : 'percent';
+}
+
 export function formatValue(value: unknown, meta?: ResultColumnMeta): string {
   if (value === null || value === undefined) return 'null';
   if (meta && typeof value === 'number' && Number.isFinite(value)) {
     if (meta.kind === 'percent') {
-      const points = meta.unit === 'percentage_points' ? value : value * 100;
+      // `fraction` is 0.588; `percent` and `percentage_points` are already on the 0-100 scale.
+      const points = meta.unit === 'percentage_points' || meta.unit === 'percent' ? value : value * 100;
       return meta.unit === 'percentage_points' ? `${points.toFixed(meta.decimals ?? 1)} pp` : `${points.toFixed(meta.decimals ?? 1)}%`;
     }
     if (meta.kind === 'count') return String(Math.round(value));
@@ -197,8 +216,9 @@ export function describeResultColumns(intent: AnalyticalIntentV1, result: Pick<E
     if (aggregation === 'count' || aggregation === 'count_distinct') return { kind: 'count' };
     if (entry.displayFormat) return { kind: entry.displayFormat.kind, ...(entry.displayFormat.kind === 'currency' ? { unit: entry.displayFormat.currency ?? 'USD' } : entry.displayFormat.kind === 'percent' ? { unit: 'fraction' } : {}), ...(entry.displayFormat.decimals !== undefined ? { decimals: entry.displayFormat.decimals } : {}) };
     if (entry.metricType === 'ratio') return { kind: 'percent', unit: 'fraction' };
-    // A derived formula that multiplies by 100 is already in points (growth, margin %).
-    if (entry.metricType === 'derived' && /\*\s*100(?![0-9.])/.test(entry.expr ?? '')) return { kind: 'percent', unit: 'percentage_points' };
+    // A derived formula that multiplies by 100 is already on the 0-100 scale (growth, margin %): a percent, and
+    // percentage points only when it is a difference of two percentages.
+    if (entry.metricType === 'derived' && /\*\s*100(?![0-9.])/.test(entry.expr ?? '')) return { kind: 'percent', unit: scaledPercentUnit(entry.name) };
     const aggregate = (entry.physical?.aggregate ?? entry.aggregation ?? '').toLowerCase();
     if (aggregate === 'count' || aggregate === 'count_distinct') return { kind: 'count' };
     // dbt counts are often a SUM over 1 (`order_count: expr: 1, agg: sum`), or a sum named as a count.
@@ -282,11 +302,53 @@ export function describeResultColumns(intent: AnalyticalIntentV1, result: Pick<E
     if (sample.length && sample.every((value) => typeof value === 'boolean')) return { name: column, kind: 'boolean' };
     if (sample.length && sample.every((value) => typeof value === 'string' && UTC_DAY.test(value))) return { name: column, kind: 'date' };
     if (sample.length && sample.every((value) => typeof value === 'number' || typeof value === 'bigint')) {
+      // A column named as a percentage is one: a fraction when its values are, else already on the 0-100 scale
+      // ("HOME_WIN_PERCENT 58.8" is 58.8%, from SQL written from the words with no reading to say so).
+      if (PERCENT_NAME.test(column)) return { name: column, kind: 'percent', unit: sample.every((value) => Math.abs(Number(value)) <= 1.5) ? 'fraction' : 'percent' };
       if (COUNT_NAME.test(column) && sample.every((value) => Number.isInteger(Number(value)))) return { name: column, kind: 'count' };
       return CURRENCY_NAME.test(column) ? { name: column, kind: 'currency', unit: 'USD' } : { name: column, kind: 'number' };
     }
     return { name: column, kind: 'text' };
   });
+}
+
+/** What a column names, without the word that says how: SEASON_NAME and SEASON_ID are both about SEASON. */
+const NAMING_SUFFIX = /_(?:id|key|code|name|nickname|label|title|desc|description|display_name)$/i;
+const LABEL_SUFFIX = /_(?:name|nickname|label|title|desc|description|display_name)$/i;
+
+/**
+ * COLUMNS THAT ONLY REPEAT ANOTHER. A season's name that is the season itself ("2007" beside 2007) names nothing:
+ * the answer read "2003 · 2003 · 93" and "201142 · 2007 · 2007 · 1" (new-user test V13, Q8 and Q11). A column whose
+ * values equal, row for row, another shown column about the same thing is not shown; the label goes, the column it
+ * repeats stays. Two figures that happen to agree (wins 5, home wins 5) are about different things and both stay.
+ */
+export function repeatedColumns(columns: string[], rows: Array<Record<string, unknown>>): string[] {
+  if (rows.length === 0) return [];
+  const stem = (column: string) => column.replace(/["`[\]]/g, '').trim().toLowerCase().replace(NAMING_SUFFIX, '');
+  const cell = (value: unknown) => (value === null || value === undefined ? '' : value instanceof Date ? value.toISOString() : String(value).trim());
+  const same = (left: string, right: string) => rows.some((row) => cell(row[left]) !== '') && rows.every((row) => cell(row[left]) === cell(row[right]));
+  const dropped = new Set<string>();
+  columns.forEach((column, index) => {
+    for (const earlier of columns.slice(0, index)) {
+      if (dropped.has(earlier) || dropped.has(column) || stem(earlier) !== stem(column) || !same(earlier, column)) continue;
+      // The label goes; the column it repeats stays.
+      dropped.add(LABEL_SUFFIX.test(earlier) && !LABEL_SUFFIX.test(column) ? earlier : column);
+    }
+  });
+  return columns.filter((column) => dropped.has(column));
+}
+
+/** The result without the columns that only repeat another (see repeatedColumns). */
+export function withoutRepeatedColumns(result: ExecutedRows): ExecutedRows {
+  const repeated = repeatedColumns(result.columns, result.rows);
+  if (repeated.length === 0) return result;
+  const kept = result.columns.filter((column) => !repeated.includes(column));
+  return {
+    ...result,
+    columns: kept,
+    rows: result.rows.map((row) => Object.fromEntries(Object.entries(row).filter(([column]) => !repeated.includes(column)))),
+    ...(result.columnsMeta ? { columnsMeta: result.columnsMeta.filter((meta) => !repeated.includes(meta.name)) } : {}),
+  };
 }
 
 const TECHNICAL_IDENTIFIER = /(?:^|_)(?:id|uuid|key|code)$/i;
@@ -372,19 +434,63 @@ function answerColumns(shown: string[], rows: Array<Record<string, unknown>>, me
   return named ? shown.filter((column) => !ids.includes(column)) : shown;
 }
 
+/** A column of codes rather than amounts: a key, a code, a number that identifies (no thousands separator). */
+const CODE_COLUMN = /(?:^|_)(?:id|key|uuid|code|zip|zipcode|postcode|postal_code|phone|number|no)$/i;
+/** A column of years or seasons: 2015 is a year, never "2,015". */
+const YEAR_COLUMN = /(?:^|_)(?:year|yr|season|fy|fiscal_year)$/i;
+
+/** Whether a column's values are years or seasons: by its name or its grain, or a name that says year or season over values that are all years (SEASON_START 2003). */
+function yearColumn(column: string, meta: ResultColumnMeta | undefined, rows: Array<Record<string, unknown>> = []): boolean {
+  const bare = column.replace(/["`[\]]/g, '').trim().replace(/\s+/g, '_');
+  if (YEAR_COLUMN.test(bare) || meta?.grain === 'year') return true;
+  if (!/year|season|(?:^|_)yr(?:_|$)/i.test(bare)) return false;
+  const values = rows.slice(0, 50).map((row) => row[column]).filter((value) => value !== null && value !== undefined);
+  return values.length > 0 && values.every((value) => Number.isInteger(Number(value)) && Number(value) >= 1800 && Number(value) <= 2200);
+}
+
+/** "26622" in a sentence reads "26,622"; "2375.5" reads "2,375.5"; "58.8%" and short numbers are unchanged. */
+export function withThousands(text: string): string {
+  const match = /^(-?)(\d{4,})(\.\d+)?(%| pp)?$/.exec(text);
+  if (!match) return text;
+  const digits = match[2]!;
+  let grouped = '';
+  for (let index = 0; index < digits.length; index += 1) {
+    if (index > 0 && (digits.length - index) % 3 === 0) grouped += ',';
+    grouped += digits.charAt(index);
+  }
+  return `${match[1]}${grouped}${match[3] ?? ''}${match[4] ?? ''}`;
+}
+
+/** A column read out as a label rather than a figure: text, or a year or season beside other figures. */
+function labelColumns(columns: string[], rows: Array<Record<string, unknown>>, metaOf: (column: string) => ResultColumnMeta | undefined): string[] {
+  const textLike = (column: string) => {
+    const meta = metaOf(column);
+    if (meta && meta.kind !== 'text' && meta.kind !== 'date') return false;
+    const values = rows.slice(0, 20).map((row) => row[column]).filter((value) => value !== null && value !== undefined && value !== '');
+    return values.length > 0 && values.every((value) => typeof value === 'string' && !/^-?\d+(?:\.\d+)?$/.test(value.trim()));
+  };
+  return columns.filter((column) => textLike(column) || yearColumn(column, metaOf(column), rows));
+}
+
 /**
  * The answer in one sentence, from the cells: "Total points: 596.", "Hornets: preseason wins 4.", "5 rows,
- * starting with LeBron James · 46612; Kevin Durant · 32272; Carmelo Anthony · 31658."
+ * starting with LeBron James · 46,612; Kevin Durant · 32,272; Carmelo Anthony · 31,658." Numbers carry thousands
+ * separators; identifiers, years and seasons never do. A row with several figures names each one ("Bucks: points
+ * per game 118.67, wins 56, games played 73, win percent 76.7%"), never a string of bare numbers (V13).
  */
 function answerSentence(result: ExecutedRows, shown: string[], metaOf: (column: string) => ResultColumnMeta | undefined): string | undefined {
   const columns = answerColumns(shown, result.rows, metaOf);
   if (!columns.length) return undefined;
-  const value = (row: Record<string, unknown>, column: string) => formatValue(row[column], metaOf(column));
+  const value = (row: Record<string, unknown>, column: string) => {
+    const meta = metaOf(column);
+    const text = formatValue(row[column], meta);
+    const bare = column.replace(/["`[\]]/g, '').trim().replace(/\s+/g, '_');
+    return CODE_COLUMN.test(bare) || yearColumn(column, meta, result.rows) || meta?.kind === 'date' ? text : withThousands(text);
+  };
+  const labels = labelColumns(columns, result.rows, metaOf).slice(0, 3);
+  const figures = columns.filter((column) => !labels.includes(column)).slice(0, 6);
   if (result.rowCount === 1) {
     const row = result.rows[0] ?? {};
-    const isText = (column: string) => typeof row[column] === 'string' && (metaOf(column)?.kind ?? 'text') === 'text' && !/^-?\d+(?:\.\d+)?$/.test(String(row[column]).trim());
-    const labels = columns.filter(isText).slice(0, 3);
-    const figures = columns.filter((column) => !labels.includes(column)).slice(0, 6);
     const pairs = figures.map((column, index) => {
       const name = readableColumnName(column);
       return labels.length ? `${name} ${value(row, column)}` : `${index === 0 ? capitalized(name) : name}: ${value(row, column)}`;
@@ -393,7 +499,11 @@ function answerSentence(result: ExecutedRows, shown: string[], metaOf: (column: 
     if (labels.length) return `${labels.map((column) => value(row, column)).join(' · ')}.`;
     return `${pairs.join(', ')}.`;
   }
-  const first = result.rows.slice(0, 3).map((row) => columns.map((column) => value(row, column)).join(' · '));
+  // One figure beside its labels reads as "Bucks · 118.67"; two or more are each named.
+  const labelled = figures.length >= 2;
+  const first = result.rows.slice(0, 3).map((row) => (labelled
+    ? `${labels.length ? `${labels.map((column) => value(row, column)).join(' · ')}: ` : ''}${figures.map((column) => `${readableColumnName(column)} ${value(row, column)}`).join(', ')}`
+    : columns.map((column) => value(row, column)).join(' · ')));
   const count = `${result.truncated ? `The first ${result.rowCount}` : result.rowCount} rows`;
   return `${count}, starting with ${first.join('; ')}.`;
 }

@@ -77,7 +77,8 @@ const REQUIRED_TEST_FILES = [
 // 196 with the App Builder planner reply read whatever its shape (app-builder-planner-json.test.ts, +1 file, +5 tests).
 // 197 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1 file, +1 test).
 // 198 with a slow reading keeping time for the SQL (ask-pipeline/slow-reading.test.ts, +1 file, +4 tests).
-const EXPECTED_TEST_FILES = 198;
+// 199 with the V14 Ask answer fixes (ask-pipeline/v14-answers.test.ts, +1 file, +19 tests).
+const EXPECTED_TEST_FILES = 199;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -216,7 +217,11 @@ const EXPECTED_TEST_FILES = 198;
 // 2895 with one Ask draft per question and draft names cut between words (metadata/drafts.test.ts +6), and a
 // slow-reading follow-up that keeps its context, says when it ran out of time, a plain clarification, and the
 // answer as one answer sentence, the reading and one source line (ask-pipeline/slow-reading.test.ts +5; V13, #337).
-const EXPECTED_TESTS = 2895;
+// 2917 with the V14 Ask fixes from the V13 retest: no column that repeats another, the shown select list, a vague
+// question asked back, a stated year read as the season, a share as a percent, numbers with separators and labels,
+// one button per choice, readings that name only the tables read (ask-pipeline/v14-answers.test.ts +19), and one
+// draft per asked question (metadata/drafts.test.ts +3).
+const EXPECTED_TESTS = 2917;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2814.

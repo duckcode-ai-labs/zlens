@@ -431,14 +431,15 @@ describe('a capitalised word in a question', () => {
 describe('a list longer than ZLens shows', () => {
   it('a LIMIT 500 the question did not ask for comes off, so the host\'s guard can see there is more', async () => {
     const { executed } = await ask({}, 'List every customer', () => 'SELECT customer_id, name FROM main.customers ORDER BY customer_id LIMIT 500', [{ customer_id: 1, name: 'a' }]);
-    const statement = executed.find((sql) => sql.includes('main.customers') && !/HAVING/.test(sql))!;
+    // The answer's own statement, not the probes beside it (a repeating key, a name that only repeats its key).
+    const statement = executed.find((sql) => sql.includes('main.customers') && !/HAVING|^SELECT 1 /.test(sql))!;
     expect(statement).toMatch(/LIMIT 501\s*$/);
     expect(statement).not.toContain('LIMIT 500');
   });
 
   it('a question that asks for 500 keeps them', async () => {
     const { executed } = await ask({}, 'List the first 500 customers', () => 'SELECT customer_id, name FROM main.customers ORDER BY customer_id LIMIT 500', [{ customer_id: 1, name: 'a' }]);
-    expect(executed.find((sql) => sql.includes('main.customers') && !/HAVING/.test(sql))).toMatch(/LIMIT 500\s*$/);
+    expect(executed.find((sql) => sql.includes('main.customers') && !/HAVING|^SELECT 1 /.test(sql))).toMatch(/LIMIT 500\s*$/);
   });
 });
 
