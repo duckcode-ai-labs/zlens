@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runAskPipeline } from './pipeline.js';
-import { composeAnsweredText, formatValue, percentDifferenceColumn, repeatedColumns, scaledPercentUnit, withThousands, withoutRepeatedColumns } from './outcomes.js';
+import { composeAnsweredText, describeResultColumns, formatValue, percentDifferenceColumn, repeatedColumns, scaledPercentUnit, withThousands, withoutRepeatedColumns } from './outcomes.js';
 import { asksCalendarYear, calendarYearFilters, seasonColumnOf, selectedColumns, shownInSelect, withSeasonForCalendarYear } from './prepare/sql-checks.js';
 import { clarificationForOpenQuestion, distinctOptions, measureExamples, openPartsOfQuestion, openPartsOfReason } from './vague-question.js';
 import { readingWithoutOtherTables, tableWords } from './reading-tables.js';
@@ -184,6 +184,22 @@ describe('a share is a percent; percentage points only for a difference of two p
     expect(outcome.text).toContain('Home win percent: 58.8%.');
     expect(outcome.text).not.toContain('pp');
     expect(outcome.result.columnsMeta?.[0]).toMatchObject({ kind: 'percent', unit: 'percent' });
+  });
+
+  it('a reading that averages a yes/no flag, or names its measure a percent, says 58.8%, never 0.59 (V14 gate, Q14)', () => {
+    const won = 'column:TRANSFORMED.LOCAL_TEAM_GAME_FACTS.TEAM_WON';
+    expect(vocabulary.get(won)).toBeDefined();
+    const reading = (alias: string, ref: string) => ({ version: 1, kind: 'analytics', reading: 'share of games won', measures: [{ ref, aggregation: 'avg', alias }], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'scalar' }) as unknown as AnalyticalIntentV1;
+    // As the pipeline does: the column types come from the reading (describeResultColumns), then the sentence.
+    const sentence = (alias: string, ref: string, value: number) => {
+      const rows = [{ [alias]: value }];
+      const columnsMeta = describeResultColumns(reading(alias, ref), { columns: [alias], rows }, vocabulary);
+      return composeAnsweredText(reading(alias, ref), { columns: [alias], rows, rowCount: 1, executionTimeMs: 1, columnsMeta }, vocabulary, 'review_required').split('\n\n')[0];
+    };
+    expect(sentence('WIN_SHARE', won, 0.588)).toContain('58.8%');
+    expect(sentence('HOME_WIN_PERCENT', 'column:TRANSFORMED.LOCAL_TEAM_GAME_FACTS.GAME_ID', 0.588)).toContain('58.8%');
+    expect(sentence('HOME_WIN_PERCENT', 'column:TRANSFORMED.LOCAL_TEAM_GAME_FACTS.GAME_ID', 0.588)).not.toContain('0.59');
+    expect(sentence('HOME_WIN_PERCENT', 'column:TRANSFORMED.LOCAL_TEAM_GAME_FACTS.GAME_ID', 58.8)).toContain('58.8%');
   });
 });
 

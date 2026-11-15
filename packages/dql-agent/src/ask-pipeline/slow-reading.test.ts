@@ -147,6 +147,20 @@ describe('a follow-up keeps its context when the reading is slow (V12 retest, lo
     expect(outcome.text).not.toMatch(/do(es)? not hold|not in this data|tables Ask searched/);
     expect(outcome.receipt.failure).toMatchObject({ stage: 'prepare', reason: 'provider_timeout' });
   });
+
+  it('a vague question whose reading ran out of time asks for the measure and the period (V14 gate, Q17)', async () => {
+    const clock = { now: 0 };
+    const outcome = await runAskPipeline({
+      question: 'How are the Warriors doing lately?', vocabulary, provider: unreadableModel(clock, 83_000), clauseCoverage: false, explorationAuto: true,
+      now: () => clock.now, deadlineMs: 180_000, dispatchWindowMs: () => 120_000 - clock.now,
+      prepareDeps: { draftSql: async () => ({ declined: 'Neither the measure nor the period is clear from the words alone' }) },
+      executeDeps: { run: async () => ({ columns: ['n'], rows: [{ n: 1 }], rowCount: 1, executionTimeMs: 1 }) },
+    });
+    expect(outcome.kind).toBe('clarify');
+    if (outcome.kind !== 'clarify') return;
+    expect(outcome.question).toBe('Which measure do you mean, and over which period (a year or a date range)?');
+    expect(outcome.receipt.failure).toBeUndefined();
+  });
 });
 
 describe('the answer reads as one answer sentence, the reading, and one source line (V12 retest)', () => {
