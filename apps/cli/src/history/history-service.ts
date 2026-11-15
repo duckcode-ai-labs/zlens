@@ -8,7 +8,8 @@ import { HistorySqlLog, type HistorySqlLogOptions, type SqlLogRow, type SqlLogSt
 import { AI_ASK_NAME, ZLENS_AUTHOR, type HistoryAction, type HistoryAuthor, type HistoryStore } from './history-store.js';
 import { changedLineCount, diffLines, type DiffLine } from './line-diff.js';
 import { asDraftSource, compareSavedQueryFields, isCertifiedVersion, readSavedQueryFields, receiptSummary, type FieldChange } from './saved-query-fields.js';
-import { appKeyOf, besideSuffix, besideSuffixOf, isAppStudioDraftPath, isDraftPath, isTrackedItemKey, isTrackedPath, listTrackedFiles, type HistoryItemKind } from './tracked-files.js';
+import { APP_STUDIO_DRAFT_FILE, appKeyOf, besideSuffix, besideSuffixOf, isAppStudioDraftPath, isDraftPath, isTrackedItemKey, isTrackedPath, listTrackedFiles, type HistoryItemKind } from './tracked-files.js';
+import { appDraftShape, parseAppDraftHistoryText, publishedAppShape, sameAsPublished } from './app-drafts.js';
 
 /**
  * VERSION HISTORY IN THE ZLENS APP FOR SNOWFLAKE (V15, decisions H1–H10).
@@ -209,6 +210,8 @@ export class HistoryService {
   private sqlFlushTimer: NodeJS.Timeout | undefined;
   private started = false;
   private sizeCache: { at: number; bytes: number } | undefined;
+  /** Whether a draft (by its blob id) holds what the published App (by its blob ids) holds: worked out once. */
+  private readonly unchangedDrafts = new Map<string, boolean>();
 
   constructor(private readonly options: HistoryServiceOptions) {
     const gitdir = options.gitdir ?? join(options.projectRoot, GITDIR);
@@ -346,7 +349,11 @@ export class HistoryService {
     for (const [path, text] of drafts ?? []) {
       if (!isAppStudioDraftPath(path) || (only && !only(path))) continue;
       const content = encoder.encode(text);
-      if (head.get(path) !== (await this.store.hashContent(content))) changes.push({ path, content });
+      const oid = await this.store.hashContent(content);
+      if (head.get(path) === oid) continue;
+      // Opening a published App for edit makes a draft that holds what the App holds: no version until it differs.
+      if (!head.has(path) && (await this.draftMatchesPublished(path, oid, text, head))) continue;
+      changes.push({ path, content });
     }
     for (const [path, stat] of listed) {
       const known = this.snapshot.get(path);
@@ -374,6 +381,35 @@ export class HistoryService {
       }
     }
     return changes.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
+   * Whether a new App Studio draft holds exactly what the last version History holds of its App, the published App
+   * (V2): its name and pages, apart from bookkeeping (app-drafts.ts appPagesKey). Then it is not a change yet.
+   */
+  private async draftMatchesPublished(path: string, oid: string, text: string, head: Map<string, string>): Promise<boolean> {
+    const key = path.slice(0, -`/${APP_STUDIO_DRAFT_FILE}`.length);
+    const appOid = head.get(`${key}/dql.app.json`);
+    if (!appOid) return false;
+    const pagePaths = [...head.keys()].filter((candidate) => candidate.startsWith(`${key}/dashboards/`) && candidate.endsWith('.dqld')).sort();
+    const cacheKey = [oid, appOid, ...pagePaths.map((page) => head.get(page))].join(':');
+    const known = this.unchangedDrafts.get(cacheKey);
+    if (known !== undefined) return known;
+    let same = false;
+    try {
+      const draft = parseAppDraftHistoryText(text);
+      if (draft) {
+        const read = async (blob: string) => decoder.decode(await this.store.readBlob(blob));
+        const pages: string[] = [];
+        for (const page of pagePaths) pages.push(await read(head.get(page)!));
+        same = sameAsPublished(appDraftShape(draft), publishedAppShape(await read(appOid), pages));
+      }
+    } catch {
+      same = false;
+    }
+    if (this.unchangedDrafts.size > 500) this.unchangedDrafts.clear();
+    this.unchangedDrafts.set(cacheKey, same);
+    return same;
   }
 
   /**

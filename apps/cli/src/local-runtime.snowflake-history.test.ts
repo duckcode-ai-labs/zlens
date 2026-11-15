@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
-import { createStoredAppBuildDraft, deleteStoredAppBuildDraft, removeEmptyAppCopies } from './apps-api.js';
+import { applyAppBuildDraftOperations } from '@zlens/core';
+import { createStoredAppBuildDraft, deleteStoredAppBuildDraft, markStoredAppBuildDraftPreflighted, publishStoredAppBuildDraft, removeEmptyAppCopies, writeStoredAppBuildDraft } from './apps-api.js';
 import { startLocalServer } from './local-runtime.js';
 import type { SnowflakeAppQuery } from './snowflake-app-settings.js';
 
@@ -181,6 +182,36 @@ describe('Apps in History (V2)', () => {
     expect(back.pages[0].layout.items.map((tile: { title: string }) => tile.title)).toEqual(['Revenue', 'Orders', 'Margin']);
     item = await versionsOf(call, key, 7);
     expect(item.versions[0]).toMatchObject({ version: 7, change: 'restored', by: { name: 'JSMITH' }, current: true });
+  });
+
+  it('makes no version for opening a published App for edit; changing a tile is one version by the signed-in user', async () => {
+    const projectRoot = project();
+    // A published App with one tile.
+    const made = createStoredAppBuildDraft(projectRoot, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
+    const operations = [{ type: 'add_tile' as const, pageId: made.pages[0]!.id, tile: { i: 't1', x: 0, y: 0, w: 6, h: 3, title: 'Revenue', text: { markdown: 'Revenue' }, viz: { type: 'text' as const } } }];
+    const withTile = applyAppBuildDraftOperations(made, made.revision, operations);
+    writeStoredAppBuildDraft(projectRoot, withTile, { expectedRevision: made.revision, operations });
+    publishStoredAppBuildDraft(projectRoot, markStoredAppBuildDraftPreflighted(projectRoot, withTile));
+    const { call } = await start(projectRoot, true);
+    const key = `apps/${made.appId}`;
+    expect((await versionsOf(call, key, 1)).versions).toHaveLength(1);
+
+    const opened = await call('POST', '/api/app-builds', { baseAppId: made.appId, authoringMode: 'manual' });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(201);
+    let draft = opened.body.draft;
+    await call('GET', '/api/app-builds');
+    await new Promise((done) => setTimeout(done, 100));
+    expect((await call('GET', `/api/history/item?path=${encodeURIComponent(key)}`)).body.versions).toHaveLength(1);
+
+    const changed = await call('PATCH', `/api/app-builds/${draft.id}`, {
+      expectedRevision: draft.revision,
+      operations: [{ type: 'update_tile', pageId: draft.pages[0].id, tileId: 't1', patch: { title: 'Revenue by month', text: { markdown: 'Revenue by month' } } }],
+    });
+    expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+    draft = changed.body.draft;
+    const item = await versionsOf(call, key, 2);
+    expect(item.versions).toHaveLength(2);
+    expect(item.versions[0]).toMatchObject({ version: 2, change: 'edited', detail: 'Tiles or layout changed. Not published yet', by: { name: 'JSMITH', kind: 'person' } });
   });
 
   it('lists the empty copy an earlier upgrade moved to the trash as removed, and restores it as a draft', async () => {

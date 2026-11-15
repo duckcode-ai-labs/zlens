@@ -15,7 +15,7 @@ import {
   restoreAppHistoryVersion,
   writeStoredAppBuildDraft,
 } from '../apps-api.js';
-import { appDraftHistoryText } from './app-drafts.js';
+import { appDraftHistoryText, appPagesKey } from './app-drafts.js';
 import { HistoryService, type HistoryAppSource } from './history-service.js';
 import { readableFileLabel } from './tracked-files.js';
 
@@ -137,14 +137,53 @@ describe('every App save is a version', () => {
     expect(published).toHaveLength(1);
     const key = `apps/${draft.appId}`;
     expect(history.item(key).versions[0]).toMatchObject({ version: 2, change: 'published', detail: '1 page, 1 tile' });
-    // Opened for edit, then the draft deleted: the published App never changed.
-    const editDraft = createStoredAppBuildDraft(root, { baseAppId: draft.appId, authoringMode: 'manual' });
+    // Opened for edit and changed, then the draft deleted: the published App never changed.
+    let editDraft = createStoredAppBuildDraft(root, { baseAppId: draft.appId, authoringMode: 'manual' });
     await after(history, 'POST', '/api/app-builds');
-    expect(history.item(key).versions[0]).toMatchObject({ version: 3, change: 'edited', detail: 'Editing in App Studio. The published App does not change until it is published' });
+    editDraft = edit(root, editDraft, [{ type: 'add_tile', pageId: editDraft.pages[0]!.id, tile: { ...tile('t2', 'Orders'), y: 3 } }]);
+    await after(history, 'PATCH', `/api/app-builds/${editDraft.id}`);
+    expect(history.item(key).versions[0]).toMatchObject({ version: 3, change: 'edited', detail: 'Added 1 tile. Not published yet' });
     deleteStoredAppBuildDraft(root, editDraft);
     await after(history, 'DELETE', `/api/app-builds/${editDraft.id}`);
     expect(history.item(key).versions[0]).toMatchObject({ version: 4, change: 'edited', detail: 'Draft discarded. The published App did not change' });
     expect(history.item(key).item.removed).toBe(false);
+  });
+
+  it('makes no version for opening a published App for edit; the first real change is one version by the user', async () => {
+    const root = project();
+    const draft = createStoredAppBuildDraft(root, { name: 'Sales overview', authoringMode: 'manual', template: 'executive_brief' });
+    const withTiles = edit(root, draft, [{ type: 'add_tile', pageId: draft.pages[0]!.id, tile: { ...tile('t1', 'Revenue'), y: 2 } }]);
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, withTiles));
+    const history = await open(root);
+    const key = `apps/${draft.appId}`;
+    expect(history.item(key).versions).toHaveLength(1);
+
+    // Edit opens a draft that holds what the published App holds: no line, whoever asks and however often.
+    let editDraft = createStoredAppBuildDraft(root, { baseAppId: draft.appId, authoringMode: 'manual' });
+    expect(await after(history, 'POST', '/api/app-builds')).toEqual([]);
+    expect(await after(history, 'PATCH', `/api/app-builds/${editDraft.id}`)).toEqual([]);
+    expect(await history.sweep()).toEqual([]);
+    expect(history.item(key).versions).toHaveLength(1);
+    expect(history.feed({ kind: 'app' }).entries).toHaveLength(1);
+
+    // Changing a tile is the one version, by the person, saying what changed.
+    editDraft = edit(root, editDraft, [{ type: 'update_tile', pageId: editDraft.pages[0]!.id, tileId: 't1', patch: { title: 'Revenue by month', text: { markdown: 'Revenue by month' } } }]);
+    const changed = await after(history, 'PATCH', `/api/app-builds/${editDraft.id}`);
+    expect(changed).toHaveLength(1);
+    expect(changed[0]).toMatchObject({ author: { name: 'JSMITH', kind: 'person' }, changes: [expect.objectContaining({ item: key, version: 2, change: 'edited', detail: 'Tiles or layout changed. Not published yet' })] });
+    expect(history.item(key).versions.map((row) => row.version)).toEqual([2, 1]);
+
+    // Opened for edit and left without a change, then discarded: nothing either.
+    const other = createStoredAppBuildDraft(root, { name: 'Margins', authoringMode: 'manual', template: 'blank' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, other));
+    await after(history, 'POST', `/api/app-builds/${other.id}/publish-to-project`);
+    const otherKey = `apps/${other.appId}`;
+    const versions = history.item(otherKey).versions.length;
+    const untouched = createStoredAppBuildDraft(root, { baseAppId: other.appId, authoringMode: 'manual' });
+    expect(await after(history, 'POST', '/api/app-builds')).toEqual([]);
+    deleteStoredAppBuildDraft(root, untouched);
+    expect(await after(history, 'DELETE', `/api/app-builds/${untouched.id}`)).toEqual([]);
+    expect(history.item(otherKey).versions).toHaveLength(versions);
   });
 });
 
@@ -374,6 +413,14 @@ describe('the App draft file', () => {
     expect(JSON.parse(text)).toMatchObject({ kind: 'zlens-app-studio-draft', appId: draft.appId, name: 'Sales overview' });
     expect(text).not.toContain('revision');
     expect(text).not.toContain('Receipt');
+  });
+
+  it('compares a draft with the published App without what publishing and opening for edit add', () => {
+    const page = { id: 'overview', version: 2, metadata: { title: 'Overview', visibility: 'shared', lifecycle: 'certified' }, layout: { kind: 'grid', items: [{ i: 'a', x: 0, y: 0, w: 6, h: 3, block: { ref: 'blocks/wins.dql' } }] } };
+    const opened = { id: 'overview', metadata: { lifecycle: 'review', title: 'Overview' }, layout: { items: [{ block: { ref: 'blocks/wins.dql' }, h: 3, i: 'a', sourceId: 'block:wins', sourceRevision: 'sha256:abc', w: 6, x: 0, y: 0 }], kind: 'grid' } };
+    expect(appPagesKey([page])).toBe(appPagesKey([opened]));
+    expect(appPagesKey([page])).not.toBe(appPagesKey([{ ...opened, layout: { ...opened.layout, items: [{ ...opened.layout.items[0]!, w: 12 }] } }]));
+    expect(appPagesKey([page])).not.toBe(appPagesKey([{ ...opened, metadata: { title: 'Seasons' } }]));
   });
 
   it('never lists drafts as removed when the store cannot be read this time', async () => {

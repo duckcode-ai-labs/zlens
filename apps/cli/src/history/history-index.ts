@@ -396,9 +396,8 @@ export class HistoryIndex {
         detail = tilesWords(now.published);
       } else if (old.draft && !now.draft && now.published && !publishedChanged) {
         detail = 'Draft discarded. The published App did not change';
-      } else if (!old.draft && now.draft && now.published) {
-        detail = 'Editing in App Studio. The published App does not change until it is published';
       } else {
+        // A draft's change says what changed from the version before, the published App's or the draft's own.
         const before = old.draft ?? old.published;
         const after = now.draft ?? now.published;
         const oldName = nameOf(old);

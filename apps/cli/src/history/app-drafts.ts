@@ -1,4 +1,4 @@
-import type { AppBuildDraft } from '@zlens/core';
+import { parseDashboardDocument, type AppBuildDraft } from '@zlens/core';
 
 /**
  * WHAT HISTORY KEEPS OF AN APP STUDIO DRAFT (V2).
@@ -64,20 +64,64 @@ export function parseAppDraftHistoryText(text: string | null | undefined): AppDr
 
 /** What an App holds in one version, read from its files: its name, and how many pages and tiles. */
 export interface AppVersionShape {
+  /** A kept App Studio draft, or the published App's files. */
+  form: 'draft' | 'published';
   name?: string;
   pages: number;
   tiles: number;
-  /** The pages and tiles as text, to tell a layout change from no change. */
+  /** The pages and tiles as people see them (appPagesKey), the same for a draft and the published App. */
   content: string;
   settings: string;
 }
 
+/** Bookkeeping a page or tile carries that is not what anyone made: publishing and reading sources set it. */
+const PAGE_BOOKKEEPING = new Set(['version']);
+const METADATA_BOOKKEEPING = new Set(['visibility', 'lifecycle']);
+const TILE_BOOKKEEPING = new Set(['sourceId', 'sourceRevision']);
+
+function canonical(value: unknown, drop?: Set<string>): unknown {
+  if (Array.isArray(value)) return value.map((item) => canonical(item));
+  if (!value || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    const item = (value as Record<string, unknown>)[key];
+    if (item === undefined || drop?.has(key)) continue;
+    out[key] = canonical(item);
+  }
+  return out;
+}
+
+/**
+ * An App's pages as people see them, comparable between a draft and the published App (V2): page by page (by id),
+ * without what publishing adds (page version, visibility, lifecycle) or what opening the App for edit adds to a
+ * tile (its source id and revision, read again from the catalog).
+ */
+export function appPagesKey(pages: unknown[]): string {
+  const normal = pages
+    .filter((page): page is Record<string, unknown> => Boolean(page) && typeof page === 'object')
+    .map((page) => {
+      const layout = (page.layout ?? {}) as Record<string, unknown>;
+      const strip = (items: unknown) => (Array.isArray(items) ? items.map((item) => canonical(item, TILE_BOOKKEEPING)) : items);
+      const responsive = layout.responsive && typeof layout.responsive === 'object'
+        ? Object.fromEntries(Object.entries(layout.responsive as Record<string, Record<string, unknown> | undefined>).map(([size, grid]) => [size, grid ? { ...grid, items: strip(grid.items) } : grid]))
+        : layout.responsive;
+      return canonical({
+        ...page,
+        metadata: canonical(page.metadata, METADATA_BOOKKEEPING),
+        layout: { ...layout, items: strip(layout.items), ...(responsive ? { responsive } : {}) },
+      }, PAGE_BOOKKEEPING) as Record<string, unknown>;
+    })
+    .sort((a, b) => String(a.id ?? '').localeCompare(String(b.id ?? '')));
+  return JSON.stringify(normal);
+}
+
 export function appDraftShape(draft: AppDraftHistoryFile): AppVersionShape {
   return {
+    form: 'draft',
     name: draft.name,
     pages: draft.pages.length,
     tiles: draft.pages.reduce((count, page) => count + (page?.layout?.items?.length ?? 0), 0),
-    content: JSON.stringify(draft.pages),
+    content: appPagesKey(draft.pages),
     settings: JSON.stringify([draft.frame, draft.sources, draft.requirements, draft.template]),
   };
 }
@@ -95,15 +139,22 @@ export function publishedAppShape(appText: string | null, pageTexts: string[]): 
   } catch {
     // Not JSON: the name comes from elsewhere.
   }
-  let tiles = 0;
+  // Read as App Studio reads them when the App is opened for edit (the dashboard parser), so the two compare.
+  const pages: unknown[] = [];
   for (const text of pageTexts) {
     try {
-      tiles += (JSON.parse(text) as { layout?: { items?: unknown[] } })?.layout?.items?.length ?? 0;
+      pages.push(parseDashboardDocument(text).document ?? JSON.parse(text));
     } catch {
-      // A page that does not read counts no tiles.
+      pages.push(text);
     }
   }
-  return { ...(name ? { name } : {}), pages: pageTexts.length, tiles, content: pageTexts.join('\n'), settings };
+  const tiles = pages.reduce<number>((count, page) => count + (((page as { layout?: { items?: unknown[] } } | null)?.layout?.items?.length) ?? 0), 0);
+  return { form: 'published', ...(name ? { name } : {}), pages: pageTexts.length, tiles, content: appPagesKey(pages), settings };
+}
+
+/** Whether a draft holds exactly what the published App holds (its name and pages): opening it for edit, no change. */
+export function sameAsPublished(draft: AppVersionShape, published: AppVersionShape | null): boolean {
+  return Boolean(published) && draft.name === published!.name && draft.content === published!.content;
 }
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -117,6 +168,7 @@ export function appEditWords(before: AppVersionShape | null, after: AppVersionSh
   if (after.tiles > before.tiles) parts.push(`Added ${plural(after.tiles - before.tiles, 'tile')}`);
   if (after.tiles < before.tiles) parts.push(`Removed ${plural(before.tiles - after.tiles, 'tile')}`);
   if (!parts.length && before.content !== after.content) parts.push('Tiles or layout changed');
-  if (!parts.length && before.settings !== after.settings) parts.push('App settings or data changed');
+  // Settings compare only between two drafts or two published versions (they are kept differently).
+  if (!parts.length && before.form === after.form && before.settings !== after.settings) parts.push('App settings or data changed');
   return parts.length ? parts.join(', ') : undefined;
 }
