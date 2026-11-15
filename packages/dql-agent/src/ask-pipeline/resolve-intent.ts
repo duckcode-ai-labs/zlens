@@ -13,6 +13,7 @@ import {
   type IntentUnresolved,
 } from './intent.js';
 import { samePhysicalRelation } from './physical-binding.js';
+import { clarificationForOpenQuestion } from './vague-question.js';
 import { priorWithoutValues } from './prior-values.js';
 import { normalizeVocabularyText, renderCard, suggestSameGrainColumns, suggestSameRelationFields, trigramSimilarity, type VocabularyEntry, type VocabularyIndex, type VocabularyKind } from './vocabulary.js';
 
@@ -1929,13 +1930,32 @@ export function clauseQuestion(clause: string): string {
   const mark = asked.lastIndexOf('?');
   if (mark >= 0) {
     const unclear = withoutTrailing(withoutLeading(asked.slice(mark + 1), '—–:;,.-'), '.');
-    if (unclear) return `Not clear yet: ${unclear}. Which did you mean?`;
+    if (/[\p{L}\p{N}]/u.test(unclear)) return `Not clear yet: ${unclear}. Which did you mean?`;
+    // Only closing marks follow the last "?" ("… (which measure? which period?)"): the clause is itself the
+    // question, asked as written (V14 gate, Q17: "Not clear yet: ). Which did you mean?").
+    if (/^[\s)\]}"'”’.]*$/.test(unclear)) return `${asked.charAt(0).toUpperCase()}${asked.slice(1)}`;
   }
   const plain = withoutTrailing(asked, '?.').replace(/\?/g, '');
   // A clause written as a question without its mark ("what defines 'best player' (…)") is asked as that question,
   // not quoted inside another one (V13 gate, Q16).
   if (/^(who|what|which|when|where|why|how)\b/i.test(plain)) return `${plain.charAt(0).toUpperCase()}${plain.slice(1)}?`;
   return `What do you mean by "${plain}"?`;
+}
+
+const BACK_FILLER = new Set(['which', 'what', 'did', 'do', 'does', 'you', 'mean', 'not', 'clear', 'yet', 'the', 'a', 'an', 'by', 'of', 'is', 'are']);
+const backWords = (text: string) => normalizeVocabularyText(text).split(' ').filter((word) => word && !BACK_FILLER.has(word));
+
+/**
+ * The question asked back. One that only repeats a vague question ("How are the Warriors doing?" for "How are the
+ * Warriors doing lately?") gives the person nothing to choose, so a question with no measure or period asks for
+ * them instead (V14 gate, Q17).
+ */
+export function questionBack(back: string, asked: string, clause?: string): string {
+  const open = clarificationForOpenQuestion(asked, clause);
+  if (!open) return back;
+  const said = new Set(backWords(asked));
+  const words = backWords(back);
+  return words.every((word) => said.has(word)) ? open : back;
 }
 
 /** A retry after a provider timeout needs room for one more full dispatch (the subscription CLI's 60 s) plus 15 s for the rest of the turn. */
@@ -2292,7 +2312,7 @@ export async function resolveIntent(input: ResolveIntentInput): Promise<IntentRe
     }
     if (validation.problems.length === 0 || (material && validation.problems.every((problem) => problem.path === 'measures'))) {
       if (material) {
-        return { status: 'clarify', intent: validation.intent, question: material.question ?? clauseQuestion(material.clause), options: material.options, attempts, ...(ledger ? { ledger, ledgerEntries } : {}) };
+        return { status: 'clarify', intent: validation.intent, question: questionBack(material.question ?? clauseQuestion(material.clause), asked, material.clause), options: material.options, attempts, ...(ledger ? { ledger, ledgerEntries } : {}) };
       }
       return { status: 'resolved', intent: validation.intent, attempts, problems: [], ...(ledger ? { ledger, ledgerEntries } : {}) };
     }

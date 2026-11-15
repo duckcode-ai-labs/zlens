@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runAskPipeline } from './pipeline.js';
 import { composeAnsweredText } from './outcomes.js';
-import { clauseQuestion } from './resolve-intent.js';
+import { clauseQuestion, questionBack } from './resolve-intent.js';
 import type { AnalyticalIntentV1 } from './intent.js';
 import { withoutEnds, withoutLeading, withoutTrailing } from '../text-ends.js';
 import { buildVocabularyIndex, type VocabularySource } from './vocabulary.js';
@@ -97,6 +97,21 @@ describe('a clause the reading wrote as a question is asked as written (V11 rete
     expect(asked).not.toMatch(/\?"\?|"[^"]*\?[^"]*"/);
     expect(clauseQuestion('how are they doing (which performance measure)')).toBe('How are they doing (which performance measure)?');
     expect(clauseQuestion("what defines 'best player' (efficiency rating, career points, or another stat)")).toBe("What defines 'best player' (efficiency rating, career points, or another stat)?");
+  });
+
+  it('a clause whose last question mark sits inside brackets is asked as written, never "Not clear yet: )." (V14 gate, Q17)', () => {
+    const asked = clauseQuestion("how the Warriors are doing (which measure? over which period?)");
+    expect(asked).toBe('How the Warriors are doing (which measure? over which period?)');
+    expect(asked).not.toMatch(/Not clear yet:\s*[)\]]/);
+  });
+
+  it('a question back that only repeats a vague question asks for the measure and the period (V14 gate, Q17)', () => {
+    const question = 'How are the Warriors doing lately?';
+    expect(questionBack('How are the Warriors doing?', question)).toBe('Which measure do you mean, and over which period (a year or a date range)?');
+    expect(questionBack('Not clear yet: ). Which did you mean?', question)).toBe('Which measure do you mean, and over which period (a year or a date range)?');
+    expect(questionBack('Which stat do you mean: wins, points per game or point differential?', question)).toBe('Which stat do you mean: wins, points per game or point differential?');
+    // A question that is not vague keeps the question back as written.
+    expect(questionBack('Which season do you mean?', 'How many games did the Warriors win?')).toBe('Which season do you mean?');
   });
 });
 
