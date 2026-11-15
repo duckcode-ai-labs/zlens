@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
+import { applyAppBuildDraftOperations } from '@zlens/core';
+import { createStoredAppBuildDraft, deleteStoredAppBuildDraft, markStoredAppBuildDraftPreflighted, publishStoredAppBuildDraft, removeEmptyAppCopies, writeStoredAppBuildDraft } from './apps-api.js';
 import { startLocalServer } from './local-runtime.js';
 import type { SnowflakeAppQuery } from './snowflake-app-settings.js';
 
@@ -129,6 +131,112 @@ describe('History in the ZLens app for Snowflake', () => {
   });
 });
 
+describe('Apps in History (V2)', () => {
+  it('keeps creating an App and each tile as a version by the signed-in user; Delete draft is removed and restores as a draft', async () => {
+    const projectRoot = project();
+    const { call } = await start(projectRoot, true);
+    const created = await call('POST', '/api/app-builds', { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    let draft = created.body.draft;
+    const key = `apps/${draft.appId}`;
+    let item = await versionsOf(call, key, 1);
+    expect(item.item).toMatchObject({ key, kind: 'app', name: 'Sales overview' });
+    expect(item.versions[0]).toMatchObject({ version: 1, change: 'created', by: { name: 'JSMITH', kind: 'person' }, detail: 'In App Studio, not published yet' });
+
+    for (const [n, title] of ['Revenue', 'Orders', 'Margin'].entries()) {
+      const tile = { i: `t${n}`, x: 0, y: n * 3, w: 6, h: 3, title, text: { markdown: title }, viz: { type: 'text' } };
+      const patched = await call('PATCH', `/api/app-builds/${draft.id}`, { expectedRevision: draft.revision, operations: [{ type: 'add_tile', pageId: draft.pages[0].id, tile }] });
+      expect(patched.status, JSON.stringify(patched.body)).toBe(200);
+      draft = patched.body.draft;
+      item = await versionsOf(call, key, n + 2);
+    }
+    const renamed = await call('PATCH', `/api/app-builds/${draft.id}`, { expectedRevision: draft.revision, operations: [{ type: 'set_name', name: 'Sales 2026' }] });
+    draft = renamed.body.draft;
+    item = await versionsOf(call, key, 5);
+    expect(item.versions.map((row: { version: number; change: string; detail?: string; by: { name: string } }) => [row.version, row.change, row.detail, row.by.name])).toEqual([
+      [5, 'renamed', 'Was "Sales overview"', 'JSMITH'],
+      [4, 'edited', 'Added 1 tile', 'JSMITH'],
+      [3, 'edited', 'Added 1 tile', 'JSMITH'],
+      [2, 'edited', 'Added 1 tile', 'JSMITH'],
+      [1, 'created', 'In App Studio, not published yet', 'JSMITH'],
+    ]);
+    const apps = await call('GET', '/api/history/changes?kind=app');
+    expect(apps.body.entries.map((entry: { change: string; version: number }) => `${entry.change} v${entry.version}`)).toEqual(['renamed v5', 'edited v4', 'edited v3', 'edited v2', 'created v1']);
+    // The content-free SQL log has a row waiting for each (written in batches).
+    expect((await call('GET', '/api/history/status')).body.sqlLog.pending).toBeGreaterThanOrEqual(5);
+
+    const deleted = await call('DELETE', `/api/app-builds/${draft.id}`, { expectedRevision: draft.revision, proposalHash: draft.proposalHash });
+    expect(deleted.status, JSON.stringify(deleted.body)).toBe(200);
+    item = await versionsOf(call, key, 6);
+    expect(item.item).toMatchObject({ removed: true, name: 'Sales 2026' });
+    expect(item.versions[0]).toMatchObject({ version: 6, change: 'removed', state: 'removed', by: { name: 'JSMITH' } });
+    const feed = await call('GET', '/api/history/changes');
+    expect(feed.body.entries[0]).toMatchObject({ change: 'removed', kind: 'app', action: 'delete', canRestore: true });
+
+    const restored = await call('POST', '/api/history/restore', { path: key, version: 5 });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    expect(restored.body).toMatchObject({ ok: true, item: key, restored: 5, version: 7, status: 'draft', appDraft: { appId: draft.appId } });
+    const drafts = await call('GET', '/api/app-builds');
+    const back = drafts.body.drafts.find((candidate: { id: string }) => candidate.id === restored.body.appDraft.id);
+    expect(back).toMatchObject({ name: 'Sales 2026', state: 'local_draft' });
+    expect(back.pages[0].layout.items.map((tile: { title: string }) => tile.title)).toEqual(['Revenue', 'Orders', 'Margin']);
+    item = await versionsOf(call, key, 7);
+    expect(item.versions[0]).toMatchObject({ version: 7, change: 'restored', by: { name: 'JSMITH' }, current: true });
+  });
+
+  it('makes no version for opening a published App for edit; changing a tile is one version by the signed-in user', async () => {
+    const projectRoot = project();
+    // A published App with one tile.
+    const made = createStoredAppBuildDraft(projectRoot, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
+    const operations = [{ type: 'add_tile' as const, pageId: made.pages[0]!.id, tile: { i: 't1', x: 0, y: 0, w: 6, h: 3, title: 'Revenue', text: { markdown: 'Revenue' }, viz: { type: 'text' as const } } }];
+    const withTile = applyAppBuildDraftOperations(made, made.revision, operations);
+    writeStoredAppBuildDraft(projectRoot, withTile, { expectedRevision: made.revision, operations });
+    publishStoredAppBuildDraft(projectRoot, markStoredAppBuildDraftPreflighted(projectRoot, withTile));
+    const { call } = await start(projectRoot, true);
+    const key = `apps/${made.appId}`;
+    expect((await versionsOf(call, key, 1)).versions).toHaveLength(1);
+
+    const opened = await call('POST', '/api/app-builds', { baseAppId: made.appId, authoringMode: 'manual' });
+    expect(opened.status, JSON.stringify(opened.body)).toBe(201);
+    let draft = opened.body.draft;
+    await call('GET', '/api/app-builds');
+    await new Promise((done) => setTimeout(done, 100));
+    expect((await call('GET', `/api/history/item?path=${encodeURIComponent(key)}`)).body.versions).toHaveLength(1);
+
+    const changed = await call('PATCH', `/api/app-builds/${draft.id}`, {
+      expectedRevision: draft.revision,
+      operations: [{ type: 'update_tile', pageId: draft.pages[0].id, tileId: 't1', patch: { title: 'Revenue by month', text: { markdown: 'Revenue by month' } } }],
+    });
+    expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+    draft = changed.body.draft;
+    const item = await versionsOf(call, key, 2);
+    expect(item.versions).toHaveLength(2);
+    expect(item.versions[0]).toMatchObject({ version: 2, change: 'edited', detail: 'Tiles or layout changed. Not published yet', by: { name: 'JSMITH', kind: 'person' } });
+  });
+
+  it('lists the empty copy an earlier upgrade moved to the trash as removed, and restores it as a draft', async () => {
+    const projectRoot = project();
+    // Before this version: an App, and the empty "(3)" copy the upgrade clean-up moved to the trash.
+    createStoredAppBuildDraft(projectRoot, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
+    const shell = createStoredAppBuildDraft(projectRoot, { name: 'Sales overview (3)', authoringMode: 'ai', template: 'operational_dashboard', goal: 'Sales by month' });
+    expect(removeEmptyAppCopies(projectRoot)).toEqual(['Sales overview (3)']);
+    const gone = createStoredAppBuildDraft(projectRoot, { name: 'Margins', authoringMode: 'manual', template: 'blank' });
+    deleteStoredAppBuildDraft(projectRoot, gone);
+    await new Promise((done) => setTimeout(done, 5));
+    const { call } = await start(projectRoot, true);
+    const feed = await call('GET', '/api/history/changes');
+    const removed = feed.body.entries.filter((entry: { change: string }) => entry.change === 'removed');
+    expect(removed.map((entry: { by: { name: string }; items: Array<{ name: string }>; canRestore: boolean }) => [entry.by.name, entry.items[0]!.name, entry.canRestore])).toEqual([
+      ['ZLens', 'Margins', true],
+      ['ZLens', 'Sales overview (3)', true],
+    ]);
+    const restored = await call('POST', '/api/history/restore', { path: `apps/${shell.appId}`, version: 1 });
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    const drafts = await call('GET', '/api/app-builds');
+    expect(drafts.body.drafts.find((candidate: { id: string }) => candidate.id === restored.body.appDraft.id)).toMatchObject({ name: 'Sales overview (3)', state: 'local_draft' });
+  });
+});
+
 describe('open source keeps Git', () => {
   it('makes no History repository and answers the History tab from the Git program, as before', async () => {
     const projectRoot = project();
@@ -143,5 +251,10 @@ describe('open source keeps Git', () => {
     const tab = await call('GET', `/api/blocks/history?path=${encodeURIComponent(saved.body.path)}`);
     // The git-binary path: this folder is not a Git repository (or the machine has no Git program).
     expect(['not_a_repo', 'git_unavailable']).toContain(tab.body.status);
+    // App Studio saves in open source make no History either.
+    expect((await call('POST', '/api/app-builds', { name: 'Sales overview', authoringMode: 'manual', template: 'blank' })).status).toBe(201);
+    await new Promise((done) => setTimeout(done, 50));
+    expect(existsSync(join(projectRoot, '.dql', 'history'))).toBe(false);
+    expect(existsSync(join(projectRoot, 'apps'))).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { automaticAskDraftState } from '@zlens/agent';
 import { applyCompanionCertification } from '../certification-receipt.js';
@@ -8,7 +8,8 @@ import { HistorySqlLog, type HistorySqlLogOptions, type SqlLogRow, type SqlLogSt
 import { AI_ASK_NAME, ZLENS_AUTHOR, type HistoryAction, type HistoryAuthor, type HistoryStore } from './history-store.js';
 import { changedLineCount, diffLines, type DiffLine } from './line-diff.js';
 import { asDraftSource, compareSavedQueryFields, isCertifiedVersion, readSavedQueryFields, receiptSummary, type FieldChange } from './saved-query-fields.js';
-import { besideSuffix, besideSuffixOf, isDraftPath, isTrackedItemKey, isTrackedPath, listTrackedFiles, type HistoryItemKind } from './tracked-files.js';
+import { APP_STUDIO_DRAFT_FILE, appKeyOf, besideSuffix, besideSuffixOf, isAppStudioDraftPath, isDraftPath, isTrackedItemKey, isTrackedPath, listTrackedFiles, type HistoryItemKind } from './tracked-files.js';
+import { appDraftShape, parseAppDraftHistoryText, publishedAppShape, sameAsPublished } from './app-drafts.js';
 
 /**
  * VERSION HISTORY IN THE ZLENS APP FOR SNOWFLAKE (V15, decisions H1–H10).
@@ -27,6 +28,42 @@ const GITDIR = join('.dql', 'history');
 const STARTED = 'History starts here';
 const SWEEP_DELAY_MS = 30_000;
 const decoder = new TextDecoder('utf-8');
+const encoder = new TextEncoder();
+/** Which trash bundles History has kept, and since when it keeps App Studio drafts (V2). */
+const TRASH_STATE = 'zlens-trash.json';
+
+/**
+ * Apps as App Studio keeps them (V2). An App is a draft in ZLens's local store until it is published, so History
+ * reads each App's live draft from there (`apps/<id>/studio-draft.json`, kept in History's repository only), and
+ * restores an App version as an App Studio draft, never as a published App.
+ */
+export interface HistoryAppSource {
+  /** Each App's live App Studio draft, as History keeps it: `apps/<id>/studio-draft.json` → its text. */
+  drafts(): Map<string, string>;
+  /**
+   * Writes an App version back as an App Studio draft, never publishing. For an App that is there (`asNew` false):
+   * into its live draft, else a new draft editing its published App. For a removed App (`asNew` true): always a new
+   * draft, under its own name and id when they are free, else a free one, so no other App's draft is touched.
+   */
+  restore(input: { appId: string; files: Array<{ path: string; content: string }>; asNew: boolean }): Promise<{ appId: string; draftId: string; name: string }>;
+  /** Apps in ZLens's trash (a Delete, or an upgrade clean-up), with their files: History keeps each once. */
+  trashed?(): HistoryTrashedApp[];
+}
+
+export interface HistoryTrashedApp {
+  /** The trash bundle's id. */
+  id: string;
+  appId: string;
+  name: string;
+  /** ISO-8601. */
+  deletedAt: string;
+  /** `draft`: an App Studio draft's bundle; `app`: a published App's folder. */
+  from: 'draft' | 'app';
+  /** One line: why it went to the trash, and when. */
+  reason: string;
+  /** Its files, by their path inside the App's folder (`studio-draft.json`, `dql.app.json`, `dashboards/<id>.dqld`). */
+  files: Array<{ path: string; content: string }>;
+}
 
 export interface HistoryServiceOptions {
   projectRoot: string;
@@ -40,6 +77,8 @@ export interface HistoryServiceOptions {
   now?: () => Date;
   /** Seconds after the last request before a quiet look for changes made in the background. 0 turns it off. */
   sweepDelayMs?: number;
+  /** Apps as App Studio keeps them (V2): their drafts, restoring one as a draft, and the trash. */
+  apps?: HistoryAppSource;
 }
 
 export interface HistoryFeedFilters {
@@ -100,7 +139,8 @@ export interface HistoryVersionRow {
 export interface HistoryItemResult {
   item: { key: string; kind: HistoryItemKind; name: string; removed: boolean; currentVersion: number };
   versions: HistoryVersionRow[];
-  banner: { draft: number; certified: number } | null;
+  /** A draft on a certified version; `restored` when the draft is a restored copy of that certified version. */
+  banner: { draft: number; certified: number; restored?: number } | null;
 }
 
 export interface HistoryVersionCard {
@@ -148,6 +188,16 @@ export class HistoryError extends Error {
 
 type PendingChange = { path: string; content: Uint8Array | null; mtimeMs?: number };
 
+export interface HistoryRestoreResult {
+  item: string;
+  restored: number;
+  version: number;
+  message: string;
+  paths: string[];
+  /** An App restored as an App Studio draft: the draft to open. */
+  appDraft?: { id: string; appId: string };
+}
+
 export class HistoryService {
   readonly store: HistoryStore;
   readonly index: HistoryIndex;
@@ -160,6 +210,8 @@ export class HistoryService {
   private sqlFlushTimer: NodeJS.Timeout | undefined;
   private started = false;
   private sizeCache: { at: number; bytes: number } | undefined;
+  /** Whether a draft (by its blob id) holds what the published App (by its blob ids) holds: worked out once. */
+  private readonly unchangedDrafts = new Map<string, boolean>();
 
   constructor(private readonly options: HistoryServiceOptions) {
     const gitdir = options.gitdir ?? join(options.projectRoot, GITDIR);
@@ -210,6 +262,7 @@ export class HistoryService {
       const commits = created || !(await this.store.head())
         ? await this.commitNow(ZLENS_AUTHOR, 'start', STARTED, { allowEmpty: true })
         : await this.commitNow(ZLENS_AUTHOR, 'found', 'Changes found when ZLens started');
+      commits.push(...(await this.keepTrashedApps()));
       const bytes = await this.store.sizeBytes();
       if (bytes >= HISTORY_SIZE_WARNING_BYTES) {
         this.log('warn', `[zlens] History takes ${(bytes / 1024 ** 3).toFixed(1)} GiB of the app's volume (Settings shows it).`);
@@ -230,6 +283,11 @@ export class HistoryService {
     this.sweepSoon();
     if (request.status >= 400) return undefined;
     const method = (request.method ?? 'GET').toUpperCase();
+    if (method === 'GET' && request.path === '/api/app-builds' && this.options.apps) {
+      // Listing App drafts can tidy them (an empty copy of another App goes to the trash, #341): ZLens's own change.
+      // Only drafts that went: an edit saved at the same moment from another tab stays the person's.
+      return this.enqueue(() => this.commitNow(ZLENS_AUTHOR, 'upgrade', '', { only: isAppStudioDraftPath, removalsOnly: true }));
+    }
     const longRequestDone = method === 'GET' && request.path.startsWith('/api/long-requests/') && request.status !== 202;
     if (!longRequestDone && !['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) return undefined;
     if (request.path.startsWith('/api/history/')) return undefined;
@@ -268,11 +326,35 @@ export class HistoryService {
 
   // ── Finding changes and committing them ──────────────────────────────────────────────────────────────────────
 
-  /** The tracked files that differ from the newest version. */
-  private async findChanges(): Promise<PendingChange[]> {
+  /** Each App's live App Studio draft (V2); null when the store could not be read (then nothing counts as removed). */
+  private appDrafts(): Map<string, string> | null {
+    if (!this.options.apps) return new Map();
+    try {
+      return this.options.apps.drafts();
+    } catch (error) {
+      this.log('warn', `[zlens] History could not read the App drafts this time: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /** The tracked files that differ from the newest version (only those `only` keeps, when given). */
+  private async findChanges(only?: (path: string) => boolean): Promise<PendingChange[]> {
     const head = this.index.headFiles();
     const listed = listTrackedFiles(this.root);
+    const drafts = this.appDrafts();
     const changes: PendingChange[] = [];
+    for (const path of [...listed.keys()]) {
+      if (isAppStudioDraftPath(path) || (only && !only(path))) listed.delete(path);
+    }
+    for (const [path, text] of drafts ?? []) {
+      if (!isAppStudioDraftPath(path) || (only && !only(path))) continue;
+      const content = encoder.encode(text);
+      const oid = await this.store.hashContent(content);
+      if (head.get(path) === oid) continue;
+      // Opening a published App for edit makes a draft that holds what the App holds: no version until it differs.
+      if (!head.has(path) && (await this.draftMatchesPublished(path, oid, text, head))) continue;
+      changes.push({ path, content });
+    }
     for (const [path, stat] of listed) {
       const known = this.snapshot.get(path);
       if (known && known.size === stat.size && known.mtimeMs === stat.mtimeMs && head.get(path) === known.oid) continue;
@@ -287,6 +369,12 @@ export class HistoryService {
       if (head.get(path) !== oid) changes.push({ path, content, mtimeMs: stat.mtimeMs });
     }
     for (const path of head.keys()) {
+      if (only && !only(path)) continue;
+      if (isAppStudioDraftPath(path)) {
+        // A draft is gone when the store no longer has it; when the store could not be read, nothing is gone.
+        if (drafts && !drafts.has(path)) changes.push({ path, content: null });
+        continue;
+      }
       if (!listed.has(path)) {
         changes.push({ path, content: null });
         this.snapshot.delete(path);
@@ -295,9 +383,113 @@ export class HistoryService {
     return changes.sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  /**
+   * Whether a new App Studio draft holds exactly what the last version History holds of its App, the published App
+   * (V2): its name and pages, apart from bookkeeping (app-drafts.ts appPagesKey). Then it is not a change yet.
+   */
+  private async draftMatchesPublished(path: string, oid: string, text: string, head: Map<string, string>): Promise<boolean> {
+    const key = path.slice(0, -`/${APP_STUDIO_DRAFT_FILE}`.length);
+    const appOid = head.get(`${key}/dql.app.json`);
+    if (!appOid) return false;
+    const pagePaths = [...head.keys()].filter((candidate) => candidate.startsWith(`${key}/dashboards/`) && candidate.endsWith('.dqld')).sort();
+    const cacheKey = [oid, appOid, ...pagePaths.map((page) => head.get(page))].join(':');
+    const known = this.unchangedDrafts.get(cacheKey);
+    if (known !== undefined) return known;
+    let same = false;
+    try {
+      const draft = parseAppDraftHistoryText(text);
+      if (draft) {
+        const read = async (blob: string) => decoder.decode(await this.store.readBlob(blob));
+        const pages: string[] = [];
+        for (const page of pagePaths) pages.push(await read(head.get(page)!));
+        same = sameAsPublished(appDraftShape(draft), publishedAppShape(await read(appOid), pages));
+      }
+    } catch {
+      same = false;
+    }
+    if (this.unchangedDrafts.size > 500) this.unchangedDrafts.clear();
+    this.unchangedDrafts.set(cacheKey, same);
+    return same;
+  }
+
+  /**
+   * Apps that went to ZLens's trash before History kept them (V2, decision H7): an App Studio draft deleted, or moved
+   * there by an upgrade clean-up, before History kept drafts; a published App deleted before History started. Each
+   * is kept once, as ZLens: its last content, then its removal, so History lists it as removed and it can be
+   * restored. Anything History saw go is not kept twice. Runs inside the queue.
+   */
+  private async keepTrashedApps(): Promise<IndexedCommit[]> {
+    const source = this.options.apps;
+    if (!source?.trashed) return [];
+    const statePath = join(this.store.location, TRASH_STATE);
+    // Read as it is: no file yet (or one that does not read) is no state.
+    let state: { draftsSince?: string; kept?: string[] } = {};
+    try {
+      const read = JSON.parse(readFileSync(statePath, 'utf-8')) as unknown;
+      if (read && typeof read === 'object' && !Array.isArray(read)) state = read as typeof state;
+    } catch {
+      state = {};
+    }
+    const nowIso = this.now().toISOString();
+    const draftsSince = Date.parse(state.draftsSince ?? nowIso);
+    const historySince = Date.parse(this.index.commits[0]?.at ?? nowIso);
+    const kept = new Set(Array.isArray(state.kept) ? state.kept : []);
+    let trashed: HistoryTrashedApp[] = [];
+    try {
+      trashed = source.trashed();
+    } catch (error) {
+      this.log('warn', `[zlens] History could not read ZLens's trash: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const made: IndexedCommit[] = [];
+    for (const bundle of [...trashed].sort((a, b) => a.deletedAt.localeCompare(b.deletedAt) || a.id.localeCompare(b.id))) {
+      if (kept.has(bundle.id)) continue;
+      kept.add(bundle.id);
+      // History saw this one go (it kept drafts, or the App's files, when it was removed).
+      const deletedAt = Date.parse(bundle.deletedAt);
+      if (!Number.isFinite(deletedAt) || deletedAt >= (bundle.from === 'draft' ? draftsSince : historySince)) continue;
+      const key = this.freeAppKey(bundle.appId, bundle.id);
+      const files = bundle.files
+        .map((file) => ({ path: `${key}/${file.path}`, content: encoder.encode(file.content) }))
+        .filter((file) => isTrackedPath(file.path) && file.content.byteLength <= 5 * 1024 * 1024);
+      if (!files.length) continue;
+      made.push(await this.commitFiles(ZLENS_AUTHOR, 'trash', `Kept from the trash: ${bundle.name}`, files));
+      made.push(await this.commitFiles(ZLENS_AUTHOR, 'trash', bundle.reason, files.map((file) => ({ path: file.path, content: null }))));
+    }
+    try {
+      // Written whole, then moved into place: a reader sees the old state or the new one, never part of one.
+      const temp = `${statePath}.${process.pid}.tmp`;
+      writeFileSync(temp, `${JSON.stringify({ draftsSince: state.draftsSince ?? nowIso, kept: [...kept].sort() }, null, 2)}\n`, { encoding: 'utf-8', flag: 'w' });
+      renameSync(temp, statePath);
+    } catch (error) {
+      this.log('warn', `[zlens] History could not note which trashed Apps it kept: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (made.length) this.sqlLogSoon();
+    return made;
+  }
+
+  /** `apps/<id>` for a trashed App, unless an App History knows has that id; then a key of its own. */
+  private freeAppKey(appId: string, bundleId: string): string {
+    const id = /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(appId) ? appId : 'app';
+    const key = `apps/${id}`;
+    const inUse = this.index.versions(key).length > 0
+      || [...this.index.headFiles().keys()].some((path) => path.startsWith(`${key}/`))
+      || existsSync(join(this.root, key));
+    if (!inUse) return key;
+    let n = 0;
+    let candidate = `${key}-removed-${bundleId.replace(/[^A-Za-z0-9]/g, '').slice(-8).toLowerCase() || 'x'}`;
+    while (this.index.versions(candidate).length && n < 100) candidate = `${key}-removed-${(n += 1)}`;
+    return candidate;
+  }
+
   /** Commits the current changes (call inside the queue). An automatic Ask draft is its own version by AI (Ask). */
-  private async commitNow(author: HistoryAuthor, action: HistoryAction, message: string, options: { allowEmpty?: boolean; restoredFrom?: { item: string; version: number; commit: string } } = {}): Promise<IndexedCommit[]> {
-    const changes = await this.findChanges();
+  private async commitNow(
+    author: HistoryAuthor,
+    action: HistoryAction,
+    message: string,
+    options: { allowEmpty?: boolean; restoredFrom?: { item: string; version: number; commit: string }; only?: (path: string) => boolean; removalsOnly?: boolean } = {},
+  ): Promise<IndexedCommit[]> {
+    const found = await this.findChanges(options.only);
+    const changes = options.removalsOnly ? found.filter((change) => change.content === null) : found;
     if (!changes.length && !options.allowEmpty) return [];
     const made: IndexedCommit[] = [];
     let rest = changes;
@@ -351,8 +543,8 @@ export class HistoryService {
     const all: HistoryFeedEntry[] = [];
     for (let i = this.index.commits.length - 1; i >= 0; i -= 1) {
       const commit = this.index.commits[i]!;
+      // The "By" choices are the people who saved something; AI drafts have a choice of their own.
       if (commit.author.kind === 'person') people.add(commit.author.name);
-      if (commit.author.askedBy) people.add(commit.author.askedBy);
       if (since !== undefined && Date.parse(commit.at) < since) continue;
       if (!authorMatches(commit.author, filters.by)) continue;
       for (const entry of this.entriesFor(commit)) {
@@ -371,6 +563,8 @@ export class HistoryService {
   private entriesFor(commit: IndexedCommit): HistoryFeedEntry[] {
     const groups = new Map<string, IndexedChange[]>();
     for (const change of commit.changes) {
+      // An App kept from the trash shows once, as removed (its content is the version before that).
+      if (commit.action === 'trash' && change.change !== 'removed') continue;
       // The first version is one line, whatever it holds.
       const key = change.change === 'started' ? 'started' : `${change.change}:${change.kind}`;
       groups.set(key, [...(groups.get(key) ?? []), change]);
@@ -447,7 +641,10 @@ export class HistoryService {
     let banner: HistoryItemResult['banner'] = null;
     if (!removed && latest.change.kind === 'saved_query' && !latest.change.certified) {
       const certified = [...versions].reverse().find((version) => version.change.certified);
-      if (certified) banner = { draft: latest.version, certified: certified.version };
+      // A restore of a certified version is that version again, as a draft: the banner says so (V2).
+      const restoredFrom = latest.change.change === 'restored' ? latest.commit.restoredFrom?.version : undefined;
+      const restored = restoredFrom !== undefined && versions.find((version) => version.version === restoredFrom)?.change.certified ? restoredFrom : undefined;
+      if (certified) banner = { draft: latest.version, certified: certified.version, ...(restored !== undefined ? { restored } : {}) };
     }
     return {
       item: { key: latest.change.item, kind: latest.change.kind, name: latest.change.name, removed, currentVersion: latest.version },
@@ -578,7 +775,7 @@ export class HistoryService {
    * Writes an old version back as the next version, always as a draft (H6): a saved query's status becomes draft
    * and its companion keeps no receipt, as any draft's. The old version, certified or not, stays exactly as it was.
    */
-  restore(input: { item: string; version: number; user?: string }): Promise<{ item: string; restored: number; version: number; message: string; paths: string[] }> {
+  restore(input: { item: string; version: number; user?: string }): Promise<HistoryRestoreResult> {
     return this.enqueue(async () => {
       const author: HistoryAuthor = input.user ? { name: input.user, kind: 'person' } : ZLENS_AUTHOR;
       // Anything not committed yet becomes its own version first, so the restore is exactly the restore.
@@ -588,6 +785,7 @@ export class HistoryService {
       const latest = versions.at(-1)!;
       if (target.change.change === 'removed') throw new HistoryError(`v${input.version} is the removal: pick a version before it.`, 400, 'HISTORY_RESTORE_REMOVAL');
       if (target === latest) throw new HistoryError(`v${input.version} is already the current version.`, 409, 'HISTORY_ALREADY_CURRENT');
+      if (target.change.kind === 'app' && this.options.apps) return this.restoreApp(author, versions, target);
       const destination = latest.change.item;
       const files = await this.filesAt(target);
       const written = this.writeVersion(target, destination, files);
@@ -603,6 +801,42 @@ export class HistoryService {
       }
       return { item: destination, restored: input.version, version: change?.version ?? next, message, paths: written };
     });
+  }
+
+  /**
+   * An App version back as an App Studio draft (V2): the App's live draft takes its content, or a new draft is made
+   * (an edit of the published App when there is one; a removed App comes back as a new draft). Nothing is
+   * published: the published App, if any, stays as it is until someone publishes the draft.
+   */
+  private async restoreApp(author: HistoryAuthor, versions: ItemVersion[], target: ItemVersion): Promise<HistoryRestoreResult> {
+    const latest = versions.at(-1)!;
+    const source = latest.change.item;
+    const files = (await this.filesAt(target)).map((file) => ({ path: file.path.slice(target.change.item.length + 1), content: file.content }));
+    if (!files.length) throw new HistoryError('That version has no files.', 404, 'HISTORY_VERSION_EMPTY');
+    let written: { appId: string; draftId: string; name: string };
+    try {
+      // A removed App comes back as a new draft; an App that is there takes the version into its own draft.
+      const removed = latest.change.change === 'removed';
+      written = await this.options.apps!.restore({ appId: source.split('/').pop()!, files, asNew: removed });
+    } catch (error) {
+      if (error instanceof HistoryError) throw error;
+      throw new HistoryError(`v${target.version} could not be restored as a draft: ${error instanceof Error ? error.message : String(error)}`, 409, 'HISTORY_RESTORE_FAILED');
+    }
+    const destination = `apps/${written.appId}`;
+    const sameItem = destination === source;
+    const next = latest.version + 1;
+    const message = sameItem ? `Restored v${target.version} as v${next}` : `Restored v${target.version} as a new draft, "${written.name}"`;
+    const made = await this.commitNow(author, 'restore', message, { restoredFrom: { item: source, version: target.version, commit: target.commit.oid } });
+    const change = made.flatMap((commit) => commit.changes).find((candidate) => candidate.item === destination);
+    if (!change) throw new HistoryError(`v${target.version} is the same as the App's draft now: nothing to restore.`, 409, 'HISTORY_NOTHING_TO_RESTORE');
+    return {
+      item: destination,
+      restored: target.version,
+      version: change.version,
+      message,
+      paths: [],
+      appDraft: { id: written.draftId, appId: written.appId },
+    };
   }
 
   private writeVersion(target: ItemVersion, destination: string, files: Array<{ path: string; content: string }>): string[] {
@@ -632,7 +866,8 @@ export class HistoryService {
       return written;
     }
     if (target.change.kind === 'app') {
-      const wanted = new Map(files.map((file) => [`${destination}${file.path.slice(target.change.item.length)}`, file.content]));
+      // The App Studio draft History keeps is not a project file: without an App source it is not written back.
+      const wanted = new Map(files.filter((file) => !isAppStudioDraftPath(file.path)).map((file) => [`${destination}${file.path.slice(target.change.item.length)}`, file.content]));
       for (const path of listTrackedFiles(this.root).keys()) {
         if (path.startsWith(`${destination}/`) && !wanted.has(path)) {
           this.safePath(path);
@@ -705,7 +940,7 @@ export class HistoryService {
     const last = this.sqlLog.readState().lastCommit;
     const commits = this.index.commits;
     const start = last ? commits.findIndex((commit) => commit.oid === last) + 1 : 0;
-    return commits.slice(start).flatMap((commit) => commit.changes.map((change) => ({
+    return commits.slice(start).flatMap((commit) => commit.changes.filter((change) => commit.action !== 'trash' || change.change === 'removed').map((change) => ({
       commit: commit.oid,
       changedAt: commit.at,
       changedBy: commit.author.kind === 'ai' && commit.author.askedBy ? `${commit.author.name} for ${commit.author.askedBy}` : commit.author.name,
@@ -808,8 +1043,9 @@ function authorMatches(author: HistoryAuthor, by: string | undefined): boolean {
   if (by === 'ai') return author.kind === 'ai';
   if (by === 'zlens') return author.kind === 'zlens';
   if (by.startsWith('person:')) {
+    // A person's own saves; their automatic Ask drafts are under "AI drafts".
     const name = by.slice('person:'.length).toUpperCase();
-    return (author.kind === 'person' && author.name.toUpperCase() === name) || (author.askedBy ?? '').toUpperCase() === name;
+    return author.kind === 'person' && author.name.toUpperCase() === name;
   }
   return true;
 }
@@ -822,7 +1058,7 @@ export function actionForRequest(method: string, path: string): HistoryAction {
 }
 
 function names(changes: PendingChange[]): string {
-  const items = [...new Set(changes.map((change) => change.path.split('/').pop()!.replace(/\.[a-z]+$/i, '')))];
+  const items = [...new Set(changes.map((change) => appKeyOf(change.path)?.split('/').pop() ?? change.path.split('/').pop()!.replace(/\.[a-z]+$/i, '')))];
   return items.length <= 3 ? items.join(', ') : `${items.length} items`;
 }
 
@@ -834,6 +1070,11 @@ function defaultMessage(action: HistoryAction, changes: PendingChange[]): string
     case 'certify': return `Certified ${what}`;
     case 'clear-drafts': return `Cleared ${changes.filter((change) => change.path.endsWith('.dql')).length} automatic Ask drafts`;
     case 'delete': return `Removed ${what}`;
+    case 'upgrade': {
+      const removed = changes.filter((change) => change.content === null && isAppStudioDraftPath(change.path)).length;
+      if (removed && removed === changes.length) return removed === 1 ? 'An empty copy of another App, moved to the trash' : `${removed} empty copies of other Apps, moved to the trash`;
+      return `Updated ${what}`;
+    }
     case 'ask': return `Drafted from Ask: ${what}`;
     default: return `Saved ${what}`;
   }

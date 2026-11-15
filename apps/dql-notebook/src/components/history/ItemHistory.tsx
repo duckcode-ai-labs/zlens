@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { RotateCcw, X } from 'lucide-react';
 import { historyApi, type HistoryItem, type HistoryRestoreResult, type HistoryVersionRow } from '../../api/history';
 import type { Theme } from '../../themes/notebook-theme';
-import { authorLabel, stateLabel, whenLabel } from './history-words';
+import { authorLabel, bannerText, restoredNotice, stateLabel, whenLabel } from './history-words';
 
 /**
  * The History tab (V15, the ZLens app for Snowflake): every version of one saved query, App or notebook, newest
@@ -71,7 +71,7 @@ export function ItemHistory({ path, t, onCompare, onRestored, refreshToken }: It
     setError(null);
     try {
       const result = await historyApi.restore(item.item.key, row.version);
-      setNotice(`${result.message}, as a draft.`);
+      setNotice(restoredNotice(result.message));
       setReload((value) => value + 1);
       onRestored?.(result);
     } catch (cause) {
@@ -141,9 +141,7 @@ export function ItemHistoryView({
     <section aria-label="Version history" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14, fontFamily: t.font, color: t.textPrimary }}>
       {item.banner ? (
         <div role="note" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 16px', padding: '11px 14px', borderRadius: 10, background: `${t.warning}1a`, border: `1px solid ${t.warning}55`, color: t.textPrimary, fontSize: 13, lineHeight: 1.5 }}>
-          <span style={{ flex: '1 1 320px', minWidth: 0 }}>
-            v{item.banner.draft} is an edit of certified v{item.banner.certified} and is not certified yet. Compare the two, then certify v{item.banner.draft} or restore v{item.banner.certified}.
-          </span>
+          <span style={{ flex: '1 1 320px', minWidth: 0 }}>{bannerText(item.banner)}</span>
           <button type="button" onClick={() => onCompare(item.banner!.certified, item.banner!.draft)} style={linkButton(t)}>
             Compare v{item.banner.certified} and v{item.banner.draft}
           </button>
@@ -223,7 +221,11 @@ export function ItemHistoryView({
       <p style={muted(t, { margin: 0 })}>
         {savedQuery
           ? `Restoring never changes an old version: it saves a copy as the next version (v${next}), as a draft. Certified versions stay exactly as they were certified, with their receipts.`
-          : `Restoring never changes an old version: it saves a copy as the next version (v${next}).`}
+          : item.item.kind === 'app'
+            ? item.item.removed
+              ? 'Restoring never changes an old version: it brings the App back as a new draft in App Studio. Nothing is published until you publish it.'
+              : `Restoring never changes an old version: it saves a copy as the App's draft in App Studio (v${next}). The published App does not change until you publish.`
+            : `Restoring never changes an old version: it saves a copy as the next version (v${next}).`}
       </p>
 
       {viewing ? <VersionViewer viewing={viewing} onClose={onCloseView} t={t} /> : null}
@@ -238,6 +240,7 @@ function changeWords(row: HistoryVersionRow): string {
     case 'drafted': return 'Drafted from Ask';
     case 'removed': return 'Removed. It can be restored';
     case 'certified': return 'Certified';
+    case 'published': return 'Published';
     default: return row.change[0]!.toUpperCase() + row.change.slice(1);
   }
 }

@@ -7,7 +7,7 @@ import { CompareVersions } from './CompareVersions';
 import { ItemHistory, button, linkButton, muted, smallButton } from './ItemHistory';
 import { openHistory, openHistoryItem } from './history-navigation';
 import { setHistoryRoute, useHistoryRoute, type HistoryRoute } from './history-route';
-import { actionLabel, authorLabel, groupByDay, historySql, initials, itemLabel, kindLabel, restorableVersion, timeLabel } from './history-words';
+import { actionLabel, authorLabel, groupByDay, historySql, initials, itemLabel, kindLabel, kindsLabel, restorableVersion, restoredNotice, timeLabel } from './history-words';
 
 /**
  * History (V15, the ZLens app for Snowflake; left bar, Govern): every change to saved queries, Apps and notebooks
@@ -32,6 +32,7 @@ export function HistoryPage(): JSX.Element {
 function ItemPage({ route, t }: { route: Extract<HistoryRoute, { page: 'item' }>; t: Theme }): JSX.Element {
   const dispatch = useDispatch();
   const files = useNotebookStore((state) => state.files);
+  const apps = useNotebookStore((state) => state.apps);
   const [name, setName] = useState<string | null>(null);
   const [kind, setKind] = useState<HistoryFeedItem['kind'] | null>(null);
   useEffect(() => {
@@ -47,7 +48,7 @@ function ItemPage({ route, t }: { route: Extract<HistoryRoute, { page: 'item' }>
         <h1 style={{ margin: 0, fontFamily: t.fontMono, fontSize: 19, fontWeight: 500, overflowWrap: 'anywhere' }}>{name ?? route.path}</h1>
         <div style={{ flex: 1 }} />
         {kind && kind !== 'semantic' && kind !== 'model' ? (
-          <button type="button" style={button(t)} onClick={() => void openHistoryItem(dispatch, { kind, path: route.path, files })}>
+          <button type="button" style={button(t)} onClick={() => void openHistoryItem(dispatch, { kind, path: route.path, files, apps })}>
             Open {kindLabel(kind).toLowerCase()}
           </button>
         ) : null}
@@ -118,7 +119,7 @@ function HistoryFeedView({ t }: { t: Theme }): JSX.Element {
     setNotice(null);
     try {
       const result = await historyApi.restore(item.current, version);
-      setNotice(`${item.name}: ${result.message}, as a draft.`);
+      setNotice(restoredNotice(result.message, item.name));
       setReload((value) => value + 1);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -223,16 +224,19 @@ function HistoryFeedView({ t }: { t: Theme }): JSX.Element {
             <div style={{ fontSize: 11.5, fontWeight: 650, letterSpacing: '0.04em', textTransform: 'uppercase', color: t.textSecondary }}>Read it with SQL</div>
             <pre style={{ margin: 0, padding: 12, borderRadius: 8, background: t.appBg, border: `1px solid ${t.cellBorder}`, fontFamily: t.fontMono, fontSize: 12, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{historySql(appName)}</pre>
           </div>
-          <div style={sideCard(t)}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <h2 style={{ margin: 0, fontSize: 15, fontWeight: 650, flex: 1 }}>Copy to your Git repository</h2>
-              <span style={{ height: 22, padding: '0 8px', borderRadius: 6, background: t.pillBg, fontSize: 12, fontWeight: 650, display: 'inline-flex', alignItems: 'center' }}>Off</span>
-            </div>
-            <p style={muted(t, { margin: 0, fontSize: 13 })}>An account admin can let ZLens copy saved queries and Apps to your own Git repository. That needs an outside connection, so it stays off unless you allow it.</p>
-            <div><button type="button" style={linkButton(t)} onClick={() => dispatch({ type: 'SET_MAIN_VIEW', view: 'help' })}>How to allow it</button></div>
-          </div>
+          <GitCopyCard t={t} />
         </aside>
       </div>
+    </div>
+  );
+}
+
+/** Copying History to a Git repository is a later version's (V16): this version says so, and offers nothing. */
+export function GitCopyCard({ t }: { t: Theme }): JSX.Element {
+  return (
+    <div style={{ ...sideCard(t), padding: '12px 18px', gap: 4 }}>
+      <h2 style={{ margin: 0, fontSize: 13.5, fontWeight: 650 }}>Copy to your Git repository</h2>
+      <p style={muted(t, { margin: 0, fontSize: 12.5 })}>Not available in this version.</p>
     </div>
   );
 }
@@ -249,7 +253,9 @@ export function ChangeLine({
   onCompare: (item: HistoryFeedItem) => void;
   onRestore: (item: HistoryFeedItem, version: number) => Promise<void>;
 }): JSX.Element {
-  const single = entry.count === 1 ? entry.items[0] : undefined;
+  // The first line is every item as it was when History started: a count, its kinds, and the list on request.
+  const started = entry.change === 'started';
+  const single = entry.count === 1 && !started ? entry.items[0] : undefined;
   const version = restorableVersion(entry);
   const restorable = entry.items.filter((item) => item.removed || !item.isCurrentVersion);
   return (
@@ -258,7 +264,7 @@ export function ChangeLine({
       <Avatar entry={entry} t={t} />
       <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
         <div style={{ lineHeight: 1.45, fontSize: 13.5 }}>
-          <strong style={{ fontWeight: 650 }}>{authorLabel(entry.by)}</strong>{entry.by.kind === 'ai' && entry.by.askedBy ? <span style={{ color: t.textSecondary }}> for {entry.by.askedBy}</span> : null}{' '}
+          <strong style={{ fontWeight: 650 }}>{authorLabel(entry.by)}</strong>{started ? <span style={{ color: t.textSecondary }}> · </span> : ' '}
           {actionLabel(entry)}{' '}
           {single ? (
             <button type="button" onClick={() => onOpen(single)} style={{ ...linkButton(t), textDecoration: 'none', fontFamily: t.fontMono, fontWeight: 500, fontSize: 13 }}>{single.name}</button>
@@ -266,12 +272,15 @@ export function ChangeLine({
             <button type="button" onClick={onExpand} aria-expanded={expanded} style={{ ...linkButton(t), textDecoration: 'none', fontFamily: t.fontMono, fontWeight: 500, fontSize: 13 }}>{itemLabel(entry)}</button>
           )}
         </div>
-        <div style={muted(t, { fontSize: 12.5 })}>{kindLabel(entry.kind, entry.count)}{entry.detail ? ` · ${entry.detail}` : ''}</div>
+        <div style={muted(t, { fontSize: 12.5 })}>
+          {started || new Set(entry.items.map((item) => item.kind)).size > 1 ? kindsLabel(entry.items) : kindLabel(entry.kind, entry.count)}{entry.detail ? ` · ${entry.detail}` : ''}
+        </div>
         {expanded && !single ? (
           <ul style={{ margin: '6px 0 0', padding: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
             {entry.items.map((item) => (
               <li key={item.key} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <button type="button" onClick={() => onOpen(item)} style={{ ...linkButton(t), textDecoration: 'none', fontFamily: t.fontMono, fontWeight: 500, fontSize: 12.5 }}>{item.name}</button>
+                {started || new Set(entry.items.map((other) => other.kind)).size > 1 ? <span style={muted(t, { fontSize: 12 })}>{kindLabel(item.kind)}</span> : null}
                 <span style={versionPill(t)}>v{item.version}</span>
                 {entry.change === 'removed' && item.removed && item.version > 1 ? (
                   <button type="button" onClick={() => void onRestore(item, item.version - 1)} style={smallButton(t)}><RotateCcw size={12} aria-hidden="true" /> Restore</button>

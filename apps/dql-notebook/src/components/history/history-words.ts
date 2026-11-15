@@ -1,4 +1,4 @@
-import type { HistoryAuthor, HistoryFeedEntry, HistoryItemKind, HistoryVersionRow } from '../../api/history';
+import type { HistoryAuthor, HistoryFeedEntry, HistoryFeedItem, HistoryItem, HistoryItemKind, HistoryVersionRow } from '../../api/history';
 
 /** The words History uses (V15 screens: History page, History tab, Compare). Plain functions, tested on their own. */
 
@@ -67,8 +67,11 @@ export function kindLabel(kind: HistoryItemKind, count = 1): string {
   return count === 1 ? words[0] : words[1];
 }
 
-/** Who, as a line says it: the Snowflake user, "AI" for an Ask draft, "ZLens" for ZLens itself. */
-export function authorLabel(by: HistoryAuthor, short = true): string {
+/**
+ * Who, as History says it: the Snowflake user, "AI (Ask) for <person>" for an automatic Ask draft (the label the SQL
+ * view uses too), "ZLens" for ZLens itself. `short` ("AI") is for the round avatar only.
+ */
+export function authorLabel(by: HistoryAuthor, short = false): string {
   if (by.kind === 'ai') return short ? 'AI' : by.askedBy ? `AI (Ask) for ${by.askedBy}` : 'AI (Ask)';
   return by.name;
 }
@@ -83,11 +86,13 @@ export function initials(name: string): string {
 /** The verb of a line in the project's History. */
 export function actionLabel(entry: Pick<HistoryFeedEntry, 'change' | 'action' | 'by' | 'count'>): string {
   switch (entry.change) {
-    case 'started': return 'started History with';
+    case 'started': return 'History starts here:';
     case 'removed':
       if (entry.action === 'clear-drafts') return 'cleared';
-      if (entry.action === 'upgrade') return 'moved to the trash, in an upgrade:';
+      if (entry.action === 'upgrade') return 'moved to the trash:';
+      if (entry.action === 'trash') return 'found in the trash:';
       return 'removed';
+    case 'published': return 'published';
     case 'drafted': return 'drafted';
     case 'created': return entry.by.kind === 'ai' ? 'drafted' : 'created';
     case 'edited': return 'edited';
@@ -98,12 +103,39 @@ export function actionLabel(entry: Pick<HistoryFeedEntry, 'change' | 'action' | 
   }
 }
 
-/** The item a line names: its name, or "45 automatic Ask drafts" for a group. */
-export function itemLabel(entry: Pick<HistoryFeedEntry, 'items' | 'count' | 'kind' | 'action'>): string {
+/** The item a line names: its name, or "45 automatic Ask drafts" for a group; the first line counts its items. */
+export function itemLabel(entry: Pick<HistoryFeedEntry, 'items' | 'count' | 'kind' | 'action'> & { change?: HistoryFeedEntry['change'] }): string {
+  if (entry.change === 'started') return `${entry.count} item${entry.count === 1 ? '' : 's'}`;
   if (entry.count === 1) return entry.items[0]?.name ?? '';
   if (entry.action === 'clear-drafts') return `${entry.count} automatic Ask drafts`;
   const kinds = new Set(entry.items.map((item) => item.kind));
   return kinds.size <= 1 ? `${entry.count} ${kindLabel(entry.kind, entry.count).toLowerCase()}` : `${entry.count} items`;
+}
+
+/** What a group of items holds, kind by kind: "2 saved queries, 1 App, 3 model files". */
+export function kindsLabel(items: Array<Pick<HistoryFeedItem, 'kind'>>): string {
+  const order: HistoryItemKind[] = ['saved_query', 'app', 'notebook', 'semantic', 'model'];
+  const counts = new Map<HistoryItemKind, number>();
+  for (const item of items) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+  return order.filter((kind) => counts.has(kind)).map((kind) => {
+    const count = counts.get(kind)!;
+    const words = kindLabel(kind, count);
+    return `${count} ${kind === 'app' ? words : words.toLowerCase()}`;
+  }).join(', ');
+}
+
+/** The amber banner of an item's History: a draft on a certified version, or a restored copy of one. */
+export function bannerText(banner: NonNullable<HistoryItem['banner']>): string {
+  if (banner.restored !== undefined) {
+    return `v${banner.draft} restores certified v${banner.restored} as a draft. Certify v${banner.draft} or keep using v${banner.certified}.`;
+  }
+  return `v${banner.draft} is an edit of certified v${banner.certified} and is not certified yet. Compare the two, then certify v${banner.draft} or restore v${banner.certified}.`;
+}
+
+/** What a restore did, said once: "Restored v1 as v3, as a draft." */
+export function restoredNotice(message: string, name?: string): string {
+  const said = /draft/i.test(message) ? `${message}.` : `${message}, as a draft.`;
+  return name ? `${name}: ${said}` : said;
 }
 
 /** The state a version is in, as the versions table says it. */

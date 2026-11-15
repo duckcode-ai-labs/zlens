@@ -183,16 +183,100 @@ export class HistoryItemMapper {
       return { key: canonical ?? block, kind: 'saved_query' };
     }
     if (path.endsWith('.dqlnb')) return { key: path, kind: 'notebook' };
-    const app = /^apps\/([^/]+)\//.exec(path);
-    if (app) return { key: `apps/${app[1]}`, kind: 'app' };
+    const app = appKeyOf(path);
+    if (app) return { key: app, kind: 'app' };
     if (path.startsWith('semantic-layer/')) return { key: path, kind: 'semantic' };
     return { key: path, kind: 'model' };
   }
 }
 
+/**
+ * The App a file belongs to: `apps/<id>` for a project App, `domains/<domain>/apps/<id>` for a domain's App. Every
+ * file in the App's folder is the App, and so is the App Studio draft History keeps beside it.
+ */
+export function appKeyOf(path: string): string | undefined {
+  return /^((?:domains\/[^/]+\/(?:[^/]+\/)*?)?apps\/[^/]+)\/./.exec(path)?.[1];
+}
+
+/** An App's item key (`apps/<id>`, `domains/<domain>/apps/<id>`). */
+export function isAppKey(key: string): boolean {
+  return /^(?:domains\/[^/]+\/(?:[^/]+\/)*?)?apps\/[^/]+$/.test(key);
+}
+
+/**
+ * THE APP STUDIO DRAFT IN HISTORY (V2). An App is made and changed in App Studio as a draft that ZLens keeps in its
+ * local store (`.dql/local/apps.sqlite`), never as project files: only Publish writes `apps/<id>/`. So History keeps
+ * each App's live draft as one more file of the App, in History's own repository only (never written to the
+ * project): `apps/<id>/studio-draft.json`. Saving the draft is then a version of the App, like any save.
+ */
+export const APP_STUDIO_DRAFT_FILE = 'studio-draft.json';
+
+export function appStudioDraftPath(appId: string): string {
+  return `apps/${appId}/${APP_STUDIO_DRAFT_FILE}`;
+}
+
+/** Whether a path is the App Studio draft History keeps for an App (not a project file). */
+export function isAppStudioDraftPath(path: string): boolean {
+  return /^apps\/[^/]+\/studio-draft\.json$/.test(path);
+}
+
 /** Whether an item key names something History keeps (for request paths). */
 export function isTrackedItemKey(key: string): boolean {
   if (typeof key !== 'string') return false;
-  if (/^apps\/[^/]+$/.test(key)) return isTrackedPath(`${key}/dql.app.json`);
+  if (isAppKey(key)) return isTrackedPath(`${key}/dql.app.json`);
   return isTrackedPath(key);
+}
+
+/** "tpch" → "Tpch", "nba_team-stats" → "Nba team stats". */
+export function humanizeName(value: string): string {
+  const words = value.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return words ? `${words[0]!.toUpperCase()}${words.slice(1)}` : value;
+}
+
+const SEMANTIC_FOLDERS: Record<string, string> = {
+  metrics: 'Metric', dimensions: 'Dimension', hierarchies: 'Hierarchy', cubes: 'Cube', segments: 'Segment',
+  models: 'Semantic model', entities: 'Entity', relationships: 'Relationship', joins: 'Join',
+};
+
+const DOMAIN_FOLDERS: Record<string, string> = { terms: 'Term', skills: 'Skill', contracts: 'Contract', rules: 'Rule' };
+
+/** A file's name without its folder and its extensions (`core.dql.yaml` → `core`). */
+function baseName(path: string): string {
+  return (path.split('/').pop() ?? path).replace(/(\.dql)?\.(dql|dqlnb|dqld|ya?ml|json|md|sql)$/i, '');
+}
+
+/**
+ * The name History shows for a model, domain or semantic layer file (V2: never "core.dql", "model.dql" or "domain"):
+ * "Domain: Tpch", "Model: Tpch", "Model: Tpch core" (a subject area), "Metric: revenue". `domainName` is the name the
+ * domain's own file gives it, when it is known.
+ */
+export function readableFileLabel(path: string, domainName?: string): string {
+  const segments = path.split('/');
+  if (segments[0] === 'domains' && segments.length >= 3) {
+    const domain = domainName?.trim() || humanizeName(segments[1]!);
+    const rest = segments.slice(2);
+    const base = baseName(path);
+    if (rest.length === 1 && (base === 'domain' || base === 'package')) return `Domain: ${domain}`;
+    if (rest[0] === 'modeling') {
+      if (base === 'model') return `Model: ${domain}`;
+      return `Model: ${domain} ${base.replace(/[_-]+/g, ' ')}`;
+    }
+    const folder = DOMAIN_FOLDERS[rest[0]!.toLowerCase()];
+    if (folder && rest.length > 1) return `${folder}: ${base.replace(/[_-]+/g, ' ')} (${domain})`;
+    return `${domain}: ${base.replace(/[_-]+/g, ' ')}`;
+  }
+  if (segments[0] === 'semantic-layer' && segments.length >= 2) {
+    const folder = segments.length > 2 ? SEMANTIC_FOLDERS[segments[1]!.toLowerCase()] : undefined;
+    return `${folder ?? 'Semantic layer'}: ${baseName(path)}`;
+  }
+  return baseName(path);
+}
+
+/** The name a domain's own file gives it: `domain "Commerce" {` in domain.dql, `name:` or `title:` in domain.yaml. */
+export function domainNameFrom(text: string | null | undefined): string | undefined {
+  if (!text) return undefined;
+  const dql = /^\s*domain\s+"([^"\n]{1,120})"/m.exec(text);
+  if (dql) return dql[1]!.trim() || undefined;
+  const yaml = /^(?:title|name|display_name):\s*["']?([^"'\n#]{1,120})["']?\s*$/m.exec(text);
+  return yaml?.[1]?.trim() || undefined;
 }

@@ -11,9 +11,14 @@ export function openHistory(dispatch: Dispatch<NotebookAction>, route: HistoryRo
   dispatch({ type: 'SET_MAIN_VIEW', view: 'history' });
 }
 
-/** The App id an item key names (`apps/<id>`). */
+/** The App id an item key names (`apps/<id>`, or a domain's `domains/<domain>/apps/<id>`). */
 export function appIdOf(path: string): string | undefined {
-  return /^apps\/([^/]+)$/.exec(path)?.[1];
+  return /(?:^|\/)apps\/([^/]+)$/.exec(path)?.[1];
+}
+
+/** The History item of an App (V2: its App Studio saves and its published versions). */
+export function appHistoryPath(appId: string): string {
+  return `apps/${appId}`;
 }
 
 /**
@@ -22,7 +27,7 @@ export function appIdOf(path: string): string | undefined {
  */
 export async function openHistoryItem(
   dispatch: Dispatch<NotebookAction>,
-  input: { kind: HistoryItemKind; path: string; files: NotebookFile[]; historyTab?: boolean },
+  input: { kind: HistoryItemKind; path: string; files: NotebookFile[]; historyTab?: boolean; apps?: Array<{ id: string }> },
 ): Promise<void> {
   const { kind, path, files } = input;
   if (kind === 'saved_query') {
@@ -34,6 +39,17 @@ export async function openHistoryItem(
     return;
   }
   const appId = kind === 'app' ? appIdOf(path) : undefined;
+  if (appId && input.apps && !input.apps.some((app) => app.id === appId)) {
+    // Not published (or not any more): the App is a draft in App Studio, when it has one.
+    const { drafts } = await api.listAppBuilds().catch(() => ({ drafts: [] as Array<{ id: string; appId: string; state: string }> }));
+    const draft = drafts.find((candidate) => candidate.appId === appId && candidate.state !== 'project_published');
+    if (draft) {
+      dispatch({ type: 'OPEN_APP_DRAFT', draftId: draft.id, appId });
+      return;
+    }
+    openHistory(dispatch, { page: 'item', path });
+    return;
+  }
   if (appId) {
     dispatch({ type: 'OPEN_APP', appId, experience: 'build', ...(input.historyTab ? { section: 'history' as const } : {}) });
     dispatch({ type: 'SET_MAIN_VIEW', view: 'apps' });

@@ -4,7 +4,7 @@
  * dispatcher — returns `true` if the request was handled, `false` otherwise.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync, type Dirent, type Stats } from 'node:fs';
+import { closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync, type Dirent, type Stats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -103,6 +103,9 @@ import {
 import type { LocalOperation, LocalOperationProgress } from './local-operation-coordinator.js';
 import { answerLongRequest } from './long-request.js';
 import { readEnv } from '@zlens/core';
+import { appDraftHistoryText, parseAppDraftHistoryText } from './history/app-drafts.js';
+import { APP_STUDIO_DRAFT_FILE, appStudioDraftPath } from './history/tracked-files.js';
+import type { HistoryAppSource, HistoryTrashedApp } from './history/history-service.js';
 
 interface Ctx {
   req: IncomingMessage;
@@ -9914,6 +9917,248 @@ export function restoreAppRecovery(
   return existsSync(draftRecovery)
     ? restoreStoredAppBuildDraft(projectRoot, cleanRecoveryId)
     : restoreAppPackage(projectRoot, cleanRecoveryId);
+}
+
+// ── History (V2, the ZLens app for Snowflake): Apps' versions are their App Studio drafts and published files ──
+
+/**
+ * Apps as History keeps them (history/history-service.ts HistoryAppSource). An App lives in App Studio as a draft in
+ * the local store until it is published, so a save in App Studio (a new App, a tile, a rename, Delete draft) changes
+ * no project file: History reads each App's live draft from the store instead, restores an App version as a draft,
+ * and keeps what is in ZLens's trash.
+ */
+export function appHistorySource(projectRoot: string): HistoryAppSource {
+  return {
+    drafts: () => appStudioDraftsForHistory(projectRoot),
+    restore: (input) => restoreAppHistoryVersion(projectRoot, input, () => publishedAppSourceOptions(projectRoot)),
+    trashed: () => trashedAppsForHistory(projectRoot),
+  };
+}
+
+const HISTORY_APP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** Each App's live App Studio draft, as History keeps it: `apps/<id>/studio-draft.json` → its text. */
+export function appStudioDraftsForHistory(projectRoot: string): Map<string, string> {
+  const files = new Map<string, string>();
+  const dbPath = defaultLocalAppsDbPath(projectRoot);
+  if (!existsSync(dbPath)) return files;
+  // Every draft in the project, whoever's: History is the project's.
+  const storage = new LocalAppStorage(dbPath);
+  try {
+    // Newest first: an App with two live drafts (made before V12) keeps its newest.
+    for (const draft of storage.listAppBuildDrafts()) {
+      if (draft.state === 'project_published' || typeof draft.appId !== 'string' || !HISTORY_APP_ID.test(draft.appId)) continue;
+      const path = appStudioDraftPath(draft.appId);
+      if (!files.has(path)) files.set(path, appDraftHistoryText(draft));
+    }
+  } finally {
+    storage.close();
+  }
+  return files;
+}
+
+function readJsonFile(path: string): Record<string, any> | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : null;
+  } catch {
+    return null;
+  }
+}
+
+function folderEntries(path: string): string[] {
+  try {
+    return readdirSync(path, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The Apps in ZLens's trash, for History to keep once (decision H7): App Studio drafts (Delete draft, and the empty
+ * copies an upgrade clean-up moved there) and published Apps (Delete App), with their files.
+ */
+export function trashedAppsForHistory(projectRoot: string): HistoryTrashedApp[] {
+  const found: HistoryTrashedApp[] = [];
+  const day = (iso: unknown) => (typeof iso === 'string' ? iso.slice(0, 10) : 'an earlier day');
+  const draftsRoot = join(projectRoot, '.dql', 'local', 'trash', 'app-drafts');
+  for (const entry of folderEntries(draftsRoot)) {
+    const recovery = readJsonFile(join(draftsRoot, entry, 'recovery.json'));
+    const draft = recovery?.kind === 'app_build_draft' ? recovery.draft as AppBuildDraft | undefined : undefined;
+    if (!draft || typeof draft.appId !== 'string' || draft.state === 'project_published' || typeof recovery?.deletedAt !== 'string') continue;
+    const operations = Array.isArray(recovery.operations) ? recovery.operations as Array<{ operations: AppBuildDraftOperation[] }> : [];
+    const emptyCopy = numberedCopyBase(draft.name ?? '') !== undefined && isEmptyNewAppShell(draft, appDraftContentEditCount(operations));
+    found.push({
+      id: `app-drafts/${entry}`,
+      appId: draft.appId,
+      name: draft.name || draft.appId,
+      deletedAt: recovery.deletedAt,
+      from: 'draft',
+      reason: emptyCopy
+        ? `An empty copy of another App, moved to the trash on ${day(recovery.deletedAt)}`
+        : `Deleted on ${day(recovery.deletedAt)}, before History kept App drafts`,
+      files: [{ path: APP_STUDIO_DRAFT_FILE, content: appDraftHistoryText(draft) }],
+    });
+  }
+  const appsRoot = join(projectRoot, '.dql', 'local', 'trash', 'apps');
+  for (const entry of folderEntries(appsRoot)) {
+    const manifest = readJsonFile(join(appsRoot, entry, 'recovery.json'));
+    const packageDir = join(appsRoot, entry, 'package');
+    if (typeof manifest?.appId !== 'string' || typeof manifest.deletedAt !== 'string') continue;
+    const files: Array<{ path: string; content: string }> = [];
+    /** One file, sized and read through the same descriptor (it cannot change between the two); too big is left out. */
+    const readSmall = (absolute: string): string | undefined => {
+      const fd = openSync(absolute, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+      try {
+        return fstatSync(fd).size <= 5 * 1024 * 1024 ? readFileSync(fd, 'utf-8') : undefined;
+      } finally {
+        closeSync(fd);
+      }
+    };
+    const visit = (directory: string, depth: number) => {
+      if (depth > 4) return;
+      for (const item of readdirSync(directory, { withFileTypes: true })) {
+        const absolute = join(directory, item.name);
+        if (item.isDirectory()) visit(absolute, depth + 1);
+        else if (item.isFile()) {
+          const content = readSmall(absolute);
+          if (content !== undefined) files.push({ path: relative(packageDir, absolute).split(sep).join('/'), content });
+        }
+      }
+    };
+    try {
+      // No package (restored already, or never written): nothing to keep.
+      visit(packageDir, 0);
+    } catch {
+      continue;
+    }
+    const appText = files.find((file) => file.path === 'dql.app.json')?.content;
+    const name = (appText ? parseAppDocument(appText).document?.name : undefined) || manifest.appId;
+    found.push({
+      id: `apps/${entry}`,
+      appId: manifest.appId,
+      name,
+      deletedAt: manifest.deletedAt,
+      from: 'app',
+      reason: `Deleted on ${day(manifest.deletedAt)}, before History started`,
+      files,
+    });
+  }
+  return found;
+}
+
+/** The catalog look-ups that read a published App's tiles back as draft sources (as opening it for edit does). */
+async function publishedAppSourceOptions(projectRoot: string): Promise<CreateStoredAppBuildDraftOptions> {
+  try {
+    const { ensureAgentProjectReady, matchAppBlockSourceRefs, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
+    await ensureAgentProjectReady(projectRoot);
+    return {
+      resolvePublishedDatasetSources: (sourceIds, sourcePolicy) => resolveAppSourceCatalogRecords(projectRoot, sourceIds, sourcePolicy),
+      resolvePublishedBlockSources: (refs) => matchAppBlockSourceRefs(projectRoot, refs, APP_SOURCE_POLICY),
+    };
+  } catch (error) {
+    return { datasetCatalogError: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * An App version back as an App Studio draft (History's Restore, V2). The version's kept draft, or its published
+ * pages, become the App's live draft; with none, a new draft: an edit of the published App when it is there, else
+ * a new App under a free name. Nothing is published, and a published App stays as it is until the draft is.
+ */
+export async function restoreAppHistoryVersion(
+  projectRoot: string,
+  input: { appId: string; files: Array<{ path: string; content: string }>; asNew?: boolean },
+  sourceOptions: () => Promise<CreateStoredAppBuildDraftOptions>,
+): Promise<{ appId: string; draftId: string; name: string }> {
+  const byPath = new Map(input.files.map((file) => [file.path, file.content]));
+  const kept = parseAppDraftHistoryText(byPath.get(APP_STUDIO_DRAFT_FILE));
+  type Content = Pick<AppBuildDraft, 'name' | 'authoringMode' | 'template' | 'frame' | 'requirements' | 'coverage' | 'sources' | 'pages' | 'reviewTasks'>;
+  let content: Content;
+  let wantedId: string;
+  const frameFor = (name: string, goal?: string, audience?: string): AppBuildDraft['frame'] => ({
+    goal: goal || `Create ${name}`,
+    audience: audience || 'stakeholders',
+    metrics: [], dimensions: [], filters: [], desiredOutput: 'One responsive analytical page', clarificationQuestions: [],
+  });
+  if (kept) {
+    wantedId = kept.appId;
+    const name = cleanString(kept.name) || kept.appId;
+    content = {
+      name,
+      authoringMode: kept.authoringMode === 'ai' ? 'ai' : 'manual',
+      template: kept.template ?? 'blank',
+      frame: kept.frame ?? frameFor(name),
+      requirements: kept.requirements ?? [],
+      coverage: kept.coverage ?? [],
+      sources: kept.sources ?? [],
+      pages: kept.pages ?? [],
+      reviewTasks: kept.reviewTasks ?? [],
+    };
+  } else {
+    const appText = byPath.get('dql.app.json');
+    const app = appText ? parseAppDocument(appText).document : null;
+    if (!app) throw new Error('This version has no App to restore.');
+    const homepageId = app.homepage?.type === 'dashboard' ? app.homepage.id : undefined;
+    const pages = [...byPath]
+      .filter(([path]) => /^dashboards\/[^/]+\.dqld$/.test(path))
+      .map(([path, text]) => parseDashboardDocument(text, path).document)
+      .filter((page): page is DashboardDocument => Boolean(page))
+      .sort((left, right) => Number(right.id === homepageId) - Number(left.id === homepageId) || left.id.localeCompare(right.id));
+    const published = rehydratePublishedAppSources(pages, APP_SOURCE_POLICY, await sourceOptions());
+    wantedId = app.id;
+    content = {
+      name: app.name || app.id,
+      authoringMode: 'manual',
+      template: 'blank',
+      frame: frameFor(app.name || app.id, app.description, app.audience),
+      requirements: [],
+      coverage: [],
+      sources: published.sources,
+      pages: published.pages,
+      reviewTasks: published.reviewTasks,
+    };
+  }
+  if (!content.pages.length) throw new Error('This version has no page to restore.');
+  if (input.asNew) {
+    // A removed App: a new draft of a new App, under its old name and id when no App or draft has them now.
+    const preferredId = HISTORY_APP_ID.test(wantedId) ? wantedId : input.appId;
+    const identity = uniqueNewAppIdentity(content.name, takenAppIdentities(projectRoot), preferredId);
+    const draft = createAppBuildDraft({ id: newAppBuildDraftId(), ...content, name: identity.name, appId: identity.appId });
+    writeStoredAppBuildDraft(projectRoot, draft);
+    return { appId: draft.appId, draftId: draft.id, name: draft.name };
+  }
+  // An App that is there: the App History names (its id), whatever id its old draft had.
+  const appId = HISTORY_APP_ID.test(input.appId) ? input.appId : wantedId;
+
+  const storage = openAppStorage(projectRoot);
+  let live: AppBuildDraft | undefined;
+  try {
+    live = storage.listAppBuildDrafts(appId).find((draft) => draft.state !== 'project_published');
+    if (live) {
+      // The App's live draft takes the version's content, as its next revision (an open App Studio reloads it).
+      const made = createAppBuildDraft({ id: live.id, appId: live.appId, ...(live.baseApp ? { baseApp: live.baseApp } : {}), ...content, now: live.createdAt });
+      const moved = { ...made, revision: live.revision + 1, updatedAt: new Date().toISOString() };
+      const next: AppBuildDraft = { ...moved, proposalHash: appBuildDraftHash({ ...moved, proposalHash: undefined }) };
+      storage.saveAppBuildDraft(next, { expectedRevision: live.revision });
+      return { appId: next.appId, draftId: next.id, name: next.name };
+    }
+  } finally {
+    storage.close();
+  }
+  const base = loadAppById(projectRoot, appId);
+  const identity = base
+    ? { name: content.name, appId: base.app.id }
+    : uniqueNewAppIdentity(content.name, takenAppIdentities(projectRoot), appId);
+  const draft = createAppBuildDraft({
+    id: newAppBuildDraftId(),
+    ...content,
+    name: identity.name,
+    appId: identity.appId,
+    ...(base ? { baseApp: { appId: base.app.id, fingerprint: fingerprintAppDirectory(base.appDir) } } : {}),
+  });
+  writeStoredAppBuildDraft(projectRoot, draft);
+  return { appId: draft.appId, draftId: draft.id, name: draft.name };
 }
 
 export function createAppPackage(
