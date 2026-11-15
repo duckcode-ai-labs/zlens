@@ -361,10 +361,14 @@ async function rowsPerKeyRule(item: Picked, run: Run, quote: (identifier: string
   }
 }
 
-/** A picked table whose identity repeats: count with DISTINCT. */
+/**
+ * A picked table whose identity repeats: count with DISTINCT. Only on an
+ * identity with a key in it (29 games repeat on game_id): repeats of a date
+ * and a comment say nothing about the table's rows.
+ */
 async function repeatRule(item: Picked, run: Run, quote: (identifier: string) => string, add: AddRule): Promise<void> {
   const identity = item.entity.identity;
-  if (!identity || identity.duplicates === 0) return;
+  if (!identity || identity.duplicates === 0 || !identity.columns.some((column) => KEY_LIKE_NAME.test(column))) return;
   const columns = identity.columns.map(quote).join(', ');
   const query = `SELECT COUNT(*) AS row_count, (SELECT COUNT(*) FROM (SELECT 1 AS one FROM ${tableOf(item, quote)} GROUP BY ${columns}) g) AS keys FROM ${tableOf(item, quote)}`;
   const row = (await run(query)).rows[0] ?? {};

@@ -100,3 +100,17 @@ jobs:
           fi
         env:
           ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/app-datasets-connectors
+
+      - name: Draft a model from TPC-H copies with no declared keys
+        # V2 review F1: one row per *KEY (never a comment or an address), and
+        # the joins the reviewer packet needs, found by name and checked on DuckDB.
+        working-directory: apps/cli
+        shell: bash
+        run: |
+          npx vitest run src/model-draft-keys.duckdb.test.ts --reporter=verbose | tee "$RUNNER_TEMP/model-draft-keys.log"
+          if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/model-draft-keys.log"; then
+            echo "The TPC-H model draft test skipped although a DuckDB connector root was configured." >&2
+            exit 1
+          fi
+        env:
+          ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/app-datasets-connectors
