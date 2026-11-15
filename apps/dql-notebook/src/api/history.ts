@@ -5,7 +5,7 @@ import { requestJson } from './client';
  * The server's API is apps/cli/src/history/history-routes.ts.
  */
 export type HistoryItemKind = 'saved_query' | 'app' | 'notebook' | 'semantic' | 'model';
-export type HistoryChangeKind = 'started' | 'created' | 'drafted' | 'edited' | 'renamed' | 'certified' | 'removed' | 'restored';
+export type HistoryChangeKind = 'started' | 'created' | 'drafted' | 'edited' | 'renamed' | 'certified' | 'removed' | 'restored' | 'published';
 
 export interface HistoryAuthor {
   name: string;
@@ -24,7 +24,7 @@ export interface HistoryFeedItem {
   isCurrentVersion: boolean;
 }
 
-export type HistoryAction = 'start' | 'found' | 'upgrade' | 'setup' | 'save' | 'certify' | 'clear-drafts' | 'delete' | 'ask' | 'restore';
+export type HistoryAction = 'start' | 'found' | 'upgrade' | 'setup' | 'save' | 'certify' | 'clear-drafts' | 'delete' | 'ask' | 'restore' | 'trash';
 
 export interface HistoryFeedEntry {
   id: string;
@@ -74,7 +74,8 @@ export interface HistoryVersionRow {
 export interface HistoryItem {
   item: { key: string; kind: HistoryItemKind; name: string; removed: boolean; currentVersion: number };
   versions: HistoryVersionRow[];
-  banner: { draft: number; certified: number } | null;
+  /** A draft on a certified version; `restored` when the draft is that certified version restored as a draft. */
+  banner: { draft: number; certified: number; restored?: number } | null;
 }
 
 export interface HistoryDiffLine {
@@ -129,6 +130,8 @@ export interface HistoryRestoreResult {
   message: string;
   paths: string[];
   status: 'draft';
+  /** An App restored as an App Studio draft: the draft to open. */
+  appDraft?: { id: string; appId: string };
 }
 
 export interface HistoryStatus {

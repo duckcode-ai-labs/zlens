@@ -38,6 +38,8 @@ import type { CellChartConfig, QueryResult } from '../../store/types';
 import type { ThemeMode } from '../../themes/notebook-theme';
 import { themes } from '../../themes/notebook-theme';
 import { AiSidePanel } from '../agent/AiSidePanel';
+import { AppHistoryDialog, AppHistoryMenuItem } from '../history/AppHistory';
+import { appHistoryPath, openHistory } from '../history/history-navigation';
 import { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog } from './builder/DatasetProposalDialog';
 import { DataPanel, type DataPanelTarget } from './builder/DataPanel';
 import { DraftTileCard, DraftTileInspector, draftVisualization, withDraftSortDefault, type DraftTileState } from './builder/DraftTile';
@@ -705,6 +707,8 @@ export function AppStudioV2({
   const [historyDraftId, setHistoryDraftId] = useState<string | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  /** The App's History (V2, the app for Snowflake): its versions over the Studio. */
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [publishReviewOpen, setPublishReviewOpen] = useState(false);
   const publishReviewOpenRef = useRef(publishReviewOpen);
   publishReviewOpenRef.current = publishReviewOpen;
@@ -4126,6 +4130,7 @@ export function AppStudioV2({
             <hr />
             <button type="button" role="menuitem" disabled={!activePage?.layout.items.length || busy} onClick={() => { setActionsOpen(false); void arrangePage(); }}><LayoutDashboard size={14} /> Tidy page layout</button>
             <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); setStudioView('edit'); setSelectedTileId(null); setCopilotOpen(false); setSettingsOpen(true); }}><Settings2 size={14} /> App settings</button>
+            <AppHistoryMenuItem onOpen={() => { setActionsOpen(false); setHistoryOpen(true); }} />
             <hr />
             <button type="button" role="menuitem" className="danger" onClick={() => { setActionsOpen(false); setDeleteConfirmOpen(true); }}><Trash2 size={14} /> Delete draft</button>
           </div> : null}
@@ -4488,6 +4493,15 @@ export function AppStudioV2({
           <footer><button type="button" className="primary" onClick={() => setAddDataOpen(false)}>Done</button></footer>
         </section>
       </div> : null}
+      {/* A restore from History writes this App's draft: the Studio reads it again. */}
+      {historyOpen ? <AppHistoryDialog
+        appId={draft.appId}
+        name={draft.name}
+        t={themes[themeMode]}
+        onClose={() => setHistoryOpen(false)}
+        onCompare={(from, to) => { setHistoryOpen(false); openHistory(dispatchNotebook, { page: 'compare', path: appHistoryPath(draft.appId), from, to, back: 'item' }); }}
+        onRestored={() => { void reloadLatestDraft(); }}
+      /> : null}
       {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this draft?</h2><p><strong>{draft.name}</strong> will leave the App list. Its pages, tiles, and local history move to a recovery bundle so you can Undo.</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
     </div>
   );

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { TooltipProvider } from '@zlens/ui';
@@ -6,13 +8,15 @@ import { themes } from '../../themes/notebook-theme';
 import { ActivityBar } from '../shell/ActivityBar';
 import { HostUiProvider } from '../../host/host-ui';
 import { setSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { AppHistoryButton, AppHistoryDialog, AppHistoryMenuItem } from './AppHistory';
 import { CompareView, runSummary } from './CompareVersions';
-import { ChangeLine } from './HistoryPage';
+import { ChangeLine, GitCopyCard } from './HistoryPage';
 import { historyStorageWords } from './HistoryStorageNote';
 import { ItemHistoryView } from './ItemHistory';
 import { historyRoute, requestBlockHistoryTab, setHistoryRoute, takeBlockHistoryTab } from './history-route';
+import { appIdOf } from './history-navigation';
 import {
-  actionLabel, authorLabel, dayLabel, formatBytes, groupByDay, historySql, initials, itemLabel, restorableVersion, whenLabel,
+  actionLabel, authorLabel, bannerText, dayLabel, formatBytes, groupByDay, historySql, initials, itemLabel, kindsLabel, restorableVersion, restoredNotice, whenLabel,
 } from './history-words';
 
 /**
@@ -53,8 +57,8 @@ describe('the words', () => {
     expect(whenLabel(new Date(2026, 10, 11, 14, 20).toISOString(), now)).toBe('11 Nov 14:20');
     expect(initials('TEST_ADMIN')).toBe('TA');
     expect(initials('jsmith')).toBe('JS');
-    expect(authorLabel({ name: 'AI (Ask)', kind: 'ai', askedBy: 'JSMITH' }, false)).toBe('AI (Ask) for JSMITH');
-    expect(authorLabel({ name: 'AI (Ask)', kind: 'ai' })).toBe('AI');
+    expect(authorLabel({ name: 'AI (Ask)', kind: 'ai', askedBy: 'JSMITH' })).toBe('AI (Ask) for JSMITH');
+    expect(authorLabel({ name: 'AI (Ask)', kind: 'ai' }, true)).toBe('AI');
     expect(formatBytes(1536)).toBe('1.5 KB');
     expect(formatBytes(1024 ** 3 * 1.25)).toBe('1.3 GB');
     const groups = groupByDay([{ at: new Date(2026, 10, 14, 16).toISOString() }, { at: new Date(2026, 10, 14, 9).toISOString() }, { at: new Date(2026, 10, 11, 9).toISOString() }], now);
@@ -66,7 +70,9 @@ describe('the words', () => {
     const base = { by: { name: 'JSMITH', kind: 'person' as const }, count: 45 };
     expect(actionLabel({ ...base, change: 'removed', action: 'clear-drafts' })).toBe('cleared');
     expect(itemLabel({ items: [], count: 45, kind: 'saved_query', action: 'clear-drafts' })).toBe('45 automatic Ask drafts');
-    expect(actionLabel({ ...base, by: { name: 'ZLens', kind: 'zlens' }, change: 'removed', action: 'upgrade' })).toMatch(/upgrade/);
+    expect(actionLabel({ ...base, by: { name: 'ZLens', kind: 'zlens' }, change: 'removed', action: 'upgrade' })).toBe('moved to the trash:');
+    expect(actionLabel({ ...base, by: { name: 'ZLens', kind: 'zlens' }, change: 'removed', action: 'trash' })).toBe('found in the trash:');
+    expect(actionLabel({ ...base, count: 1, change: 'published', action: 'save' })).toBe('published');
     expect(itemLabel({ items: [], count: 5, kind: 'app', action: 'upgrade' })).toBe('5 apps');
     expect(actionLabel({ ...base, count: 1, change: 'created', action: 'ask', by: { name: 'AI (Ask)', kind: 'ai' } })).toBe('drafted');
     expect(restorableVersion({ change: 'removed', version: 4 })).toBe(3);
@@ -238,5 +244,124 @@ describe('where History goes next', () => {
     expect(takeBlockHistoryTab('blocks/a.dql')).toBe(true);
     expect(takeBlockHistoryTab('blocks/a.dql')).toBe(false);
     setHistoryRoute({ page: 'feed' });
+  });
+});
+
+describe('V2: one AI label, the first line, and readable kinds', () => {
+  it('says "AI (Ask) for <person>" on a line, as the SQL view does', () => {
+    const drafted: HistoryFeedEntry = {
+      ...certifiedLine, id: 'a1', by: { name: 'AI (Ask)', kind: 'ai', askedBy: 'TEST_ADMIN' }, action: 'ask', change: 'drafted', certified: false, canCompare: false, detail: 'From Ask: "Lakers wins?"',
+      items: [{ ...certifiedLine.items[0]!, name: 'lakers_wins', version: 1, certified: false }], version: 1,
+    };
+    const html = renderToStaticMarkup(<ChangeLine entry={drafted} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(html).toContain('AI (Ask) for TEST_ADMIN');
+    expect(html).not.toMatch(/>AI<\/strong>/);
+  });
+
+  it('starts with "History starts here: N items" and names each kind, never "Apps" for mixed items', () => {
+    const items = [
+      { key: 'apps/sales-overview', current: 'apps/sales-overview', name: 'Sales overview', kind: 'app' as const, version: 1, certified: false, removed: false, isCurrentVersion: true },
+      { key: 'blocks/wins.dql', current: 'blocks/wins.dql', name: 'wins', kind: 'saved_query' as const, version: 1, certified: false, removed: false, isCurrentVersion: true },
+      { key: 'domains/tpch/modeling/areas/core.dql.yaml', current: 'domains/tpch/modeling/areas/core.dql.yaml', name: 'Model: Tpch core', kind: 'model' as const, version: 1, certified: false, removed: false, isCurrentVersion: true },
+      { key: 'notebooks/welcome.dqlnb', current: 'notebooks/welcome.dqlnb', name: 'workspace - ZLens Workbench', kind: 'notebook' as const, version: 1, certified: false, removed: false, isCurrentVersion: true },
+    ];
+    const started: HistoryFeedEntry = {
+      id: 's', commit: 's', at: new Date(2026, 10, 14, 9).toISOString(), by: { name: 'ZLens', kind: 'zlens' }, action: 'start', change: 'started', kind: 'app',
+      items, count: 4, certified: false, canCompare: false, canRestore: false,
+    };
+    const html = renderToStaticMarkup(<ChangeLine entry={started} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(html).toContain('History starts here:');
+    expect(html).toContain('4 items');
+    expect(html).toContain('1 saved query, 1 App, 1 notebook, 1 model file');
+    expect(html).not.toContain('started History with');
+    expect(html).not.toContain('>Apps<');
+    // One item is still a count, with its kind.
+    const one = renderToStaticMarkup(<ChangeLine entry={{ ...started, items: [items[3]!], count: 1, kind: 'notebook' }} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(one).toContain('History starts here:');
+    expect(one).toContain('1 item');
+    expect(one).toContain('1 notebook');
+    expect(one).not.toContain('started History with workspace');
+    // Opened, each item says its own name and kind.
+    const open = renderToStaticMarkup(<ChangeLine entry={started} first t={t} expanded onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    for (const name of ['Sales overview', 'wins', 'Model: Tpch core', 'workspace - ZLens Workbench']) expect(open).toContain(name);
+    expect(open).toContain('>Model file<');
+    expect(itemLabel({ ...started, change: 'started' })).toBe('4 items');
+    expect(kindsLabel([{ kind: 'app' }, { kind: 'app' }, { kind: 'semantic' }])).toBe('2 Apps, 1 semantic layer file');
+  });
+
+  it('says a restored certified version is a restore, not an edit', () => {
+    expect(bannerText({ draft: 3, certified: 1, restored: 1 })).toBe('v3 restores certified v1 as a draft. Certify v3 or keep using v1.');
+    expect(bannerText({ draft: 5, certified: 4 })).toBe('v5 is an edit of certified v4 and is not certified yet. Compare the two, then certify v5 or restore v4.');
+    const restored: HistoryItem = { ...item, banner: { draft: 3, certified: 1, restored: 1 }, item: { ...item.item, currentVersion: 3 } };
+    const html = renderToStaticMarkup(<ItemHistoryView item={restored} t={t} selected={[]} onToggle={noop} onCompare={noop} onView={noop} onRestore={noop} onCloseView={noop} />);
+    expect(html).toContain('v3 restores certified v1 as a draft. Certify v3 or keep using v1.');
+    expect(html).not.toContain('is an edit of certified');
+    expect(restoredNotice('Restored v1 as v3')).toBe('Restored v1 as v3, as a draft.');
+    expect(restoredNotice('Restored v1 as a new draft, "Sales (2)"', 'Sales')).toBe('Sales: Restored v1 as a new draft, "Sales (2)".');
+  });
+});
+
+describe('V2: Copy to your Git repository', () => {
+  it('says plainly it is not in this version, with no link and no steps', () => {
+    const html = renderToStaticMarkup(<GitCopyCard t={t} />);
+    expect(html).toContain('Copy to your Git repository');
+    expect(html).toContain('Not available in this version.');
+    expect(html).not.toContain('<button');
+    expect(html).not.toContain('How to allow it');
+    expect(html).not.toContain('admin');
+    expect(html).not.toMatch(/>Off</);
+  });
+});
+
+describe('V2: an App\'s History', () => {
+  const appItem: HistoryItem = {
+    item: { key: 'apps/sales-overview', kind: 'app', name: 'Sales overview', removed: false, currentVersion: 4 },
+    banner: null,
+    versions: [
+      { version: 4, commit: 'd', path: 'apps/sales-overview', at: new Date(2026, 10, 14, 10, 42).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, change: 'edited', detail: 'Added 1 tile', state: 'saved', current: true, canRestore: false },
+      { version: 2, commit: 'b', path: 'apps/sales-overview', at: new Date(2026, 10, 14, 10, 40).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, change: 'published', state: 'saved', current: false, canRestore: true },
+      { version: 1, commit: 'a', path: 'apps/sales-overview', at: new Date(2026, 10, 14, 10, 38).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, change: 'created', detail: 'In App Studio, not published yet', state: 'saved', current: false, canRestore: true },
+    ],
+  };
+
+  it('is in App Studio\'s draft menu and the App view in the app for Snowflake only', () => {
+    expect(renderToStaticMarkup(<AppHistoryMenuItem onOpen={noop} />)).toBe('');
+    expect(renderToStaticMarkup(<AppHistoryButton appId="sales-overview" onOpen={noop} />)).toBe('');
+    setSnowflakeApp(true);
+    const menu = renderToStaticMarkup(<AppHistoryMenuItem onOpen={noop} />);
+    expect(menu).toContain('role="menuitem"');
+    expect(menu).toContain('History');
+    expect(renderToStaticMarkup(<AppHistoryButton appId="sales-overview" onOpen={noop} />)).toContain('aria-label="History"');
+    // In App Studio's "More draft actions" menu, after App settings and before Delete draft; and in the App view.
+    const studio = readFileSync(fileURLToPath(new URL('../apps/AppStudioV2.tsx', import.meta.url)), 'utf8');
+    const menuAt = studio.indexOf('aria-label="More draft actions"');
+    const settingsAt = studio.indexOf('App settings</button>', menuAt);
+    const historyAt = studio.indexOf('<AppHistoryMenuItem', menuAt);
+    const deleteAt = studio.indexOf('Delete draft</button>', menuAt);
+    expect(menuAt).toBeGreaterThan(0);
+    expect(settingsAt).toBeLessThan(historyAt);
+    expect(historyAt).toBeLessThan(deleteAt);
+    expect(studio).toContain('<AppHistoryDialog');
+    const view = readFileSync(fileURLToPath(new URL('../apps/AppsView.tsx', import.meta.url)), 'utf8');
+    expect(view).toContain('<AppHistoryButton appId={workspaceAppId}');
+  });
+
+  it('shows the App\'s versions with the same table, Compare and Restore, as a draft in App Studio', () => {
+    setSnowflakeApp(true);
+    const dialog = renderToStaticMarkup(<AppHistoryDialog appId="sales-overview" name="Sales overview" t={t} onClose={noop} onCompare={noop} />);
+    expect(dialog).toContain('role="dialog"');
+    expect(dialog).toContain('History · Sales overview');
+    expect(dialog).toContain('aria-label="Close History"');
+    const html = renderToStaticMarkup(<ItemHistoryView item={appItem} t={t} selected={[1, 4]} onToggle={noop} onCompare={noop} onView={noop} onRestore={noop} onCloseView={noop} />);
+    for (const header of ['Version', 'Saved', 'By', 'What changed', 'State']) expect(html).toContain(`>${header}</th>`);
+    expect(html).toContain('Compare selected');
+    expect(html).toContain('Added 1 tile');
+    expect(html).toContain('>Published<');
+    expect(html).toContain('aria-label="Restore v2"');
+    expect(html).toContain('saves a copy as the App&#x27;s draft in App Studio (v5). The published App does not change until you publish.');
+    const removed = renderToStaticMarkup(<ItemHistoryView item={{ ...appItem, item: { ...appItem.item, removed: true } }} t={t} selected={[]} onToggle={noop} onCompare={noop} onView={noop} onRestore={noop} onCloseView={noop} />);
+    expect(removed).toContain('it brings the App back as a new draft in App Studio. Nothing is published until you publish it.');
+    expect(appIdOf('apps/sales-overview')).toBe('sales-overview');
+    expect(appIdOf('domains/nba/apps/seasons')).toBe('seasons');
   });
 });

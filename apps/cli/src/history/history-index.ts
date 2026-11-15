@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { FileChange, HistoryAuthor, HistoryAction, HistoryRestoredFrom, HistoryStore, StoredCommit } from './history-store.js';
-import { HistoryItemMapper, type BlockLookups, type HistoryItemKind, type HistoryItemRef } from './tracked-files.js';
+import { APP_STUDIO_DRAFT_FILE, HistoryItemMapper, domainNameFrom, humanizeName, readableFileLabel, type BlockLookups, type HistoryItemKind, type HistoryItemRef } from './tracked-files.js';
 import { isCertifiedVersion, readSavedQueryFields, receiptSummary, type SavedQueryFields } from './saved-query-fields.js';
+import { appDraftShape, appEditWords, parseAppDraftHistoryText, publishedAppShape, type AppVersionShape } from './app-drafts.js';
 
 /**
  * THE ITEM VERSION INDEX (V15): for each item, the commits that changed it, numbered v1, v2, … .
@@ -11,7 +12,7 @@ import { isCertifiedVersion, readSavedQueryFields, receiptSummary, type SavedQue
  * is a cache: it is kept beside the repository as one JSON file, and rebuilt from the commits when it is missing,
  * unreadable or behind. History of a busy item is then a lookup instead of a walk through every commit.
  */
-export type HistoryChangeKind = 'started' | 'created' | 'drafted' | 'edited' | 'renamed' | 'certified' | 'removed' | 'restored';
+export type HistoryChangeKind = 'started' | 'created' | 'drafted' | 'edited' | 'renamed' | 'certified' | 'removed' | 'restored' | 'published';
 
 export interface IndexedChange {
   /** The item's key after this change (its path; `apps/<id>` for an App). */
@@ -44,8 +45,14 @@ export interface IndexedCommit {
   changes: IndexedChange[];
 }
 
+/**
+ * The saved index's format. 2 (V2): App Studio drafts are Apps' versions, and items have readable names; an index
+ * saved in an older format is rebuilt from the commits on the next start, so names already shown change too.
+ */
+const INDEX_FORMAT = 2;
+
 interface IndexFile {
-  format: 1;
+  format: typeof INDEX_FORMAT;
   head: string | null;
   commits: IndexedCommit[];
 }
@@ -89,7 +96,7 @@ export class HistoryIndex {
     try {
       if (existsSync(this.indexPath)) {
         const saved = JSON.parse(readFileSync(this.indexPath, 'utf-8')) as IndexFile;
-        if (saved?.format === 1 && Array.isArray(saved.commits) && saved.head === head) {
+        if (saved?.format === INDEX_FORMAT && Array.isArray(saved.commits) && saved.head === head) {
           this.commits = saved.commits;
           this.head = saved.head;
           this.files = await this.store.files();
@@ -141,7 +148,7 @@ export class HistoryIndex {
   }
 
   private persist(): void {
-    const file: IndexFile = { format: 1, head: this.head, commits: this.commits };
+    const file: IndexFile = { format: INDEX_FORMAT, head: this.head, commits: this.commits };
     const temp = `${this.indexPath}.${process.pid}.tmp`;
     writeFileSync(temp, JSON.stringify(file), 'utf-8');
     renameSync(temp, this.indexPath);
@@ -315,14 +322,112 @@ export class HistoryIndex {
         ...(now?.companionPath ? { companion: now.companionPath } : {}),
       };
     }
-    const named = await this.itemName(ref, state.exists ? state.after : state.before);
-    const name = named || state.previous?.name || fallbackName(ref.key);
+    if (ref.kind === 'app') return this.describeApp(commit, ref, state);
+    const files = state.exists ? state.after : state.before;
+    const name = ref.kind === 'notebook'
+      ? (await this.itemName(ref, files)) || state.previous?.name || fallbackName(ref.key)
+      : await this.fileLabel(ref.key, files);
     const kind = this.changeKind(commit, state, false, false);
     let detail: string | undefined;
     if (kind === 'renamed') detail = `Moved from ${state.from}`;
-    else if (kind === 'restored' && commit.restoredFrom) detail = `Restored v${commit.restoredFrom.version} as v${(state.previous?.version ?? 0) + 1}`;
+    else if (kind === 'restored') detail = this.restoredWords(commit, ref, state);
     else if (kind === 'removed') detail = removedWords(commit);
     return { name, change: kind, certified: false, ...(detail ? { detail } : {}) };
+  }
+
+  /** "Restored v2 as v5", or, for a copy made as a new item, which item and version it came from. */
+  private restoredWords(commit: StoredCommit, ref: HistoryItemRef, state: { from?: string; previous?: IndexedChange }): string | undefined {
+    const from = commit.restoredFrom;
+    if (!from) return undefined;
+    const asDraft = ref.kind === 'saved_query' || ref.kind === 'app' ? ', as a draft' : '';
+    if (from.item !== ref.key && from.item !== state.from) {
+      const history = this.byItem.get(this.currentKey(from.item));
+      const source = history?.length ? this.changeAt(history[history.length - 1]!).name : undefined;
+      return `Restored from v${from.version}${source ? ` of "${source}"` : ''}${asDraft}`;
+    }
+    return `Restored v${from.version} as v${(state.previous?.version ?? 0) + 1}${asDraft}`;
+  }
+
+  /** A model, domain or semantic layer file's readable name ("Model: Tpch core"), with its domain's own name. */
+  private async fileLabel(path: string, files: Map<string, string>): Promise<string> {
+    const domain = /^domains\/([^/]+)\//.exec(path)?.[1];
+    let domainName: string | undefined;
+    if (domain) {
+      for (const candidate of [`domains/${domain}/domain.dql`, `domains/${domain}/domain.yaml`, `domains/${domain}/domain.yml`]) {
+        domainName = domainNameFrom(await this.text(files.get(candidate)));
+        if (domainName) break;
+      }
+    }
+    return readableFileLabel(path, domainName);
+  }
+
+  /**
+   * An App's change, in words (V2). Its versions are its App Studio draft's saves and its published files: creating
+   * it, adding or removing tiles and pages, renaming it, publishing it, discarding a draft, deleting it.
+   */
+  private async describeApp(
+    commit: StoredCommit,
+    ref: HistoryItemRef,
+    state: { existed: boolean; exists: boolean; from?: string; previous?: IndexedChange; before: Map<string, string>; after: Map<string, string> },
+  ): Promise<{ name: string; change: HistoryChangeKind; certified: false; detail?: string }> {
+    const now = state.exists ? await this.appShape(ref.key, state.after) : null;
+    const old = state.existed ? await this.appShape(state.from ?? ref.key, state.before) : null;
+    const nameOf = (shape: { draft: AppVersionShape | null; published: AppVersionShape | null } | null) => shape?.draft?.name || shape?.published?.name;
+    const name = nameOf(now) || nameOf(old) || state.previous?.name || humanizeName(ref.key.split('/').pop() ?? ref.key);
+    let kind = this.changeKind(commit, state, false, false);
+    let detail: string | undefined;
+    const tilesWords = (shape: AppVersionShape) => `${shape.pages} page${shape.pages === 1 ? '' : 's'}, ${shape.tiles} tile${shape.tiles === 1 ? '' : 's'}`;
+    if (kind === 'removed') {
+      detail = removedWords(commit);
+    } else if (kind === 'restored') {
+      detail = this.restoredWords(commit, ref, state);
+    } else if (kind === 'created') {
+      if (commit.action === 'trash') detail = 'As it was when it went to the trash';
+      else if (commit.action === 'found' && now?.draft && !now.published) detail = 'In App Studio, not published yet. First kept when ZLens started';
+      else if (now?.draft && !now.published) detail = 'In App Studio, not published yet';
+      else if (now?.published) detail = `Published: ${tilesWords(now.published)}`;
+    } else if (kind === 'renamed') {
+      const oldName = nameOf(old);
+      detail = oldName && oldName !== name ? `Was "${oldName}"` : `Moved from ${state.from}`;
+    } else if (kind === 'edited' && now && old) {
+      const publishedChanged = Boolean(now.published) && (!old.published || old.published.content !== now.published!.content || old.published.settings !== now.published!.settings || old.published.name !== now.published!.name);
+      if (now.published && !now.draft && (old.draft || !old.published) && publishedChanged) {
+        kind = 'published';
+        detail = tilesWords(now.published);
+      } else if (old.draft && !now.draft && now.published && !publishedChanged) {
+        detail = 'Draft discarded. The published App did not change';
+      } else if (!old.draft && now.draft && now.published) {
+        detail = 'Editing in App Studio. The published App does not change until it is published';
+      } else {
+        const before = old.draft ?? old.published;
+        const after = now.draft ?? now.published;
+        const oldName = nameOf(old);
+        const words = appEditWords(before, after);
+        if (oldName && oldName !== name) {
+          kind = 'renamed';
+          detail = [`Was "${oldName}"`, words].filter(Boolean).join('. ');
+        } else {
+          detail = words ?? 'Saved';
+        }
+        if (now.draft && now.published) detail = `${detail}. Not published yet`;
+      }
+    }
+    return { name, change: kind, certified: false, ...(detail ? { detail } : {}) };
+  }
+
+  /** An App's draft and published shapes in one version (from the files at that commit). */
+  private async appShape(key: string, files: Map<string, string>): Promise<{ draft: AppVersionShape | null; published: AppVersionShape | null }> {
+    const draftFile = parseAppDraftHistoryText(await this.text(files.get(`${key}/${APP_STUDIO_DRAFT_FILE}`)));
+    const appText = await this.text(files.get(`${key}/dql.app.json`));
+    let published: AppVersionShape | null = null;
+    if (appText !== null) {
+      const pages: string[] = [];
+      for (const path of [...files.keys()].filter((candidate) => candidate.startsWith(`${key}/dashboards/`) && candidate.endsWith('.dqld')).sort()) {
+        pages.push((await this.text(files.get(path))) ?? '');
+      }
+      published = publishedAppShape(appText, pages);
+    }
+    return { draft: draftFile ? appDraftShape(draftFile) : null, published };
   }
 
   private changeKind(commit: StoredCommit, state: { existed: boolean; exists: boolean; from?: string }, certified: boolean, wasCertified: boolean): HistoryChangeKind {
@@ -403,6 +508,7 @@ function savedQueryEditWords(before: SavedQueryFields | null, after: SavedQueryF
 
 function removedWords(commit: StoredCommit): string | undefined {
   if (commit.action === 'clear-drafts') return 'An automatic Ask draft nobody edited. It can be restored from History';
-  if (commit.action === 'upgrade') return commit.message;
+  if (commit.action === 'upgrade') return `${commit.message}. It can be restored from History`;
+  if (commit.action === 'trash') return `${commit.message}. It can be restored from History`;
   return 'It can be restored from History';
 }

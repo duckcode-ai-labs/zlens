@@ -209,7 +209,27 @@ describe('every save is a version', () => {
     ]);
     expect(made[0]!.changes[0]).toMatchObject({ change: 'drafted', detail: 'From Ask: "How many games did the Raptors win in 2018?"' });
     expect(history.feed({ by: 'ai' }).entries).toHaveLength(1);
-    expect(history.feed({ by: 'person:jsmith' }).entries).toHaveLength(2);
+    // "By JSMITH" is JSMITH's own saves; the drafts AI made for JSMITH are under "AI drafts" (V2).
+    expect(history.feed({ by: 'person:jsmith' }).entries.map((entry) => entry.by.kind)).toEqual(['person']);
+    expect(history.feed().people).toEqual(['JSMITH']);
+    // One label everywhere: the saved query's History tab (and the SQL log, below) say "AI (Ask) for JSMITH".
+    expect(history.blockHistory('blocks/_drafts/raptors_wins_2018.dql').entries[0]!.author).toBe('AI (Ask) for JSMITH');
+  });
+
+  it('keeps an AI draft out of "By <person>" even when that person has no saves of their own', async () => {
+    const root = project();
+    const history = await open(root, { sqlLog: { appName: 'ZLENS_APP', warehouse: () => 'WH', query: async () => [] } });
+    const draft = 'block "lakers_wins" {\n  status = "draft"\n  source_question = "Lakers wins?"\n  answer_fingerprint = "abc"\n  asked_times = 1\n  last_asked = "2026-11-13T08:47:00.000Z"\n  query = """SELECT 1"""\n}\n';
+    put(root, 'blocks/_drafts/lakers_wins.dql', draft);
+    const { utimesSync } = await import('node:fs');
+    const stamped = new Date('2026-11-13T08:47:00.000Z');
+    utimesSync(join(root, 'blocks/_drafts/lakers_wins.dql'), stamped, stamped);
+    await save(history, 'TEST_ADMIN', '/api/agent-runs');
+    expect(history.feed().entries[0]!.by).toEqual({ name: 'AI (Ask)', kind: 'ai', askedBy: 'TEST_ADMIN' });
+    expect(history.feed().people).toEqual([]);
+    expect(history.feed({ by: 'person:TEST_ADMIN' }).entries).toEqual([]);
+    expect(history.feed({ by: 'ai' }).entries).toHaveLength(1);
+    expect(history.pendingSqlRows().at(-1)).toMatchObject({ item: 'lakers_wins', changedBy: 'AI (Ask) for TEST_ADMIN' });
   });
 });
 
@@ -287,7 +307,12 @@ describe('certified versions, draft edits and restore', () => {
     const item = history.item(WINS);
     expect(item.versions[0]).toMatchObject({ version: 3, change: 'restored', state: 'draft' });
     expect(item.versions.find((row) => row.version === 1)).toMatchObject({ state: 'certified' });
-    expect(item.banner).toEqual({ draft: 3, certified: 1 });
+    // v3 is certified v1 restored as a draft: the banner says so, rather than "an edit of certified v1" (V2).
+    expect(item.banner).toEqual({ draft: 3, certified: 1, restored: 1 });
+    // An edit after that is an edit again.
+    put(root, WINS, block('wins', 'SELECT 7', 'draft'));
+    await save(history);
+    expect(history.item(WINS).banner).toEqual({ draft: 4, certified: 1 });
   });
 
   it('keeps a removed item and restores it', async () => {

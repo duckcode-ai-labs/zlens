@@ -30,7 +30,8 @@ export type HistoryAction =
   | 'clear-drafts'
   | 'delete'
   | 'ask'        // an automatic Ask draft
-  | 'restore';   // Restore from History (always a draft)
+  | 'restore'    // Restore from History (always a draft)
+  | 'trash';     // an App found in ZLens's trash that History never kept: kept, then marked removed (restorable)
 
 export interface HistoryRestoredFrom {
   item: string;
@@ -109,7 +110,7 @@ function oneLine(value: string): string {
   return value.replace(/[\r\n]+/g, ' ').trim();
 }
 
-const ACTIONS = new Set<HistoryAction>(['start', 'found', 'upgrade', 'setup', 'save', 'certify', 'clear-drafts', 'delete', 'ask', 'restore']);
+const ACTIONS = new Set<HistoryAction>(['start', 'found', 'upgrade', 'setup', 'save', 'certify', 'clear-drafts', 'delete', 'ask', 'restore', 'trash']);
 
 /** Reads a commit message written by formatCommitMessage (and copes with any other). */
 export function parseCommitMessage(message: string, authorName: string): Pick<StoredCommit, 'author' | 'action' | 'message' | 'restoredFrom'> {

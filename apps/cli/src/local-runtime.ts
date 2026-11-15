@@ -702,6 +702,7 @@ import {
   proposeAppAiBuild,
   recommendVisualization,
   removeEmptyAppCopies,
+  appHistorySource,
   appIntroForReaders,
   type AppBuildGeneratedAnswer,
   type AppAutopilotIntent,
@@ -5355,6 +5356,8 @@ async function openSnowflakeHistory(input: {
     projectRoot: input.projectRoot,
     ...(input.appOptions.appName ? { sqlLog: { appName: input.appOptions.appName, query: input.query, warehouse: input.warehouse } } : {}),
     onRestored: input.onRestored,
+    // V2: an App's saves in App Studio are its draft's, in the local store; History keeps them, and the trash.
+    apps: appHistorySource(input.projectRoot),
     // Tests start many servers: no quiet look for background changes there.
     ...(process.env.VITEST ? { sweepDelayMs: 0 } : {}),
   });

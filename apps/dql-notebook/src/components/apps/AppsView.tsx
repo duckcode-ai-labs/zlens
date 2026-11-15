@@ -119,6 +119,7 @@ import { isTrustReminderTaskId } from '@zlens/core/apps/app-trust';
 import { dashboardFilterLabel, formatDashboardFilterValue } from './dashboard-filter-words';
 import { ItemHistory } from '../history/ItemHistory';
 import { openHistory } from '../history/history-navigation';
+import { AppHistoryButton } from '../history/AppHistory';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -2189,6 +2190,10 @@ function AppWorkspaceSurface({
               <ShieldCheck size={14} /> {promoteStatus === 'running' ? 'Checking' : 'Publish to Project'}
             </button>
           ) : null}
+          {/* V2 History (the app for Snowflake only): every saved version of this App. */}
+          {readerOnly || readOnlyLink || !workspaceAppId ? null : (
+            <AppHistoryButton appId={workspaceAppId} className="dql-apps-btn dql-apps-btn-line dql-apps-btn-icon" onOpen={(path) => openHistory(dispatch, { page: 'item', path })} />
+          )}
           {readerOnly ? null : (
             <button type="button" className="dql-apps-btn dql-apps-btn-line dql-apps-btn-icon" title={shareStatus === 'copied' ? 'Copied handoff' : 'Share local app handoff'} onClick={() => void copyShareLink()}>
               {shareStatus === 'copied' ? <Check size={15} /> : <Share2 size={15} />}
