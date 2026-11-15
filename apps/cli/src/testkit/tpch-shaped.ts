@@ -8,7 +8,7 @@
  * `C_CUSTKEY` is a key picks the comment instead (V2 review, F1).
  */
 
-import { normalizeWarehouseCatalog, warehouseRelationId, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
+import { normalizeWarehouseCatalog, tableName, warehouseRelationId, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
 import { draftIdentityJoins } from '../model-joins.js';
 import { draftTablePicks } from '../model-layers.js';
 import { draftWordsAndRules } from '../model-profile.js';
@@ -127,7 +127,7 @@ export async function draftOnWarehouse(snapshot: WarehouseCatalogSnapshotV1, run
   return draftWordsAndRules(joined, snapshot, run, quote, { checkedAt: new Date('2026-11-15T00:00:00.000Z') });
 }
 
-const tableOf = (relation: string) => relation.split('.').pop()!;
+const tableOf = (relation: string) => tableName(relation);
 /** Each drafted join as `FROM → TO on keys · cardinality · validation`, sorted. */
 export const joinsOf = (report: WarehouseDiscoveryReport) => report.relationships
   .map((item) => `${tableOf(item.fromRelation)} → ${tableOf(item.toRelation)} on ${item.keys.map((pair) => `${pair.from}=${pair.to}`).join(', ')} · ${item.cardinality} · ${item.validation?.status ?? item.validationError}`)
