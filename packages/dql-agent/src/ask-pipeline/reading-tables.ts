@@ -11,6 +11,8 @@
  * at a word, and the clause around a mention is found word by word.
  */
 
+import { tableName } from '@zlens/core';
+
 const PREFIX = /^(?:local|dim|dimension|fct|fact|facts|src|source|raw|int|stg|staging|mart|vw|v|tbl|t)_/i;
 /** A word that says a phrase names a table, not a thing: "the player season facts", "his player-season records". */
 const TABLE_NOUN = '(?:facts?|tables?|records?|totals?|data|relations?|datasets?|views?|dimensions?|stats|statistics|summary|summaries|rows|entries|model)';
@@ -20,7 +22,7 @@ const TRAILING = /^(?:facts?|fct|table|data|stats|details|records?|cleansed|clea
 const PREPOSITIONS = new Set(['per', 'from', 'in', 'using', 'via', 'with', 'of', 'by', 'on', 'based on', 'according to', 'out of']);
 const DETERMINERS = new Set(['the', 'his', 'her', 'their', 'its', 'a', 'an', 'each', 'this', 'that']);
 
-const bare = (relation: string) => (relation.split('.').pop() ?? relation).replace(/["`[\]]/g, '').trim();
+const bare = (relation: string) => (tableName(relation) || relation).replace(/["`[\]]/g, '').trim();
 
 /** The words a reading uses for a table: LOCAL_PLAYER_SEASON_FACTS is "player season (facts)". */
 export function tableWords(relation: string): string[] {

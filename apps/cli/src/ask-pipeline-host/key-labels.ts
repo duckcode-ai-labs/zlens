@@ -153,8 +153,6 @@ export function unnamedGroupingKeys(sql: string, question: string, label: (keys:
   return groupingKeyLabels(sql, question, label, columnsOf).filter((item) => !shownInSelect(sql, item.label));
 }
 
-/** Whether two tables are the same one, as the statement and the metadata may spell them. */
-const sameRelation = (left: string, right: string) => sameTable(left, right, 'tail');
 
 /**
  * Every key a statement groups by, or shows as an id column (PLAYER_ID, TEAM_ID), whose rows have a reachable
@@ -172,7 +170,7 @@ export function groupingKeyLabels(sql: string, question: string, label: (keys: K
   const grouped = groupedColumns(sql).flatMap(owned);
   // An id column the answer shows is read by a person as much as one it groups by.
   const shown = selectedColumns(sql).filter((item) => KEY_NAME.test(bare(item.column))).flatMap(owned)
-    .filter((item) => !grouped.some((known) => sameColumn(known.column, item.column) && sameRelation(known.relation, item.relation)));
+    .filter((item) => !grouped.some((known) => sameColumn(known.column, item.column) && sameTable(known.relation, item.relation, 'tail')));
   const judged = [...grouped, ...shown].filter((item) => !new RegExp(`\\b${bare(item.column).replace(/_/g, '[_ ]')}\\b`, 'i').test(question));
   return judged.length === 0 ? [] : label(judged);
 }
@@ -221,7 +219,7 @@ export function unlistedAskedThings(sql: string, question: string, input: {
     // The tables the statement reads first, then the ones that share most of the columns it uses: the player's
     // games carry PLAYER_NAME and TEAM_ID, so Durant's teams are named from there, not from the teams' own games.
     const uses = (table: string) => input.columnsOf(table).filter((column) => mentionsColumn(sql, column)).length;
-    const others = input.tables.filter((table, index, all) => !read.some((relation) => sameRelation(relation, table)) && all.findIndex((other) => sameRelation(other, table)) === index);
+    const others = input.tables.filter((table, index, all) => !read.some((relation) => sameTable(relation, table, 'tail')) && all.findIndex((other) => sameTable(other, table, 'tail')) === index);
     const ordered = [...read, ...others.map((table, index) => ({ table, index, score: uses(table) })).sort((left, right) => right.score - left.score || left.index - right.index).map((item) => item.table)];
     let found: KeyLabel | undefined;
     for (const relation of ordered) {
@@ -239,25 +237,25 @@ export function unlistedAskedThings(sql: string, question: string, input: {
 /** What a statement that lists no names for an asked thing is told when it is sent back. */
 export function unlistedThingFailure(item: UnlistedThing): string {
   const { label } = item;
-  const join = sameRelation(label.keyRelation, label.labelRelation) ? `${label.labelRelation} holds it beside ${label.key}` : `join ${label.labelRelation} ON ${label.keyRelation}.${label.key} = ${label.labelRelation}.${label.labelKey}`;
+  const join = sameTable(label.keyRelation, label.labelRelation, 'tail') ? `${label.labelRelation} holds it beside ${label.key}` : `join ${label.labelRelation} ON ${label.keyRelation}.${label.key} = ${label.labelRelation}.${label.labelKey}`;
   return `the question asks which ${item.thing}s, but the statement shows no ${item.thing} by name: list each ${item.thing} by ${label.labelRelation}.${label.label} (${join}) rather than counting them or showing ${label.key} alone`;
 }
 
 /** The line the drafting AI reads for a thing the question asks to list. */
 export function askedThingLine(item: UnlistedThing): string {
   const { label } = item;
-  const join = sameRelation(label.keyRelation, label.labelRelation) ? `on ${label.labelRelation} beside ${label.key}` : `join ${label.labelRelation} ON ${label.keyRelation}.${label.key} = ${label.labelRelation}.${label.labelKey}`;
+  const join = sameTable(label.keyRelation, label.labelRelation, 'tail') ? `on ${label.labelRelation} beside ${label.key}` : `join ${label.labelRelation} ON ${label.keyRelation}.${label.key} = ${label.labelRelation}.${label.labelKey}`;
   return `- The question asks which ${item.thing}s: list each ${item.thing} by ${label.labelRelation}.${label.label} (${join}), never a count of ${item.thing}s in its place.`;
 }
 
 /** The line the drafting AI reads for one key and the table that names it. */
 export function keyLabelLine(item: KeyLabel): string {
-  if (sameRelation(item.keyRelation, item.labelRelation)) return `- ${item.keyRelation}.${item.key} is a key, not a name: ${item.label} on the same table names those rows (${item.via}). When the answer groups or lists by ${item.key}, show ${item.label} beside ${item.key}.`;
+  if (sameTable(item.keyRelation, item.labelRelation, 'tail')) return `- ${item.keyRelation}.${item.key} is a key, not a name: ${item.label} on the same table names those rows (${item.via}). When the answer groups or lists by ${item.key}, show ${item.label} beside ${item.key}.`;
   return `- ${item.keyRelation}.${item.key} is a key, not a name: ${item.labelRelation}.${item.label} names those rows (${item.via}). When the answer groups or lists by ${item.key}, join ${item.labelRelation} ON ${item.keyRelation}.${item.key} = ${item.labelRelation}.${item.labelKey} and show ${item.label} beside ${item.key}.`;
 }
 
 /** What a statement that groups by or shows a bare key is told when it is sent back. */
 export function unnamedKeyFailure(item: KeyLabel): string {
-  if (sameRelation(item.keyRelation, item.labelRelation)) return `it shows ${item.keyRelation}.${item.key}, a key a reader cannot read, and no name for it, although ${item.label} on the same table names those rows (${item.via}); select ${item.label} beside ${item.key}`;
+  if (sameTable(item.keyRelation, item.labelRelation, 'tail')) return `it shows ${item.keyRelation}.${item.key}, a key a reader cannot read, and no name for it, although ${item.label} on the same table names those rows (${item.via}); select ${item.label} beside ${item.key}`;
   return `it groups by ${item.keyRelation}.${item.key}, a key a reader cannot read, and shows no name for it, although ${item.labelRelation}.${item.label} names those rows (${item.via}); join ${item.labelRelation} ON ${item.keyRelation}.${item.key} = ${item.labelRelation}.${item.labelKey} and select ${item.label} beside ${item.key}`;
 }
