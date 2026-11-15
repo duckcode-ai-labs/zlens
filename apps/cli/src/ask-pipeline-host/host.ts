@@ -2702,7 +2702,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           let differs = LABEL_DIFFERS.get(cacheKey);
           if (differs === undefined) {
             try {
-              differs = await probeOne(`SELECT 1 FROM ${item.labelRelation} WHERE ${item.label} IS NOT NULL AND CAST(${item.label} AS VARCHAR(400)) <> CAST(${item.labelKey} AS VARCHAR(400))`);
+              differs = await probeOne(`SELECT 1 FROM ${item.labelRelation} WHERE ${item.label} IS NOT NULL AND CAST(${item.label} AS VARCHAR(400)) <> CAST(${item.labelKey} AS VARCHAR(400)) LIMIT 1`);
               if (LABEL_DIFFERS.size > 2_000) LABEL_DIFFERS.clear();
               LABEL_DIFFERS.set(cacheKey, differs);
             } catch { differs = true; }
@@ -3358,7 +3358,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             const season = seasonColumnOf(knownColumns(warehouseTable(filter.relation) ?? filter.relation));
             if (!season) continue;
             let holds = false;
-            try { holds = await probeOne(`SELECT 1 FROM ${filter.relation} WHERE ${season} = ${item.value}`); } catch { holds = false; }
+            try { holds = await probeOne(`SELECT 1 FROM ${filter.relation} WHERE ${season} = ${item.value} LIMIT 1`); } catch { holds = false; }
             if (holds) seasons.set(filter.text, season);
           }
           if (seasons.size === 0) continue;
