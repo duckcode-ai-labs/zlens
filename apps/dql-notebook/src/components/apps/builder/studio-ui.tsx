@@ -7,6 +7,16 @@ export function humanize(value: string): string {
   return (relatedFieldWords(value) ?? value).replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+/**
+ * A saved query's or table's name as its author saved it (V2: "Top nations by order revenue, 1997" showed as
+ * "Top Nations By Order Revenue, 1997"): a name with spaces is kept as written; an id ("top_customers") reads
+ * "Top Customers".
+ */
+export function dataName(value: string): string {
+  const trimmed = value.trim();
+  return /\s/.test(trimmed) ? trimmed : humanize(trimmed);
+}
+
 export function messageOf(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
 }

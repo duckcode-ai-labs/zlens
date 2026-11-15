@@ -13,8 +13,6 @@ import type { Theme } from '../../themes/notebook-theme';
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_SHOWN_DIFFERENCES = 50;
 
-const VERDICT_WORDS: Record<ReportVerdict, string> = { matches: 'Matches', differs: 'Differs', 'not-proven': 'Not proven' };
-
 const OPTION_WORDS: Array<[RegExp, string]> = [
   [/name it with --key\b/g, 'name it under More options, in Keys'],
   [/--filter\b/g, 'Filters'],
@@ -248,6 +246,32 @@ export function recordedWords(result: ReportComparison, certified = false): stri
   return 'Recorded beside each metric it compared. Approving a draft shows this result.';
 }
 
+/**
+ * The verdict line over a comparison: what differs first, then what was found (V14 retest: "Differs: 5 of 5 rows,
+ * 4 of 5 values." read as if 5 rows differed). "Differs: 1 of 5 values (row FRANCE, Order revenue). 5 of 5 rows
+ * found." and "Matches: 5 of 5 rows, every value."
+ */
+export function comparisonVerdictLine(comparison: ReportComparison['comparison'], scope: string[] = []): string {
+  const { rows, values, verdict, differences } = comparison;
+  const found = `${rows.inBoth} of ${rows.inFile} ${rows.inFile === 1 ? 'row' : 'rows'}`;
+  const withScope = scope.length ? `, with ${scope.join(' and ')}` : '';
+  const differing = Math.max(0, values.compared - values.equal);
+  if (verdict === 'matches') {
+    const shown = values.compared > 0 && differing === 0 ? 'every value' : `${values.equal} of ${values.compared} values`;
+    return `Matches: ${found}, ${shown}${withScope}.`;
+  }
+  if (verdict === 'differs') {
+    if (differing > 0) {
+      const only = differing === 1 && differences.length === 1 ? differences[0] : undefined;
+      const where = only ? ` (${only.key.length ? `row ${only.key.join(' · ')}` : 'the total'}, ${only.column})` : '';
+      return `Differs: ${differing} of ${values.compared} ${values.compared === 1 ? 'value' : 'values'}${where}. ${found} found${withScope}.`;
+    }
+    const agree = values.compared === 0 ? '' : values.compared === 1 ? '; the value in them matches' : `; all ${values.compared} values in them match`;
+    return `Differs: ${found} found${withScope}${agree}.`;
+  }
+  return `Not proven: ${found} found, ${values.equal} of ${values.compared} values equal${withScope}.`;
+}
+
 /** One comparison, read top to bottom: the verdict, why, then every difference shown. */
 export function ComparisonResult({ result, recording, recorded, certified = false, onRecord, primaryButton, t }: {
   result: ReportComparison;
@@ -260,7 +284,7 @@ export function ComparisonResult({ result, recording, recorded, certified = fals
   t: Theme;
 }) {
   const { comparison } = result;
-  const { rows, values, verdict } = comparison;
+  const { rows, verdict } = comparison;
   const scope = [...result.filters.stated, ...result.filters.waived.map((text) => `waived ${text}`)];
   const heading: CSSProperties = { fontSize: 11, fontWeight: 700, color: t.textSecondary };
   const text: CSSProperties = { fontSize: 11, color: t.textMuted, lineHeight: 1.4, overflowWrap: 'anywhere' };
@@ -269,7 +293,7 @@ export function ComparisonResult({ result, recording, recorded, certified = fals
   return (
     <div role="status" style={{ display: 'grid', gap: 6, borderTop: `1px solid ${t.headerBorder}`, paddingTop: 8, minWidth: 0 }}>
       <span style={{ fontSize: 12, fontWeight: 800, color }}>
-        {VERDICT_WORDS[verdict]}: {rows.inBoth} of {rows.inFile} rows, {values.equal} of {values.compared} values{scope.length ? `, with ${scope.join(' and ')}` : ''}.
+        {comparisonVerdictLine(comparison, scope)}
       </span>
       {comparison.missing.map((item) => <span key={item} style={{ ...text, color: '#d29922' }}>{screenWords(item)}</span>)}
       {rows.totalsSetAside > 0 && <span style={text}>{rows.totalsSetAside} total row{rows.totalsSetAside === 1 ? '' : 's'} set aside.</span>}

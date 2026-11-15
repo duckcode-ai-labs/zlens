@@ -447,3 +447,53 @@ function toStoryNumber(value: unknown): number | null {
   }
   return null;
 }
+
+/**
+ * A title in label words: a raw upper-case column name reads as words ("Max POINTS PER GAME by game type" reads
+ * "Max points per game by game type"). A short acronym on its own ("NBA", "USA") is kept.
+ */
+export function titleInLabelWords(title: string): string {
+  const parts = title.split(/(\s+)/);
+  const raw = (part: string) => /^[A-Z][A-Z0-9_]*[A-Z0-9]$/.test(part.replace(/[^A-Za-z0-9_]+$/, ''));
+  const words = parts.map((part, index) => ({ part, index, raw: !/^\s+$/.test(part) && raw(part) }));
+  const wordAt = (index: number) => words[index]?.raw ?? false;
+  return words.map(({ part, index, raw: isRaw }) => {
+    if (!isRaw) return part;
+    const core = part.replace(/[^A-Za-z0-9_]+$/, '');
+    const letters = core.replace(/[^A-Z]/g, '').length;
+    const inRun = wordAt(index - 2) || wordAt(index + 2);
+    return letters >= 4 || inRun || core.includes('_') ? part.toLowerCase().replace(/_/g, ' ') : part;
+  }).join('');
+}
+
+/**
+ * A page intro ZLens wrote ("This page shows A and B, from …") as the reader's view says it (V14 retest: it named a
+ * tile the view hides, in raw column names): only the tiles shown, in label words. An intro anyone wrote is kept.
+ */
+export function readerIntroMarkdown(markdown: string, items: DashboardLayoutItem[], shown: DashboardLayoutItem[]): string {
+  const heading = /^#[^\n]*\n+/.exec(markdown)?.[0] ?? '';
+  const body = markdown.slice(heading.length).trim();
+  const match = /^This page shows ([\s\S]+?)(, from [\s\S]+)?\.$/.exec(body);
+  if (!match) return markdown;
+  const listed = match[1]!;
+  const titleOf = (item: DashboardLayoutItem) => (!item.text && typeof item.title === 'string' ? item.title.trim() : '');
+  const unique = (titles: string[]) => {
+    const seen = new Set<string>();
+    return titles.filter((title) => {
+      const key = title.toLowerCase();
+      if (!title || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const named = unique(items.map(titleOf)).filter((title) => listed.includes(title));
+  if (!named.length) return markdown;
+  const andMore = /\sand more$/.test(listed);
+  const namedKeys = new Set(named.map((title) => title.toLowerCase()));
+  const kept = unique(shown.map(titleOf)).filter((title) => andMore || namedKeys.has(title.toLowerCase())).map(titleInLabelWords);
+  if (!kept.length) return markdown;
+  const list = kept.length > 4
+    ? `${kept.slice(0, 4).join(', ')} and more`
+    : kept.length === 1 ? kept[0]! : `${kept.slice(0, -1).join(', ')} and ${kept.at(-1)}`;
+  return `${heading}This page shows ${list}${match[2] ?? ''}.`;
+}

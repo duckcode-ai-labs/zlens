@@ -105,3 +105,78 @@ export function savedQueryFolderWords(folderPath: string | undefined, snowflakeA
   if (snowflakeApp && folder.split('/').some((part) => part.startsWith('_'))) return null;
   return `folder: ${folder}`;
 }
+
+// ── V2: the words the V14 retest still found ────────────────────────────────
+
+/** Import SQL's help line before anything is added: the app for Snowflake has no folder of files to point at. */
+export function importHelpLine(snowflakeApp: boolean): string {
+  return snowflakeApp
+    ? 'Paste SQL or upload files. Analysis stays in this session until you save a saved query.'
+    : 'Paste SQL, upload files, or choose a local path. Analysis stays in this session until you save a saved query.';
+}
+
+/**
+ * Tags ZLens keeps for itself, never shown as a person's tags in the app for Snowflake: `app-source` marks a
+ * draft as data an App may use (certifying drops it), and `local` is a word split from a table name
+ * (LOCAL_TEAM_GAME_FACTS) that reads as if ZLens ran on a laptop.
+ */
+const SNOWFLAKE_HIDDEN_TAGS = new Set(['app-source', 'local']);
+
+/** A saved query's tags as a person sees them. */
+export function savedQueryTagsShown(tags: readonly string[] | undefined, snowflakeApp: boolean): string[] {
+  const list = tags ?? [];
+  return snowflakeApp ? list.filter((tag) => !SNOWFLAKE_HIDDEN_TAGS.has(tag.trim().toLowerCase())) : [...list];
+}
+
+/** Tags a person edited, with the ones the app for Snowflake hides kept as they were (editing never drops them). */
+export function editedSavedQueryTags(edited: readonly string[], previous: readonly string[] | undefined, snowflakeApp: boolean): string[] {
+  if (!snowflakeApp) return [...edited];
+  const kept = (previous ?? []).filter((tag) => SNOWFLAKE_HIDDEN_TAGS.has(tag.trim().toLowerCase()));
+  return Array.from(new Set([...edited, ...kept]));
+}
+
+/** A notebook row's tooltip: its file path, or in the app for Snowflake its title (no folder, no ".dqlnb"). */
+export function notebookRowTooltip(
+  file: { name: string; path: string; ownerDomain?: string; visibility?: string },
+  snowflakeApp: boolean,
+): string {
+  const owner = file.ownerDomain ? ` · Owner domain: ${file.ownerDomain}` : '';
+  if (!snowflakeApp) {
+    return `${file.path}${owner}${file.visibility === 'private' ? ' · Private: not in Git until you publish it' : ''}`;
+  }
+  const title = file.name.replace(/\.(dqlnb|dqln|dql|ipynb)$/i, '');
+  return `${title}${owner}${file.visibility === 'private' ? ' · Private: only you see it until you publish it' : ''}`;
+}
+
+/**
+ * Where a notebook query cell runs. On a laptop: the local analysis workspace (DuckDB) or a named connection.
+ * In the app for Snowflake the connection is the app's Snowflake warehouse, and the workspace holds only files
+ * uploaded to the app.
+ */
+export function queryTargetWords(snowflakeApp: boolean): { local: string; connection: (name: string, isDefault: boolean) => string; localKind: string } {
+  if (!snowflakeApp) {
+    return {
+      local: 'Local analysis workspace',
+      connection: (name, isDefault) => `${name}${isDefault ? ' (default)' : ''}`,
+      localKind: 'Local dataset SQL',
+    };
+  }
+  return {
+    local: 'Files uploaded to this app',
+    connection: (name) => (name.toLowerCase() === 'snowflake' ? "This app's Snowflake warehouse" : name),
+    localKind: 'Uploaded file SQL',
+  };
+}
+
+/** The empty Modeling page's last two choices: the app for Snowflake reads tables, not a dbt project. */
+export function modelingEmptyWords(snowflakeApp: boolean): { yamlDetail: string; manualDetail: string } {
+  return snowflakeApp
+    ? {
+        yamlDetail: 'Upload or paste modeling YAML. Relationships it declares come across as draft edges for you to review.',
+        manualDetail: 'Pick a single table and describe what one of its rows means. Connect it to others afterwards.',
+      }
+    : {
+        yamlDetail: 'Discover DQL modeling or dbt YAML from this project, a safe local path, an upload, or pasted content. Relationships declared in dbt tests come across as draft edges.',
+        manualDetail: 'Pick a single dbt model and describe what one of its rows means. Connect it to others afterwards.',
+      };
+}

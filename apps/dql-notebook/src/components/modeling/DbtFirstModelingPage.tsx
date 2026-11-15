@@ -29,6 +29,8 @@ import { DOMAIN_STUDIO_LOCATION_KEY, DOMAIN_STUDIO_NAVIGATION, domainEntityRecor
 import { domainStudioUnavailableState, type DomainStudioUnavailableState } from './domain-studio-readiness';
 import type { ModelingSearchOption } from './modeling-search';
 import { Modal, SearchPicker, iconButtonStyle, inputStyle, linkButton } from './modeling-controls';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { modelingEmptyWords } from '../../snowflake-app/snowflake-app-words';
 import { RELATIONSHIP_LEGEND, relationshipDraftFromJoin, relationshipProfileLines, relationshipSentence, relationshipStatusView } from './relationship-builder-model';
 
 type Theme = (typeof themes)['dark'];
@@ -1388,14 +1390,18 @@ function ModelingEmptyWorkspace({ t, connectedModels, warehouse, onDbt, onYaml, 
   // UI-019: all three doors are always live. A Domain and subject area are
   // prefilled and created as part of the proposal, so nothing here can
   // dead-end an author who has not set up governance objects yet.
+  const snowflakeApp = useSnowflakeApp();
+  const words = modelingEmptyWords(snowflakeApp);
+  // The app for Snowflake reads tables, never a dbt project.
+  const pickTables = Boolean(warehouse && !warehouse.fromDbt) || snowflakeApp;
   const actions = [
     // RFC 0007: a warehouse-first project starts from its own tables.
     // RFC 0012: a dbt project drafts the whole model from dbt and its warehouse.
     ...(warehouse?.fromDbt ? [{ icon: <Boxes size={20} />, title: warehouse.drafting ? 'Drafting the model…' : 'Draft the whole model', detail: `ZLens reads your ${warehouse.tables} dbt model${warehouse.tables === 1 ? '' : 's'} and the warehouse they build: one table per business thing, what one row is, the joins, and the traps measured as rules. You review every change.`, action: warehouse.onDraft }] : []),
     ...(warehouse && !warehouse.fromDbt ? [{ icon: <Boxes size={20} />, title: warehouse.drafting ? 'Drafting from the warehouse…' : 'Draft from your warehouse', detail: warehouse.tables > 0 ? `${warehouse.tables} table${warehouse.tables === 1 ? '' : 's'} synced. DQL drafts models from their keys and joins from declared foreign keys, view SQL and column names, checks each join on the warehouse, and shows you every change to review.` : 'Sync schema in Settings → Connections first, so ZLens can read your tables, keys and comments.', action: warehouse.onDraft }] : []),
-    { icon: <Boxes size={20} />, title: warehouse && !warehouse.fromDbt ? 'Pick tables' : 'Use connected dbt', detail: warehouse && !warehouse.fromDbt ? `${connectedModels} table${connectedModels === 1 ? '' : 's'} or model${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.` : `${connectedModels} model${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.`, action: onDbt },
-    { icon: <FileSearch size={20} />, title: 'Import modeling YAML', detail: 'Discover DQL modeling or dbt YAML from this project, a safe local path, an upload, or pasted content. Relationships declared in dbt tests come across as draft edges.', action: onYaml },
-    { icon: <Plus size={20} />, title: 'Add one model by hand', detail: 'Pick a single dbt model and describe what one of its rows means. Connect it to others afterwards.', action: onManual },
+    { icon: <Boxes size={20} />, title: pickTables ? 'Pick tables' : 'Use connected dbt', detail: snowflakeApp ? `${connectedModels} table${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.` : warehouse && !warehouse.fromDbt ? `${connectedModels} table${connectedModels === 1 ? '' : 's'} or model${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.` : `${connectedModels} model${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.`, action: onDbt },
+    { icon: <FileSearch size={20} />, title: 'Import modeling YAML', detail: words.yamlDetail, action: onYaml },
+    { icon: <Plus size={20} />, title: 'Add one model by hand', detail: words.manualDetail, action: onManual },
   ];
   return <div style={{ height: '100%', display: 'grid', placeItems: 'center', padding: 28 }}><div style={{ width: 'min(840px, 100%)' }}><div style={{ textAlign: 'center', marginBottom: 18 }}><h2 style={{ margin: 0, fontSize: 18 }}>Start modeling domain context</h2><p style={{ margin: '7px 0 0', color: t.textMuted, fontSize: 11.5 }}>Choose the source you already have. Every path shows you the exact source change before anything is written.</p></div><div style={{ display: 'grid', gridTemplateColumns: `repeat(${actions.length}, minmax(0, 1fr))`, gap: 10 }}>{actions.map((item) => <button key={item.title} type="button" onClick={item.action} style={{ ...overviewCard(t), minHeight: 150, textAlign: 'left', cursor: 'pointer' }}><span style={{ width: 38, height: 38, borderRadius: 9, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--accent-dim)', color: t.accent }}>{item.icon}</span><b style={{ display: 'block', marginTop: 12 }}>{item.title}</b><span style={{ display: 'block', marginTop: 6, color: t.textSecondary, fontSize: 10.5, lineHeight: 1.5 }}>{item.detail}</span></button>)}</div></div></div>;
 }

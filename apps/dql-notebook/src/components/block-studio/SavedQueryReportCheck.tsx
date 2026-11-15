@@ -43,7 +43,7 @@ export function reportCheckStatusWords(status: ReportQueryMatch | null, certifie
       ? 'Not compared with an old report yet. Compare it with an export of the report it replaces: every value is checked. Its receipt keeps what was true when it was certified; the result shows beside it.'
       : 'Not compared with an old report yet. Compare it with an export of the report it replaces: every value is checked, and certifying records the result on its receipt.';
   }
-  return `Last compared: ${status.match.words}.`;
+  return `Last compared: ${wordsOnViewerClock(status.match.words, status.match.comparedAt)}.`;
 }
 
 /** A saved query's standing comparison with an old report, by its name; `reload` after a new one is recorded. */
@@ -77,30 +77,108 @@ export function comparedSinceCertified(certifiedAt: string | undefined, status: 
 
 export const DIFFERS_SINCE_CERTIFIED = 'Differs from the old report since it was certified';
 
-/** The receipt's lines about the old report: then (at certification), and since (a later comparison). */
-export function CertificationReportLines({ certification, since, t }: {
-  certification: { checks?: string[]; warnings?: string[] } | undefined;
-  since: NonNullable<ReportQueryMatch['match']> | null;
-  t: Theme;
-}) {
+/** A comparison made after certification, as the receipt and the badge beside Certified say it. */
+export type ComparedSince = { verdict: ReportVerdict; words: string };
+
+/** What a certified query's receipt says about the old report: then (at certification) and since (a later comparison). */
+export interface CertificationReportView {
+  /** The receipt's lines about the old report recorded at certification, each a passed check or a warning. */
+  then: Array<{ line: string; matched: boolean }>;
+  /** Nothing about an old report was on record when it was certified, but it was compared since. */
+  notCompared: boolean;
+  since: ComparedSince | null;
+}
+
+/** The day a receipt line says its comparison was made: "Differs from X, 2026-11-12: …" or "(5 of 5 at …, 2026-11-11)". */
+export function receiptLineDay(line: string): string | undefined {
+  return /, (\d{4}-\d{2}-\d{2})(?=[:)])/.exec(line)?.[1];
+}
+
+/** A moment's calendar day on the viewer's clock. */
+function viewerDay(moment: number): string {
+  const date = new Date(moment);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/** The latest calendar day a moment falls on, on the server's clock (UTC in the app for Snowflake) or the viewer's. */
+function latestDayOf(moment: number): string {
+  const local = viewerDay(moment);
+  const utc = new Date(moment).toISOString().slice(0, 10);
+  return local > utc ? local : utc;
+}
+
+/**
+ * A comparison's words with its day on the viewer's clock, like the "Certified · 11 Nov" beside it. The server
+ * writes the day on its own clock (UTC in the app for Snowflake): a comparison made at 10:30 PM on 11 Nov in
+ * California read "2026-11-12" next to a certification of 11 Nov (V14 retest).
+ */
+export function wordsOnViewerClock(words: string, comparedAt: string): string {
+  const day = receiptLineDay(words);
+  const moment = Date.parse(comparedAt);
+  if (!day || !Number.isFinite(moment)) return words;
+  const local = viewerDay(moment);
+  return local === day ? words : words.replace(new RegExp(`, ${day}(?=[:)])`), `, ${local}`);
+}
+
+const verdictOfLine = (line: string): ReportVerdict => (line.startsWith('Matches ') ? 'matches' : line.startsWith('Differs from ') ? 'differs' : 'not-proven');
+
+/**
+ * One rule for what the receipt says (V2 on top of V14): a comparison made after the query was certified is never
+ * shown as "when certified". The standing comparison's own time decides when its line is on the receipt; any other
+ * line counts as later only when its day is after the certification's day on every clock. With nothing on record
+ * at certification and a comparison since, the receipt says "not compared" then, the later one since, and a later
+ * Differs puts the warning next to Certified.
+ */
+export function certificationReportView(
+  certification: { certifiedAt?: string; checks?: string[]; warnings?: string[] } | undefined,
+  status: ReportQueryMatch | null,
+): CertificationReportView {
   const { matched, warnings } = reportMatchReceipt(certification);
+  const certifiedAt = certification?.certifiedAt ? Date.parse(certification.certifiedAt) : Number.NaN;
+  const standing = status?.match ?? null;
+  // The standing comparison's own line on the receipt (a warning may add ". Changed since compared.").
+  const isStanding = (line: string) => Boolean(standing && (line === standing.words || line.startsWith(`${standing.words}.`)));
+  const madeLater = (line: string): boolean => {
+    if (!Number.isFinite(certifiedAt)) return false;
+    if (standing && isStanding(line)) {
+      const compared = Date.parse(standing.comparedAt);
+      if (Number.isFinite(compared)) return compared > certifiedAt;
+    }
+    const day = receiptLineDay(line);
+    return Boolean(day && day > latestDayOf(certifiedAt));
+  };
+  const shown = (line: string) => (standing && isStanding(line) ? wordsOnViewerClock(line, standing.comparedAt) : line);
+  const lines = [...matched.map((line) => ({ line, matched: true })), ...warnings.map((line) => ({ line, matched: false }))];
+  const then = lines.filter((item) => !madeLater(item.line)).map((item) => ({ ...item, line: shown(item.line) }));
+  const later = lines.filter((item) => madeLater(item.line));
+  const exact = certification ? comparedSinceCertified(certification.certifiedAt, status) : null;
+  const since: ComparedSince | null = exact
+    ? { verdict: exact.verdict, words: wordsOnViewerClock(exact.words, exact.comparedAt) }
+    : later[0] ? { verdict: verdictOfLine(later[0].line), words: shown(later[0].line) } : null;
+  return { then, notCompared: Boolean(since) && then.length === 0, since };
+}
+
+/** The receipt's lines about the old report: then (at certification), and since (a later comparison). */
+export function CertificationReportLines({ view, t }: { view: CertificationReportView; t: Theme }) {
   return (
     <>
-      {matched.map((line) => (
-        <div key={line} data-testid="block-certification-report-match" style={{ color: 'var(--status-success)' }}>Old report when certified: {line}</div>
+      {view.notCompared ? (
+        <div data-testid="block-certification-report-not-compared">Old report when certified: not compared</div>
+      ) : null}
+      {view.then.map(({ line, matched }) => (
+        matched
+          ? <div key={line} data-testid="block-certification-report-match" style={{ color: 'var(--status-success)' }}>Old report when certified: {line}</div>
+          : <div key={line} data-testid="block-certification-report-warning" style={{ color: 'var(--status-warning)' }}>Old report when certified: {line}</div>
       ))}
-      {warnings.map((line) => (
-        <div key={line} data-testid="block-certification-report-warning" style={{ color: 'var(--status-warning)' }}>Old report when certified: {line}</div>
-      ))}
-      {since ? (
-        <div data-testid="block-certification-report-since" style={{ color: verdictColor(since.verdict, t) }}>Old report since certified: {since.words}</div>
+      {view.since ? (
+        <div data-testid="block-certification-report-since" style={{ color: verdictColor(view.since.verdict, t) }}>Old report since certified: {view.since.words}</div>
       ) : null}
     </>
   );
 }
 
 /** Beside the Certified badge, when a comparison after certification differs. */
-export function DiffersSinceCertifiedBadge({ since }: { since: NonNullable<ReportQueryMatch['match']> | null }) {
+export function DiffersSinceCertifiedBadge({ since }: { since: ComparedSince | null }) {
   if (since?.verdict !== 'differs') return null;
   return (
     <span

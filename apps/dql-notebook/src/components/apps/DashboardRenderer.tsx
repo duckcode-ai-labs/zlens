@@ -62,7 +62,7 @@ import {
 } from './dashboard-tile-sizing';
 import {
   buildDashboardStory, isStakeholderHiddenReviewTile, prepareStakeholderItems, prepareStoryItems, stakeholderHiddenCounts,
-  stakeholderHiddenNote, storyFilterChips,
+  readerIntroMarkdown, stakeholderHiddenNote, storyFilterChips,
 } from './dashboard-presentation';
 import {
   escapeRegExp, evidenceMetricRank, formatDashboardValue, formatGenUiLabel, isNumericColumn,
@@ -409,6 +409,13 @@ export function DashboardRenderer({
     () => (editable ? undefined : stakeholderHiddenNote(stakeholderHiddenCounts(activeLayout.items, storyItems ?? visibleItems, tileResults))),
     [activeLayout.items, editable, storyItems, tileResults, visibleItems],
   );
+  // A reader's intro names only the tiles this view shows, in label words (V2).
+  const readerTile = (item: DashboardLayoutItem): DashboardRunTile | undefined => {
+    const tile = tileResults.get(item.i);
+    if (editable || tile?.tileType !== 'text' || !tile.text?.markdown) return tile;
+    const markdown = readerIntroMarkdown(tile.text.markdown, activeLayout.items, storyItems ?? visibleItems);
+    return markdown === tile.text.markdown ? tile : { ...tile, text: { ...tile.text, markdown } };
+  };
   // The auto-written Summary is off unless the page's author added it (D6).
   const summaryAdded = pageShowsSummary(dashboard.metadata);
   const dashboardStory = useMemo(
@@ -537,7 +544,7 @@ export function DashboardRenderer({
         <DashboardTile
           key={item.i}
           item={item}
-          tile={tileResults.get(item.i)}
+          tile={readerTile(item)}
           loading={loading}
           error={error}
           themeMode={state.themeMode}
@@ -1511,7 +1518,7 @@ export function DashboardRenderer({
                     <DashboardTile
                       key={item.i}
                       item={{ ...item, y: item.y - minY }}
-                      tile={tileResults.get(item.i)}
+                      tile={readerTile(item)}
                       loading={loading}
                       error={error}
                       themeMode={state.themeMode}

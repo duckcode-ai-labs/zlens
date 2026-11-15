@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ImportMetricDraftsSection } from './BlockStudio';
-import { ComparisonResult, screenWords } from './ReportComparePanel';
+import { ComparisonResult, comparisonVerdictLine, screenWords } from './ReportComparePanel';
 import { themes } from '../../themes/notebook-theme';
 import type { ImportMetricDrafts, ReportComparison } from '../../store/types';
 
@@ -36,7 +36,7 @@ const result = (input: ReportComparison, recording: 'with-compare' | 'separate' 
 describe('reading a comparison on the screen', () => {
   it('says the verdict, the filters, each difference and the rows on one side', () => {
     const html = result(comparison(), 'with-compare', true);
-    expect(html).toContain('Differs: 3 of 3 rows, 2 of 3 values, with ordered_at &gt;= 2026-01-01.');
+    expect(html).toContain('Differs: 1 of 3 values (row West, Total Sales). 3 of 3 rows found, with ordered_at &gt;= 2026-01-01.');
     expect(html).toContain('200.004');
     expect(html).toContain('Only in ZLens: Central');
     expect(html).toContain('1 total row set aside.');
@@ -116,5 +116,36 @@ describe('metric drafts beside their comparison', () => {
     ]);
     expect(html).toContain('Approve all that ran (3)');
     expect(html).toContain('2 left out of Approve all');
+  });
+});
+
+describe('V2: the verdict line says what differs, then what was found', () => {
+  const base = comparison().comparison;
+  it('names the one value that differs and says every row was found', () => {
+    const differs = { ...base, rows: { ...base.rows, inFile: 5, inBoth: 5 }, values: { compared: 5, equal: 4 }, differences: [{ key: ['FRANCE'], column: 'Order revenue', old: '10', zlens: 11 }] };
+    expect(comparisonVerdictLine(differs)).toBe('Differs: 1 of 5 values (row FRANCE, Order revenue). 5 of 5 rows found.');
+    // Never "5 of 5 rows, 4 of 5 values", which reads as if every row differed.
+    expect(comparisonVerdictLine(differs)).not.toMatch(/^Differs: 5 of 5 rows/);
+  });
+
+  it('counts several differences without naming one, and keeps the stated filters', () => {
+    const differs = { ...base, rows: { ...base.rows, inFile: 5, inBoth: 5 }, values: { compared: 10, equal: 7 }, differences: [] };
+    expect(comparisonVerdictLine(differs, ['region = EU'])).toBe('Differs: 3 of 10 values. 5 of 5 rows found, with region = EU.');
+  });
+
+  it('says rows were missing when every value found matches', () => {
+    const missing = { ...base, rows: { ...base.rows, inFile: 5, inBoth: 4 }, values: { compared: 4, equal: 4 }, differences: [] };
+    expect(comparisonVerdictLine(missing)).toBe('Differs: 4 of 5 rows found; all 4 values in them match.');
+  });
+
+  it('a match says every value', () => {
+    const matches = { ...base, verdict: 'matches' as const, rows: { ...base.rows, inFile: 5, inBoth: 5 }, values: { compared: 5, equal: 5 }, differences: [] };
+    expect(comparisonVerdictLine(matches)).toBe('Matches: 5 of 5 rows, every value.');
+    expect(comparisonVerdictLine({ ...matches, rows: { ...matches.rows, inFile: 1, inBoth: 1 }, values: { compared: 1, equal: 1 } })).toBe('Matches: 1 of 1 row, every value.');
+  });
+
+  it('names the total when the difference is in it', () => {
+    const total = { ...base, rows: { ...base.rows, inFile: 1, inBoth: 1 }, values: { compared: 1, equal: 0 }, differences: [{ key: [], column: 'Revenue', old: '1', zlens: 2 }] };
+    expect(comparisonVerdictLine(total)).toBe('Differs: 1 of 1 value (the total, Revenue). 1 of 1 row found.');
   });
 });

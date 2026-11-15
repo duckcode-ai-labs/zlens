@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, Database, FileText, Plus, ShieldCheck, Sparkles,
 import { certifiedByLabel } from '../reader-trust';
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../../api/client';
 import { AddDataBrowser, RemoveDataButton, type AddDataBrowserProps } from './AddDataBrowser';
-import { StudioErrorBanner, humanize } from './studio-ui';
+import { StudioErrorBanner, dataName, humanize } from './studio-ui';
 import { AI_PLAN_STILL_WORKING_WORDS, studioErrorWords } from '../app-studio-words';
 import { appDataItems, openCanvasLabel, sourceOriginLabel, tilesUsingSource, trustLabel } from './app-data';
 import {
@@ -134,8 +134,8 @@ export function DataStep({
             const sourceId = item.sourceId ?? item.id;
             return <li key={sourceId}>
               <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-              <p><strong title={item.name}>{humanize(item.name)}</strong><small>{[sourceOriginLabel(item), certified ? certifiedByLabel(item.certification) : trustLabel('review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : ''].filter(Boolean).join(' · ')}</small></p>
-              <RemoveDataButton name={humanize(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={browser.disabled} onRemove={() => browser.onRemove(sourceId)} />
+              <p><strong title={item.name}>{dataName(item.name)}</strong><small>{[sourceOriginLabel(item), certified ? certifiedByLabel(item.certification) : trustLabel('review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : ''].filter(Boolean).join(' · ')}</small></p>
+              <RemoveDataButton name={dataName(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={browser.disabled} onRemove={() => browser.onRemove(sourceId)} />
             </li>;
           })}
         </ul> : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data yet</strong><small>Add a table, a saved query or Metrics from the list. Everything you add has fields.</small></p></div>}

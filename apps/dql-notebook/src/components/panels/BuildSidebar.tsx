@@ -19,6 +19,8 @@ import { DomainScopeSelect } from './DomainScopeSelect';
 import { filterNotebookFiles, notebookDomains } from './notebook-sidebar';
 import { authoredDomainOptions } from '../domains/authored-domain-options';
 import { DbtDatabaseList } from './DbtDatabaseList';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { notebookRowTooltip } from '../../snowflake-app/snowflake-app-words';
 import {
   buildSemanticTreeFromLayer,
   scopeSemanticTreeForComposition,
@@ -478,17 +480,18 @@ export function NotebookFileRow({
   depth: number;
 }) {
   const isPrivate = file.visibility === 'private';
+  const snowflakeApp = useSnowflakeApp();
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }} className="dql-nb-row">
       <button
         type="button"
         onClick={() => onOpenFile(file)}
         style={{ ...rowStyle(t, active), paddingLeft: 10 + depth * 14, paddingRight: (isPrivate && onPublish ? 24 : 0) + (onDelete ? 30 : 8) }}
-        title={`${file.path}${file.ownerDomain ? ` · Owner domain: ${file.ownerDomain}` : ''}${isPrivate ? ' · Private: not in Git until you publish it' : ''}`}
+        title={notebookRowTooltip(file, snowflakeApp)}
       >
         <FileText size={13} color={t.textMuted} style={{ flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12.5 }}>
-          {file.name.replace(/\.dqln?$|\.ipynb$/i, '')}
+          {file.name.replace(/\.(dqlnb|dqln|dql|ipynb)$/i, '')}
         </span>
         {isPrivate ? (
           <span

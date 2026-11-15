@@ -17,6 +17,17 @@ export const DATE_NAME_RE = /date|time|at|day|month|year/i;
 /** A column that names a period, whatever its type: a season, a year, a quarter, a month, a week. */
 export const PERIOD_NAME_RE = /(^|_)(season|year|yr|fy|quarter|qtr|month|week|period)($|_)/i;
 const LABEL_NAME_RE = /^(label|name|category|status|type|group)$/i;
+/** A time named by a whole part of the column name ("ORDER_DATE", "created_at", "orderDate"), never by letters inside a word. */
+const TIME_AXIS_NAME_RE = /(?:^|_)(?:date|day|week|month|quarter|year|time|timestamp|datetime|hour|period)(?:_|$)|_(?:at|on)$/i;
+const CAMEL_TIME_NAME_RE = /[a-z](?:Date|Time|At|Day|Week|Month|Year)$/;
+const ISO_DATE_VALUE_RE = /^\d{4}-\d{2}(-\d{2})?(T|\s|$)/;
+
+/** Whether a column is a time axis a line can be drawn along: its name says so, or every sampled value is a date. */
+export function isTimeAxisColumn(column: string, sample: Array<Record<string, unknown>>): boolean {
+  if (TIME_AXIS_NAME_RE.test(column) || CAMEL_TIME_NAME_RE.test(column)) return true;
+  const values = sample.map((row) => row[column]).filter((value) => value !== null && value !== undefined && value !== '');
+  return values.length > 0 && values.every((value) => value instanceof Date || (typeof value === 'string' && ISO_DATE_VALUE_RE.test(value)));
+}
 const VALUE_NAME_RE = /^(value|count|total|revenue|amount|sum|avg|price|quantity|sales)$/i;
 
 export function isNumericValue(v: unknown): boolean {
@@ -92,8 +103,9 @@ export function detectChartType(result: QueryResult): ChartType {
   const col1AllNumeric = isMeasureColumn(result, col1) && sample.every((r) => isNumericValue(r[col1]));
   const col0AllString = sample.every((r) => isStringLike(r[col0]));
 
-  // Line chart: col[0] is date-like name and col[1] is numeric
-  if (DATE_NAME_RE.test(col0) && col1AllNumeric && col0AllString) {
+  // Line chart: col[0] names a time (a whole name part, not "at" inside NATION or CATEGORY) or holds dates, and
+  // col[1] is numeric. A line over unordered categories draws a trend that is not there (V2: nations joined by a line).
+  if (isTimeAxisColumn(col0, sample) && col1AllNumeric && col0AllString) {
     return 'line';
   }
 

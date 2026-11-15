@@ -3,7 +3,7 @@ import { certifiedByLabel, certifierDisplayName, plainCertificationChecks } from
 import { useShallow } from 'zustand/react/shallow';
 import { useQuery } from '@tanstack/react-query';
 import { certificationFieldGaps, certificationFieldLabel, renderSemanticBlockSource } from '@zlens/core/blocks';
-import { AlertTriangle, Blocks, Bot, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Code2, Database, FileInput, Loader2, MoreHorizontal, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, Blocks, Bot, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Code2, Database, FileInput, Loader2, MoreHorizontal, PanelBottomOpen, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
 import { hostProposesCertification, hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
 import { api, DqlApiError, type BlockCertificationOperationResult } from '../../api/client';
 import { importRunError, isHostRefusal, type ImportRunError } from './import-run-error';
@@ -72,9 +72,9 @@ function selectedTimeGrains(
 import { themes } from '../../themes/notebook-theme';
 import type { Theme, ThemeMode } from '../../themes/notebook-theme';
 import { ReportComparePanel, verdictTone } from './ReportComparePanel';
-import { CertificationReportLines, comparedSinceCertified, DiffersSinceCertifiedBadge, reportMatchReceipt, SavedQueryReportCheck, useQueryReportMatch } from './SavedQueryReportCheck';
+import { CertificationReportLines, certificationReportView, DiffersSinceCertifiedBadge, reportMatchReceipt, SavedQueryReportCheck, useQueryReportMatch } from './SavedQueryReportCheck';
 import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { importAddSqlStep, importContextHint, importEmptyMessage, importSourceModes, importStartDetail, savedQueryFolderWords, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
+import { editedSavedQueryTags, importAddSqlStep, importContextHint, importEmptyMessage, importHelpLine, importSourceModes, importStartDetail, savedQueryFolderWords, savedQueryTagsShown, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
 import { SQLCellEditor } from '../cells/SQLCellEditor';
 import { ChartOutput, CHART_TYPE_OPTIONS, resolveChartType } from '../output/ChartOutput';
 import { MiniLineageGraph } from '../lineage/MiniLineageGraph';
@@ -1541,8 +1541,13 @@ export function BlockStudio() {
   }, [running, runStartedAt]);
 
   const currentChart = state.blockStudioValidation?.chartConfig ?? state.blockStudioPreview?.chartConfig ?? { chart: 'table' };
+  // The results pane draws the chart the builder shows: a chart chosen since the last run counts, and with none
+  // chosen it is a table, or bars for one category and one measure, never a line over categories (V2).
+  const resultChartConfig = state.blockStudioValidation?.chartConfig?.chart
+    ? state.blockStudioValidation.chartConfig
+    : state.blockStudioPreview?.chartConfig;
   const activeResultChartType = state.blockStudioPreview
-    ? resolveChartType(state.blockStudioPreview.result, state.blockStudioPreview.chartConfig)
+    ? resolveChartType(state.blockStudioPreview.result, resultChartConfig)
     : 'table';
   const startLeftResize = (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -2040,7 +2045,7 @@ export function BlockStudio() {
                 ) : (
                   <ChartOutput
                     result={state.blockStudioPreview.result}
-                    chartConfig={state.blockStudioPreview.chartConfig}
+                    chartConfig={resultChartConfig}
                     themeMode={state.themeMode}
                   />
                 )}
@@ -2200,12 +2205,16 @@ export function BlockStudio() {
       </div>
 
       {hasActiveDraft && bottomPaneCollapsed && (
-        <div style={{ position: 'absolute', right: 16, bottom: 16 }}>
+        // In the editor's own area, so the AI panel beside it never covers it (V2: "Open Res…" sat clipped in the corner).
+        <div style={{ position: 'absolute', gridColumn: editorGridColumn, gridRow: editorGridRow, right: 16, bottom: 16, zIndex: 5 }}>
           <button
+            type="button"
             onClick={() => setBottomPaneCollapsed(false)}
-            style={{ background: t.btnBg, border: `1px solid ${t.btnBorder}`, borderRadius: 6, color: t.textSecondary, cursor: 'pointer', fontSize: 12, fontFamily: t.font, padding: '8px 12px' }}
+            title="Show the results pane"
+            aria-label="Show the results pane"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', flexShrink: 0, background: t.btnBg, border: `1px solid ${t.btnBorder}`, borderRadius: 6, color: t.textSecondary, cursor: 'pointer', fontSize: 12, fontFamily: t.font, padding: '7px 11px', boxShadow: '0 2px 8px rgba(0,0,0,0.12)' }}
           >
-            Open Results
+            <PanelBottomOpen size={14} aria-hidden="true" /> Results
           </button>
         </div>
       )}
@@ -3389,7 +3398,8 @@ export function BlockDetailView({
   const receiptLines = reportMatchReceipt(metadata?.certification);
   // The old report check: the box below and, for a certified query, a comparison made since it was certified.
   const reportCheck = useQueryReportMatch(metadata?.name && blockPath ? metadata.name : undefined);
-  const comparedSince = certified ? comparedSinceCertified(metadata?.certification?.certifiedAt, reportCheck.status) : null;
+  const reportView = certificationReportView(metadata?.certification, reportCheck.status);
+  const comparedSince = certified ? reportView.since : null;
   const proposed = certified && blockDisplayStatus('certified', metadata, proposes) === 'proposed';
   const name = metadata?.name || 'block';
   const semanticFields = isSemanticBlock ? parseSemanticVisualFields(source) : null;
@@ -3433,7 +3443,7 @@ export function BlockDetailView({
               ) : null}
             </div>
             <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4 }}>
-              {[metadata?.domain, savedQueryFolderWords(metadata?.folderPath, snowflakeApp), metadata?.owner, ...(metadata?.tags?.length ? [metadata.tags.join(', ')] : [])].filter(Boolean).join(' · ') || 'Unsaved draft'}
+              {[metadata?.domain, savedQueryFolderWords(metadata?.folderPath, snowflakeApp), metadata?.owner, savedQueryTagsShown(metadata?.tags, snowflakeApp).join(', ')].filter(Boolean).join(' · ') || 'Unsaved draft'}
             </div>
             {certified ? (
               <div data-testid="block-certification-receipt" style={{ fontSize: 11.5, color: t.textMuted, marginTop: 4 }}>
@@ -3441,7 +3451,7 @@ export function BlockDetailView({
                 {metadata?.certification && plainCertificationChecks(receiptLines.checks).length ? (
                   <div data-testid="block-certification-checks">Checks passed: {plainCertificationChecks(receiptLines.checks).join(' · ')}</div>
                 ) : null}
-                <CertificationReportLines certification={metadata?.certification} since={comparedSince} t={t} />
+                <CertificationReportLines view={reportView} t={t} />
                 {metadata?.certification ? (
                   <details className="dql-technical-details">
                     <summary style={{ cursor: 'pointer' }}>Technical details</summary>
@@ -3914,7 +3924,7 @@ export function CompactBlockIdentity({
           </select>
         </FieldLabel>
         <FieldLabel label="Owner" t={t}><input value={metadata?.owner ?? ''} onChange={(event) => onTextChange('owner', event.target.value)} placeholder="Required to save" style={input} /></FieldLabel>
-        <FieldLabel label="Tags" t={t}><CommaListInput values={metadata?.tags ?? []} onChange={onTagsChange} placeholder="finance, emea" style={input} /></FieldLabel>
+        <FieldLabel label="Tags" t={t}><CommaListInput values={savedQueryTagsShown(metadata?.tags, snowflakeApp)} onChange={(tags) => onTagsChange(editedSavedQueryTags(tags, metadata?.tags, snowflakeApp))} placeholder="finance, emea" style={input} /></FieldLabel>
         <div style={{ gridColumn: '1 / -1' }}>
           <FieldLabel label="Folder (optional)" t={t}>
             <input
@@ -5167,7 +5177,7 @@ export function BlockStudioImportWorkspace({
           <section style={{ minHeight: 0, overflow: 'auto', padding: 12, display: 'grid', alignContent: 'start', gap: 10 }}>
             {!session ? (
               <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.5 }}>
-                Paste SQL, upload files, or choose a local path. Analysis stays in this session until you save a saved query.
+                {importHelpLine(snowflakeApp)}
               </div>
             ) : (
               <>
@@ -6517,6 +6527,7 @@ function SavePanel({
   onChange: (next: Partial<{ name: string; domain: string; folderPath?: string; description: string; owner: string; tags: string[] }>) => void;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const inputStyle: React.CSSProperties = {
     width: '100%',
     background: t.inputBg,
@@ -6545,7 +6556,7 @@ function SavePanel({
       <input value={values.folderPath} onChange={(event) => onChange({ folderPath: event.target.value })} placeholder="Folder (optional), e.g. executive/monthly" style={{ ...inputStyle, fontFamily: t.fontMono }} />
       <input value={values.owner} onChange={(event) => onChange({ owner: event.target.value })} placeholder="Owner" style={inputStyle} />
       <input value={values.description} onChange={(event) => onChange({ description: event.target.value })} placeholder="Description" style={inputStyle} />
-      <CommaListInput values={values.tags} onChange={(tags) => onChange({ tags })} placeholder="Tags" style={inputStyle} />
+      <CommaListInput values={savedQueryTagsShown(values.tags, snowflakeApp)} onChange={(tags) => onChange({ tags: editedSavedQueryTags(tags, values.tags, snowflakeApp) })} placeholder="Tags" style={inputStyle} />
     </div>
   );
 }

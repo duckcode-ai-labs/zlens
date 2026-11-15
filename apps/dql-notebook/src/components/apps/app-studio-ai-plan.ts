@@ -112,7 +112,7 @@ export function summarizeAppStudioAiPlan(proposal: AppStudioAiProposal): AppStud
     } else if (operation.type === 'upsert_source') {
       sources.set(operation.source.id, {
         id: operation.source.id,
-        label: businessLabel(sourceDisplayName(operation.source.qualifiedIdentity || operation.source.sourceRef)),
+        label: sourceNameLabel(sourceDisplayName(operation.source.qualifiedIdentity || operation.source.sourceRef)),
         sourceRef: operation.source.sourceRef,
         kind: operation.source.kind,
         trustState: operation.source.trustState,
@@ -416,6 +416,12 @@ function sourceDisplayName(identity: string): string {
 
 function businessLabel(value: string): string {
   return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase()).trim();
+}
+
+/** A source's name as its author saved it: a name with spaces is kept as written (V2), an id reads as words. */
+function sourceNameLabel(value: string): string {
+  const trimmed = value.trim();
+  return /\s/.test(trimmed) ? trimmed : businessLabel(trimmed);
 }
 
 function normalizeSourceReference(value: string): string {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, APP_BUILDER_TRUNCATED_PICKED_NOTE, deterministicDatasetQuery, plainPlannerText, plannerAppTitle, plannerTileQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
+import { APP_BUILDER_RETRY_NOTE, APP_BUILDER_TRUNCATED_NOTE, APP_BUILDER_TRUNCATED_PICKED_NOTE, deterministicDatasetQuery, plainPlannerText, plannerAppTitle, plannerReasonText, plannerTileQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
 import { savedQueryResultDescriptor, type AppBuildRequirement, type DatasetDescriptor } from '@zlens/core';
 
@@ -718,6 +718,16 @@ describe('AI plan for the V11 retest: splits, a dropped part of the request, and
     expect(brief.components[0]!.rationale).toBe('The only source with SEASON and GAME_TYPE together; trust remains not certified yet as supplied.');
     expect(JSON.stringify(brief)).not.toMatch(/review_required|governed_only/);
     expect(plainPlannerText('Policy include_review_required, status not_required')).toBe('Policy certified and not-certified data, status not needed');
+  });
+
+  it('calls a block a saved query in its reasons (V14 retest: every "Why" read "Certified block …")', async () => {
+    const brief = await plan(winsByGameType, [
+      { id: 'c1', title: 'Warriors Wins by Season and Game Type', sourceId, requirementIds: ['r1'], role: 'breakdown', view: 'bar', rationale: 'Certified block dql:block:warriors_wins answers this; no other blocks have GAME_TYPE.', query: { dimensions: [{ field: 'SEASON' }, { field: 'GAME_TYPE' }], measures: [{ measure: 'WINS' }] } },
+    ]);
+    expect(brief.components[0]!.rationale).toBe('Certified saved query warriors_wins answers this; no other saved queries have GAME_TYPE.');
+    expect(plannerReasonText('Block X covers it. Uses the certified DQL block review_required.')).toBe('Saved query X covers it. Uses the certified saved query not certified yet.');
+    expect(plannerReasonText('Its fields match “wins” · Certified saved query')).toBe('Its fields match “wins” · Certified saved query');
+    expect(brief.components.map((component) => component.rationale).join(' ')).not.toMatch(/\bblocks?\b/i);
   });
 
   it('asks again when the plan is cut short before any tile, and picks data for its questions if it is cut short again', async () => {

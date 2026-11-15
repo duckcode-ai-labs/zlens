@@ -109,7 +109,7 @@ export function SnowflakeAppBackupsPanel({ t, initial }: { t: Theme; initial: Sn
           <>
             <div style={{ ...muted, marginTop: 6 }}>
               Once a day, when something changed, ZLens copies its projects to <code>{status.stage}</code> and keeps the last 14.
-              These copies stay if the app is uninstalled, and open in ZLens on a laptop too.
+              These copies stay if the app is uninstalled; a new install of ZLens offers to restore the newest one.
             </div>
             {status.exports.length === 0 ? (
               <div style={{ ...muted, marginTop: 8 }}>No copies yet.</div>

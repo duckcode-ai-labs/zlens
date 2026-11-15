@@ -122,4 +122,15 @@ describe('the app package for Snowflake', () => {
     // The ask comes before any word about opening it.
     expect(firstOpen.indexOf('app_public.app_url()')).toBeLessThan(firstOpen.indexOf('**Launch app**'));
   });
+
+  it('V2: the backup stage setting names the same three grants as the readme', () => {
+    const description = /CONFIGURATION DEFINITION zlens_backup_stage[\s\S]*?DESCRIPTION = '([^']*)'/.exec(setup)?.[1] ?? '';
+    expect(description).toMatch(/USAGE on its database/);
+    expect(description).toMatch(/USAGE on its schema/);
+    expect(description).toMatch(/READ, WRITE on the stage/);
+    expect(description.length).toBeLessThan(260);
+    expect(readme).toContain('GRANT USAGE ON DATABASE MY_DB TO APPLICATION ZLENS_APP;');
+    expect(readme).toContain('GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ZLENS_APP;');
+    expect(readme).toContain('GRANT READ, WRITE ON STAGE MY_DB.MY_SCHEMA.ZLENS_BACKUPS TO APPLICATION ZLENS_APP;');
+  });
 });

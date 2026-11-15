@@ -209,6 +209,9 @@ function notebookReducer(state: NotebookState, action: NotebookAction): Notebook
   return withoutStaleAgentLog(state, reduceNotebook(state, action));
 }
 
+/** Pages that show their own list on the left, so the shared sidebar closes when one opens. */
+const PAGES_WITH_THEIR_OWN_LIST: ReadonlySet<string> = new Set(['ask', 'ask_observability', 'history']);
+
 /**
  * The steps page belongs to the view and document it was opened over. Moving
  * to another view, notebook or App closes it, so it never reappears over
@@ -261,6 +264,9 @@ function reduceNotebook(state: NotebookState, action: NotebookAction): NotebookS
       return {
         ...state,
         mainView: action.view,
+        // Ask lists its own chats, and History its own changes: the Notebooks or Saved queries tree a person
+        // left open does not come along (V2: Ask kept the notebook tree after a visit to Notebooks).
+        ...(PAGES_WITH_THEIR_OWN_LIST.has(action.view) ? { sidebarOpen: false } : {}),
         // A block and a notebook share the outer editor shell but not an active
         // document contract. When a user explicitly opens Notebooks after
         // Block Studio, show the notebook landing state until they pick a file
@@ -300,7 +306,7 @@ function reduceNotebook(state: NotebookState, action: NotebookAction): NotebookS
       if (typeof window !== 'undefined' && window.location.pathname !== '/ask/traces') {
         window.history.pushState({ askObservability: true }, '', '/ask/traces');
       }
-      return { ...state, askTraceRunId: undefined, mainView: 'ask_observability' };
+      return { ...state, askTraceRunId: undefined, mainView: 'ask_observability', sidebarOpen: false };
     }
 
     case 'SET_SETTINGS_TAB':

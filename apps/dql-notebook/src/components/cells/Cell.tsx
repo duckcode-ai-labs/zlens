@@ -68,6 +68,8 @@ import { BlockParameterControls } from '../parameters/BlockParameterControls';
 import { NotebookDqlParameterEditor } from '../parameters/NotebookDqlParameterEditor';
 import { canBackgroundRepairNotebookCell, notebookRepairErrorMessage } from '../../utils/notebook-background-repair';
 import { DQL_CELL_EXAMPLE, dqlCellHoldsPlainSql, queryCellKindLabel } from '../../utils/dql-cell-content';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { queryTargetWords } from '../../snowflake-app/snowflake-app-words';
 
 interface CellProps {
   cell: Cell;
@@ -2675,8 +2677,11 @@ function QueryTargetBar({
     cell.executionTarget?.target === "local"
       ? "local"
       : `connection:${cell.executionTarget?.connectionName ?? defaultConnection}`;
+  const snowflakeApp = useSnowflakeApp();
+  const targetWords = queryTargetWords(snowflakeApp);
   // The label names the cell's language: a DQL cell never says "SQL".
-  const governedKind = queryCellKindLabel(cell);
+  const kindLabel = queryCellKindLabel(cell);
+  const governedKind = kindLabel === 'Local dataset SQL' ? targetWords.localKind : kindLabel;
   return (
     <div
       style={{
@@ -2713,16 +2718,15 @@ function QueryTargetBar({
           font: `10px ${t.font}`,
         }}
       >
-        <option value="local">Local analysis workspace</option>
+        <option value="local">{targetWords.local}</option>
         {connectionNames.map((name) => (
           <option key={name} value={`connection:${name}`}>
-            {name}
-            {name === defaultConnection ? " (default)" : ""}
+            {targetWords.connection(name, name === defaultConnection)}
           </option>
         ))}
         {connectionNames.length === 0 && (
           <option value={`connection:${defaultConnection}`}>
-            {defaultConnection}
+            {targetWords.connection(defaultConnection, false)}
           </option>
         )}
       </select>
