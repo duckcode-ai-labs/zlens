@@ -117,7 +117,6 @@ import { BUILD_NEW_APP_EVENT, appLibraryLaunchExpanded, buildNewAppRequested, ty
 import { plainSourceText } from './source-names';
 import { isTrustReminderTaskId } from '@zlens/core/apps/app-trust';
 import { dashboardFilterLabel, formatDashboardFilterValue } from './dashboard-filter-words';
-import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { ItemHistory } from '../history/ItemHistory';
 import { openHistory } from '../history/history-navigation';
 
