@@ -45,9 +45,9 @@ function rail(): string[] {
 }
 
 describe('the rail in the app for Snowflake', () => {
-  it('leads with Ask and has no Source control', () => {
+  it('leads with Ask and has History (V15) where Source control is elsewhere', () => {
     setSnowflakeApp(true);
-    expect(rail()).toEqual(['Ask', 'Apps', 'Notebooks', 'Saved queries', 'Lineage', 'Modeling', 'Ask observability', 'Settings', 'Help']);
+    expect(rail()).toEqual(['Ask', 'Apps', 'Notebooks', 'Saved queries', 'Lineage', 'Modeling', 'Ask observability', 'History', 'Settings', 'Help']);
   });
 
   it('is unchanged everywhere else', () => {

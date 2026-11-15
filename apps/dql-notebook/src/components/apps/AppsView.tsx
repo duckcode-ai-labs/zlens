@@ -37,6 +37,7 @@ import {
   Users,
   Workflow,
   X,
+  History as HistoryIcon,
 } from 'lucide-react';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import {
@@ -116,6 +117,9 @@ import { BUILD_NEW_APP_EVENT, appLibraryLaunchExpanded, buildNewAppRequested, ty
 import { plainSourceText } from './source-names';
 import { isTrustReminderTaskId } from '@zlens/core/apps/app-trust';
 import { dashboardFilterLabel, formatDashboardFilterValue } from './dashboard-filter-words';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { ItemHistory } from '../history/ItemHistory';
+import { openHistory } from '../history/history-navigation';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -1727,6 +1731,7 @@ function AppWorkspaceSurface({
   const mayAskAboutApp = !readOnlyLink && hostAllows(hostUi, 'ask');
   const dispatch = useDispatch();
   const hostPage = useHostPage();
+  const snowflakeApp = useSnowflakeApp();
   const workspaceAppId = metadataApp?.id ?? app?.id ?? null;
   const workspaceAppName = metadataApp?.name ?? app?.name ?? null;
   // Dashboard metadata establishes what can be shown. Mutations still require
@@ -2020,7 +2025,7 @@ function AppWorkspaceSurface({
 
   useEffect(() => {
     if (isEditable) return;
-    if (section === 'notebooks' || section === 'ai' || section === 'drafts' || section === 'settings') {
+    if (section === 'notebooks' || section === 'ai' || section === 'drafts' || section === 'settings' || section === 'history') {
       onSectionChange('dashboards');
     }
   }, [isEditable, section, onSectionChange]);
@@ -2250,6 +2255,7 @@ function AppWorkspaceSurface({
               experience={isEditable ? 'build' : 'view'}
               dashboardCount={dashboardPages.length}
               onChange={onSectionChange}
+              history={snowflakeApp && Boolean(workspaceAppId)}
             />
             {section === 'dashboards' && dashboardPages.length ? (
               <DashboardPagePicker
@@ -2504,6 +2510,13 @@ function AppWorkspaceSurface({
               <AiPinsPanel appDoc={appDoc} />
             ) : section === 'drafts' ? (
               <DraftsPanel appDoc={appDoc} />
+            ) : section === 'history' && workspaceAppId ? (
+              // V15 History (the app for Snowflake): every saved version of this App.
+              <ItemHistory
+                path={`apps/${workspaceAppId}`}
+                t={themes[themeMode]}
+                onCompare={(from, to) => openHistory(dispatch, { page: 'compare', path: `apps/${workspaceAppId}`, from, to, back: 'item' })}
+              />
             ) : section === 'settings' ? (
               <SettingsPanel
                 appDoc={appDoc}
@@ -2577,12 +2590,15 @@ function AppWorkspaceTabs({
   experience,
   dashboardCount,
   onChange,
+  history = false,
 }: {
   appDoc: AppDocumentSummary | null;
   section: AppSection;
   experience: AppExperience;
   dashboardCount: number;
   onChange: (section: AppSection) => void;
+  /** The app for Snowflake: the App's History (V15). */
+  history?: boolean;
 }) {
   const reportCount = appDoc?.investigations?.length ?? 0;
   const appTab = { id: 'dashboards' as const, label: 'Pages', count: dashboardCount, icon: <LayoutDashboard size={14} /> };
@@ -2592,6 +2608,7 @@ function AppWorkspaceTabs({
     { id: 'ai', label: 'Saved insights', count: appDoc?.aiPins?.length ?? 0, icon: <Bot size={14} /> },
     { id: 'drafts', label: 'Review drafts', count: appDoc?.drafts?.length ?? 0, icon: <FileText size={14} /> },
     { id: 'settings', label: 'App settings', icon: <Workflow size={14} /> },
+    ...(history ? [{ id: 'history' as const, label: 'History', icon: <HistoryIcon size={14} /> }] : []),
   ];
   return (
     <nav className="dql-app-section-tabs" aria-label="App sections">

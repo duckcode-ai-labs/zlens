@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Activity, Boxes, ClipboardList, ExternalLink, GitPullRequest, Hammer, Inbox, MessageCircle, Settings, ShieldCheck, Users } from 'lucide-react';
+import { Activity, Boxes, ClipboardList, ExternalLink, GitPullRequest, Hammer, History, Inbox, MessageCircle, Settings, ShieldCheck, Users } from 'lucide-react';
 import { applyHostNav, navItemAllowed, useHostPage, useHostUi, type NavId, type RailGroup } from '../../host/host-ui';
 import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { setHistoryRoute } from '../history/history-route';
 import { Tooltip } from '@zlens/ui';
 import {
   FileText,
@@ -43,8 +44,9 @@ function persistExpanded(v: boolean) {
 
 /** One of ZLens's own rail items: its stable nav id (what a host names), the panel it opens, and how it is drawn. */
 interface RailNavItem {
-  id: NavId;
-  key: SidebarPanel | 'ask' | 'modeling' | 'ask_observability';
+  /** `history` is the app for Snowflake's own item, never a host's (hosts name only NAV_IDS). */
+  id: NavId | 'history';
+  key: SidebarPanel | 'ask' | 'modeling' | 'ask_observability' | 'history';
   title: string;
   icon: React.ReactNode;
   active: boolean;
@@ -161,7 +163,13 @@ export function ActivityBar() {
     persistExpanded(expanded);
   }, [expanded]);
 
-  function handlePanelClick(panel: SidebarPanel | 'home' | 'ask' | 'modeling' | 'ask_observability') {
+  function handlePanelClick(panel: SidebarPanel | 'home' | 'ask' | 'modeling' | 'ask_observability' | 'history') {
+    if (panel === 'history') {
+      // The app for Snowflake's History: always opens on the project's changes.
+      setHistoryRoute({ page: 'feed' });
+      dispatch({ type: 'SET_MAIN_VIEW', view: 'history' });
+      return;
+    }
     if (panel === 'ask_observability') {
       dispatch({ type: 'OPEN_ASK_OBSERVABILITY' });
       return;
@@ -220,8 +228,11 @@ export function ActivityBar() {
         // undiscoverable — the word only appeared after you already arrived.
         { id: 'modeling', key: 'domains', title: 'Modeling', icon: <Boxes size={16} strokeWidth={1.75} />, active: state.mainView === 'domains' || state.mainView === 'modeling' || state.mainView === 'skills' },
         { id: 'ask-traces', key: 'ask_observability', title: 'Ask observability', icon: <Activity size={16} strokeWidth={1.75} />, active: state.mainView === 'ask_observability' || state.mainView === 'ask_trace' },
-        // The app for Snowflake has no Git: its projects live on a volume in the customer's account.
-        ...(snowflakeApp ? [] : [{ id: 'source-control', key: 'git', title: 'Source control', icon: <GitBranch size={16} strokeWidth={1.75} />, active: state.mainView === 'git' } as RailNavItem]),
+        // The app for Snowflake has no Git: its projects live on a volume in the customer's account. The same slot
+        // is its History (V15): every save kept, with who made it.
+        snowflakeApp
+          ? { id: 'history', key: 'history', title: 'History', icon: <History size={16} strokeWidth={1.75} />, active: state.mainView === 'history' } as RailNavItem
+          : { id: 'source-control', key: 'git', title: 'Source control', icon: <GitBranch size={16} strokeWidth={1.75} />, active: state.mainView === 'git' } as RailNavItem,
         { id: 'settings', key: 'settings', title: 'Settings', icon: <Settings size={16} strokeWidth={1.75} />, active: state.mainView === 'settings' || state.mainView === 'connection' },
       ],
     },
