@@ -173,6 +173,30 @@ GRANT READ, WRITE ON STAGE MY_DB.MY_SCHEMA.ZLENS_BACKUPS TO APPLICATION ZLENS_AP
 ZLens then copies its projects there once a day when something changed (`zlens-<app>-<date>.tar.gz`,
 the last 14 kept). A new install whose project is empty offers to restore the newest one.
 
+### History
+
+Every time a saved query, App or notebook is saved in ZLens, ZLens keeps that version, with the Snowflake
+user who saved it (an answer Ask drafted shows as "AI (Ask)" with the person who asked). There is nothing
+to commit. The **History** page in ZLens's left bar lists every change; each saved query, App and notebook
+has a **History** tab to compare two versions and restore one. Restoring saves the old version as the next
+version, as a draft: certified versions and their receipts never change, and certifying stays its own step.
+Removed items stay in History and can be restored while the app is installed.
+
+History is kept inside the app, on its volume in your account, with no Git program and no outside
+connection; the backups above copy it with the projects. **Settings** shows how much room it takes.
+
+ZLens also copies a log of the changes, without any SQL, values or file content, to a view the
+`app_admin` role can read. It is written in batches while ZLens's warehouse is already running, and as
+ZLens stops for the day:
+
+```sql
+SELECT changed_at, changed_by, item, kind, version, change, certified
+FROM ZLENS_APP.app_public.history
+ORDER BY changed_at DESC;
+```
+
+If ZLens cannot write this log, History itself keeps working and ZLens logs one warning.
+
 ### What it costs to run
 
 The app is free. Snowflake bills your account for what it uses:
@@ -206,8 +230,9 @@ listings, shares or external access integrations.
   Cortex may process it in another Snowflake region if your account allows cross-region inference. The
   app's provider never receives prompts or replies, and trains nothing on them.
 - **Stored.** On the app's 10Gi block volume in your account: ZLens's project (connection settings,
-  metrics, notebooks, Apps), the questions asked with their answers and SQL, run history, cached
-  descriptions of your tables, and backups of the project from before each upgrade. It stays until the app is
+  metrics, notebooks, Apps), every saved version of its saved queries, Apps and notebooks (History), the
+  questions asked with their answers and SQL, run history, cached descriptions of your tables, and backups
+  of the project from before each upgrade. In the app's own `core.history_log` table: the change log above. It stays until the app is
   uninstalled; uninstalling deletes it.
 - **Logged.** Start-up messages, warnings and errors, to your account's event table if you have one.
   Questions, SQL and query results are not logged.

@@ -54,6 +54,18 @@ describe('the app package for Snowflake', () => {
     expect(readme).toContain('AI_COMPLETE');
   });
 
+  it('keeps History\'s change log in the app\'s own table, readable by app_admin as app_public.history, and says so', () => {
+    expect(setup).toMatch(/CREATE TABLE IF NOT EXISTS core\.history_log \(\s*commit_id VARCHAR,\s*changed_at TIMESTAMP_TZ,\s*changed_by VARCHAR,\s*item VARCHAR,\s*kind VARCHAR,\s*version NUMBER,\s*change VARCHAR,\s*certified BOOLEAN\s*\);/);
+    expect(setup).toMatch(/CREATE OR REPLACE VIEW app_public\.history AS\s+SELECT changed_at, changed_by, item, kind, version, change, certified\s+FROM core\.history_log;/);
+    expect(setup).toContain('GRANT SELECT ON VIEW app_public.history TO APPLICATION ROLE app_admin;');
+    // Never granted to the person using ZLens, and never anything they could write.
+    expect(setup).not.toMatch(/ON (TABLE|VIEW) [a-z_.]*history[a-z_]* TO APPLICATION ROLE app_user/i);
+    expect(setup).not.toMatch(/GRANT (INSERT|UPDATE|DELETE)[^;]*history/i);
+    expect(readme).toContain('### History');
+    expect(readme).toMatch(/```sql\nSELECT changed_at, changed_by, item, kind, version, change, certified\nFROM ZLENS_APP\.app_public\.history/);
+    expect(readme).toContain('History itself keeps working');
+  });
+
   it('tells the person what the first open looks like', () => {
     expect(readme).toContain('SNOWSERVICES_INGRESS');
     expect(readme).toContain('service is not yet running');
