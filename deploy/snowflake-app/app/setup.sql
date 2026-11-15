@@ -21,12 +21,12 @@ ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_user
   SENSITIVE = FALSE;
 
 -- Optional: a stage the customer owns where ZLens puts a daily copy of its projects, which outlives
--- an uninstall. The admin creates it, grants it to the app (GRANT READ, WRITE ON STAGE ... TO
--- APPLICATION ...), and names it here.
+-- an uninstall. The admin creates it, grants the app USAGE on its database and schema and READ, WRITE
+-- on the stage (the three grants in the README), and names it here.
 ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_backup_stage
   TYPE = STRING
   LABEL = 'Stage for ZLens backups (optional)'
-  DESCRIPTION = 'A stage you own and granted to this app (GRANT READ, WRITE ON STAGE MY_DB.MY_SCHEMA.ZLENS_BACKUPS TO APPLICATION <this app>), as DATABASE.SCHEMA.STAGE. ZLens copies its projects there once a day; the copies stay if the app is uninstalled.'
+  DESCRIPTION = 'A stage you own, as DATABASE.SCHEMA.STAGE. First grant this app USAGE on its database, USAGE on its schema, and READ, WRITE on the stage. ZLens copies its projects there once a day; the copies stay if the app is uninstalled.'
   APPLICATION_ROLES = (app_admin)
   SENSITIVE = FALSE;
 

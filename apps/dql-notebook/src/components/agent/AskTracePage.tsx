@@ -36,6 +36,7 @@ import {
   type AskTraceSpanV1,
 } from '../../api/client';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { themes, type Theme } from '../../themes/notebook-theme';
 import { explanationForTrace } from './ask-run-explanation';
 import { AskRunDecisionView, AskRunTraceSummary } from './AskRunDecisionView';
@@ -126,6 +127,7 @@ export function AskTracePage({ runId }: { runId: string }): JSX.Element {
   const themeMode = useNotebookStore((state) => state.themeMode);
   const t = themes[themeMode];
   const dispatch = useDispatch();
+  const snowflakeApp = useSnowflakeApp();
   const [trace, setTrace] = useState<AskTraceDataV1 | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -232,7 +234,7 @@ export function AskTracePage({ runId }: { runId: string }): JSX.Element {
             <ArrowLeft size={14} /> Back
           </button>
           <button type="button" onClick={openCatalog} style={{ ...backLinkStyle(t), color: t.textMuted }}>
-            <Search size={13} /> All local traces
+            <Search size={13} /> {snowflakeApp ? 'All traces' : 'All local traces'}
           </button>
         </div>
         <TraceHeader trace={trace} t={t} onRefresh={() => window.location.reload()} />
@@ -335,6 +337,7 @@ export function traceHeaderFacts(trace: AskTraceDataV1): {
 }
 
 function TraceHeader({ trace, t, onRefresh }: { trace: AskTraceDataV1; t: Theme; onRefresh: () => void }): JSX.Element {
+  const traceWord = useSnowflakeApp() ? 'This trace' : 'This local trace';
   const { envelope } = trace;
   const runtimeMode = trace.runtimeReceiptV8?.mode ?? trace.runtimeMode;
   const header = traceHeaderFacts(trace);
@@ -373,8 +376,8 @@ function TraceHeader({ trace, t, onRefresh }: { trace: AskTraceDataV1; t: Theme;
         {trace.valuesWithheld
           ? 'You are reviewing someone else\'s question. This trace shows how it was read and answered: each step and its outcome, refusals, timings, the tables and joins, and the SQL with its values shown as ?. It holds none of its values: no result rows (only about how many), AI replies, check messages or words of the question; columns named after values read column_1, column_2, and its fingerprints are keyed to this trace.'
           : trace.runtimeReceiptV9
-          ? 'This local trace keeps the run record: what each AI call was for, how long it took and its reply, the checks, the SQL that ran and a sample of its rows. Full prompts, credentials and file paths are not kept.'
-          : 'This local trace contains typed execution evidence only. Prompts, SQL text, result rows, provider responses, credentials, and file paths are not retained.'}
+          ? `${traceWord} keeps the run record: what each AI call was for, how long it took and its reply, the checks, the SQL that ran and a sample of its rows. Full prompts, credentials and file paths are not kept.`
+          : `${traceWord} contains typed execution evidence only. Prompts, SQL text, result rows, provider responses, credentials, and file paths are not retained.`}
       </div>
     </header>
   );

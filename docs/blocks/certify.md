@@ -58,7 +58,10 @@ see [Prove the numbers match](../guides/migrate.md#prove-the-numbers-match).
 
 The receipt states what was true when the saved query was certified, and stays that way. A comparison
 made after that shows beside it (`Old report since certified: …`), and one that differs also puts
-**Differs from the old report since it was certified** next to **CERTIFIED**.
+**Differs from the old report since it was certified** next to **CERTIFIED**. A comparison made after
+certification is never shown as "when certified": with none on record then, the receipt says
+`Old report when certified: not compared`. The day of a comparison is shown on your own clock, like the
+certification date beside it.
 
 **When it does not pass**, the panel reads **Unable to certify** and lists
 **Fixes before certification**. Each fix says how to fix it and has a button

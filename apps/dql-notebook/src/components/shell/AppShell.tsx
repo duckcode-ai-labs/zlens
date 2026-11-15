@@ -406,7 +406,8 @@ export function AppShell() {
                       onOpenFile={handleOpenFile}
                       registerCellRef={registerCellRef}
                     />
-                    {state.appMode === 'studio' && <DevPanel />}
+                    {/* The query log is a developer's panel: the app for Snowflake leaves it out (V2). */}
+                    {state.appMode === 'studio' && !snowflakeApp && <DevPanel />}
                   </>
                 )}
               </>

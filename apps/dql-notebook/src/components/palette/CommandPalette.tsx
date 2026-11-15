@@ -136,7 +136,8 @@ export function CommandPalette({
         shortcut: '⌘D',
         run: wrap(() => d({ type: 'TOGGLE_DASHBOARD_MODE' })),
       },
-      {
+      // The app for Snowflake has no dev panel (V2).
+      ...(isSnowflakeApp() ? [] : [{
         id: 'dev.toggle',
         label: 'Toggle dev panel',
         group: 'View',
@@ -144,7 +145,7 @@ export function CommandPalette({
         shortcut: '⌘J',
         mode: 'studio',
         run: wrap(() => d({ type: 'TOGGLE_DEV_PANEL' })),
-      },
+      } as PaletteAction]),
     );
 
     // Navigate — hidden in App mode.

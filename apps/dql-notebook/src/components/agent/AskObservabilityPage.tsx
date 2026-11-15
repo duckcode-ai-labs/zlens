@@ -65,6 +65,7 @@ export function traceCatalogTitle(trace: AskTraceListEntryV1): string {
 export function AskObservabilityPage(): JSX.Element {
   const themeMode = useNotebookStore((state) => state.themeMode);
   const t = themes[themeMode];
+  const snowflakeApp = useSnowflakeApp();
   const dispatch = useDispatch();
   const [filters, setFilters] = useState<AskObservabilityFilters>(DEFAULT_FILTERS);
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
@@ -181,10 +182,10 @@ export function AskObservabilityPage(): JSX.Element {
 
         <section aria-live="polite" style={{ marginTop: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8, color: t.textMuted, fontSize: 11.5 }}>
-            <span>{total === undefined ? 'Loading trace count…' : `${total} local trace${total === 1 ? '' : 's'}`}</span>
+            <span>{traceCountWords(total, snowflakeApp)}</span>
             <span>Page {pageIndex + 1}</span>
           </div>
-          {loading ? <CatalogLoading t={t} /> : error ? <CatalogFailure message={error} onRetry={() => setReloadKey((current) => current + 1)} t={t} /> : traces.length === 0 ? <CatalogEmpty filtered={hasFilters} t={t} /> : (
+          {loading ? <CatalogLoading snowflakeApp={snowflakeApp} t={t} /> : error ? <CatalogFailure message={error} onRetry={() => setReloadKey((current) => current + 1)} t={t} /> : traces.length === 0 ? <CatalogEmpty filtered={hasFilters} snowflakeApp={snowflakeApp} t={t} /> : (
             <div style={{ display: 'grid', gap: 8 }}>
               {traces.map((trace) => <TraceCatalogCard key={trace.traceId} trace={trace} t={t} onOpen={() => openTrace(trace.runId)} />)}
             </div>
@@ -198,6 +199,28 @@ export function AskObservabilityPage(): JSX.Element {
       </div>
     </main>
   );
+}
+
+/**
+ * The trace count over the catalog. On a laptop the traces are local; in the app for Snowflake they
+ * stay in the person's Snowflake account, so there they are just traces (V2).
+ */
+export function traceCountWords(total: number | undefined, snowflakeApp: boolean): string {
+  if (total === undefined) return 'Loading trace count…';
+  return `${total} ${snowflakeApp ? '' : 'local '}trace${total === 1 ? '' : 's'}`;
+}
+
+/** The catalog while it loads, and when it has nothing to show. */
+export function traceCatalogEmptyWords(filtered: boolean, snowflakeApp: boolean): { loading: string; empty: string } {
+  return snowflakeApp
+    ? {
+        loading: 'Loading Ask traces…',
+        empty: filtered ? 'No traces match these filters.' : 'No Ask traces have been recorded yet. Run an Ask, then return here to see what it did.',
+      }
+    : {
+        loading: 'Loading local Ask traces…',
+        empty: filtered ? 'No local traces match these filters.' : 'No local Ask traces have been recorded yet. Run an Ask, then return here to inspect its typed execution evidence.',
+      };
 }
 
 /**
@@ -304,16 +327,16 @@ function FilterSelect({ label, value, onChange, t, children }: { label: string; 
   );
 }
 
-function CatalogLoading({ t }: { t: Theme }): JSX.Element {
-  return <div role="status" style={emptyStyle(t)}><LoaderCircle size={16} className="ask-trace-recording" /> Loading local Ask traces…</div>;
+function CatalogLoading({ snowflakeApp, t }: { snowflakeApp: boolean; t: Theme }): JSX.Element {
+  return <div role="status" style={emptyStyle(t)}><LoaderCircle size={16} className="ask-trace-recording" /> {traceCatalogEmptyWords(false, snowflakeApp).loading}</div>;
 }
 
 function CatalogFailure({ message, onRetry, t }: { message: string; onRetry: () => void; t: Theme }): JSX.Element {
   return <div role="alert" style={emptyStyle(t)}><XCircle size={16} color={t.error} /><span style={{ flex: 1 }}>{message}</span><button type="button" onClick={onRetry} style={secondaryButtonStyle(t)}><RefreshCw size={12} /> Retry</button></div>;
 }
 
-function CatalogEmpty({ filtered, t }: { filtered: boolean; t: Theme }): JSX.Element {
-  return <div style={emptyStyle(t)}><Search size={16} color={t.textMuted} />{filtered ? 'No local traces match these filters.' : 'No local Ask traces have been recorded yet. Run an Ask, then return here to inspect its typed execution evidence.'}</div>;
+function CatalogEmpty({ filtered, snowflakeApp, t }: { filtered: boolean; snowflakeApp: boolean; t: Theme }): JSX.Element {
+  return <div style={emptyStyle(t)}><Search size={16} color={t.textMuted} />{traceCatalogEmptyWords(filtered, snowflakeApp).empty}</div>;
 }
 
 function displayStatus(status: AskTraceEnvelopeV1['status']): string {

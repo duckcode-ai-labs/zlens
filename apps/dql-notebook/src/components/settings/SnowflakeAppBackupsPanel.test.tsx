@@ -34,6 +34,9 @@ describe('Settings » Backups in the ZLens app for Snowflake', () => {
     expect(html).toContain('restore_backup(&#x27;ZLENS_BACKUP_20261109_220000&#x27;)');
     expect(html).toContain('zlens-zlens_app-20261109_220000.tar.gz');
     expect(html).toContain('MY_DB.TOOLS.ZLENS_BACKUPS');
+    // V2: no laptop in the app for Snowflake; a new install offers the newest copy.
+    expect(html).not.toMatch(/laptop/i);
+    expect(html).toContain('a new install of ZLens offers to restore the newest one');
   });
 
   it('offers to restore the newest copy only on an empty project with copies in the stage', () => {

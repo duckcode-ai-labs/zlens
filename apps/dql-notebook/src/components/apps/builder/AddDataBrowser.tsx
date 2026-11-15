@@ -12,7 +12,7 @@ import { CertifiedReceiptNote, CheckedReceiptNote } from './CertifiedReceiptNote
 import { CertifyReviewDialog } from './CertifyReviewDialog';
 import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
 import { groupDatasetFields } from './field-query';
-import { humanize, messageOf } from './studio-ui';
+import { dataName, humanize, messageOf } from './studio-ui';
 import { TableDatasetDialog } from './TableDatasetDialog';
 import { SavedQueryFieldsDialog } from './SavedQueryFieldsDialog';
 import { appDataSameNameOrigins, madeTableTrustWords, tableTrustLine, tableTrustWords } from './app-data-names';
@@ -287,7 +287,7 @@ export function AddDataBrowser({
   const certified = (sourceId: string, certification: CertificationByline | undefined) => {
     const item = certifyFor;
     setCertifyFor(null);
-    setReceiptNotice(certification ? { name: item ? humanize(item.name) : '', kind: 'certified', byline: certification } : null);
+    setReceiptNotice(certification ? { name: item ? dataName(item.name) : '', kind: 'certified', byline: certification } : null);
     setReloadNonce((current) => current + 1);
     setHighlightId(sourceId);
     onCertified?.(sourceId);
@@ -453,15 +453,15 @@ function AddDataRow({
   const snowflake = useSnowflakeApp();
   const meta = [origin, dataTrustLabel(item), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', ownerWords(item, { snowflake })].filter(Boolean).join(' · ');
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} role="listitem" data-source-id={sourceId} data-origin={origin}>
-    <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
+    <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${dataName(item.name)}`}>
       <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-      <div><strong title={item.name}>{humanize(item.name)}{sameNameOrigin ? <em className="same-name-origin"> · {sameNameOrigin}</em> : null}</strong><small {...(trustDetail ? { title: trustDetail } : {})}>{meta}</small>{item.description ? <p>{item.description}</p> : null}</div>
+      <div><strong title={item.name}>{dataName(item.name)}{sameNameOrigin ? <em className="same-name-origin"> · {sameNameOrigin}</em> : null}</strong><small {...(trustDetail ? { title: trustDetail } : {})}>{meta}</small>{item.description ? <p>{item.description}</p> : null}</div>
       <ChevronDown size={14} className="chevron" aria-hidden="true" />
     </button>
     <div className="add-data-action">
       {added
-        ? <><span className="add-data-added"><Check size={13} /> Added</span><RemoveDataButton name={humanize(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={disabled} onRemove={onRemove} /></>
-        : <button type="button" className="primary" disabled={disabled || adding} onClick={() => onAdd(false)} aria-label={`Add to App: ${humanize(item.name)}`}>{adding ? 'Adding…' : <><Plus size={13} /> Add to App</>}</button>}
+        ? <><span className="add-data-added"><Check size={13} /> Added</span><RemoveDataButton name={dataName(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={disabled} onRemove={onRemove} /></>
+        : <button type="button" className="primary" disabled={disabled || adding} onClick={() => onAdd(false)} aria-label={`Add to App: ${dataName(item.name)}`}>{adding ? 'Adding…' : <><Plus size={13} /> Add to App</>}</button>}
       {onMakeRowLevel || onCertify ? <span className="add-data-more-menu">
         <button type="button" className="more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`More for ${humanize(item.name)}`} disabled={disabled} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={14} /></button>
         {menuOpen ? <span className="add-data-menu" role="menu" aria-label={`More for ${humanize(item.name)}`}>

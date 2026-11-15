@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { BlockDetailView, certificationReceiptTechnical, IMPORT_SOURCE_EXPORT_HINT, importSourceUploadNote } from './BlockStudio';
-import { CertificationReportLines, comparedSinceCertified, DIFFERS_SINCE_CERTIFIED, DiffersSinceCertifiedBadge, reportCheckStatusWords, reportMatchReceipt } from './SavedQueryReportCheck';
+import { CertificationReportLines, certificationReportView, comparedSinceCertified, DIFFERS_SINCE_CERTIFIED, DiffersSinceCertifiedBadge, receiptLineDay, reportCheckStatusWords, reportMatchReceipt, wordsOnViewerClock } from './SavedQueryReportCheck';
 import { ComparisonResult, recordedWords } from './ReportComparePanel';
 import type { ReportComparison, ReportQueryMatch } from '../../store/types';
 import { themes } from '../../themes/notebook-theme';
@@ -87,7 +87,8 @@ describe('the compare box on the saved query page', () => {
   });
 
   it('says what the last comparison found, or that there is none yet', () => {
-    expect(reportCheckStatusWords({ match: { verdict: 'matches', words: MATCH, report: 'warriors_regular_wins_2014_2018', comparedAt: '2026-11-11T22:40:00Z' } })).toBe(`Last compared: ${MATCH}.`);
+    // The day is said on the viewer's clock (V2).
+    expect(reportCheckStatusWords({ match: { verdict: 'matches', words: MATCH, report: 'warriors_regular_wins_2014_2018', comparedAt: '2026-11-11T22:40:00Z' } })).toBe(`Last compared: ${wordsOnViewerClock(MATCH, '2026-11-11T22:40:00Z')}.`);
     expect(reportCheckStatusWords({ match: null })).toContain('Not compared with an old report yet.');
     expect(reportCheckStatusWords({ match: null, unreadable: "The record of its comparison with the old report can't be read." })).toContain("can't be read");
   });
@@ -116,41 +117,42 @@ describe('V14: one rule for a certified query compared again later', () => {
   const certifiedAt = receipt.certifiedAt; // 2026-11-11T22:44:27Z
 
   it('finds a comparison only when it was made after the query was certified', () => {
-    expect(comparedSinceCertified(certifiedAt, later('differs', '2026-11-14T22:20:00.000Z'))?.verdict).toBe('differs');
+    expect(comparedSinceCertified(certifiedAt, later('differs', '2026-11-14T12:20:00.000Z'))?.verdict).toBe('differs');
     // Made before certifying: the receipt already states it.
     expect(comparedSinceCertified(certifiedAt, later('differs', '2026-11-11T22:40:00.000Z'))).toBeNull();
     expect(comparedSinceCertified(certifiedAt, { match: null })).toBeNull();
-    expect(comparedSinceCertified(undefined, later('differs', '2026-11-14T22:20:00.000Z'))).toBeNull();
-    expect(comparedSinceCertified('not a date', later('differs', '2026-11-14T22:20:00.000Z'))).toBeNull();
+    expect(comparedSinceCertified(undefined, later('differs', '2026-11-14T12:20:00.000Z'))).toBeNull();
+    expect(comparedSinceCertified('not a date', later('differs', '2026-11-14T12:20:00.000Z'))).toBeNull();
   });
 
   it('keeps the receipt\'s line from when it was certified, and shows the later Differs beside it', () => {
-    const since = comparedSinceCertified(certifiedAt, later('differs', '2026-11-14T22:20:00.000Z'));
-    const html = renderToStaticMarkup(<CertificationReportLines certification={receipt} since={since} t={themes.paper} />);
+    const view = certificationReportView(receipt, later('differs', '2026-11-14T12:20:00.000Z'));
+    const html = renderToStaticMarkup(<CertificationReportLines view={view} t={themes.paper} />);
     // Then: still Matches, said as of certification.
     expect(html).toContain(`Old report when certified: ${MATCH}`);
     // Since: the later Differs, beside it.
     expect(html).toContain('data-testid="block-certification-report-since"');
-    expect(html).toContain('Old report since certified: Differs from warriors_regular_wins_2014_2018_edited, 2026-11-14');
+    expect(html).toContain(`Old report since certified: ${wordsOnViewerClock(later('differs', '2026-11-14T12:20:00.000Z').match!.words, '2026-11-14T12:20:00.000Z')}`);
     expect(html.indexOf('when certified')).toBeLessThan(html.indexOf('since certified'));
   });
 
   it('says the same about a Differs made before certifying: it is on the receipt, as of certification, with no warning', () => {
-    const differs = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-12: 4 of 5 values at whole numbers';
+    const differs = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-11: 4 of 5 values at whole numbers';
     const certification = { ...receipt, checks: ['run'], warnings: [differs] };
-    const since = comparedSinceCertified(certifiedAt, later('differs', '2026-11-11T22:30:00.000Z'));
-    const html = renderToStaticMarkup(<CertificationReportLines certification={certification} since={since} t={themes.paper} />);
-    expect(html).toContain(`Old report when certified: ${differs}`);
+    const view = certificationReportView(certification, { match: { verdict: 'differs', words: differs, report: 'warriors_regular_wins_2014_2018_edited', comparedAt: '2026-11-11T12:30:00.000Z' } });
+    const html = renderToStaticMarkup(<CertificationReportLines view={view} t={themes.paper} />);
+    expect(html).toContain(`Old report when certified: ${wordsOnViewerClock(differs, '2026-11-11T12:30:00.000Z')}`);
     expect(html).not.toContain('since certified');
-    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={since} />)).toBe('');
+    expect(html).not.toContain('not compared');
+    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={view.since} />)).toBe('');
   });
 
   it('puts a short warning next to Certified only for a Differs after certification', () => {
-    const differs = renderToStaticMarkup(<DiffersSinceCertifiedBadge since={comparedSinceCertified(certifiedAt, later('differs', '2026-11-14T22:20:00.000Z'))} />);
+    const differs = renderToStaticMarkup(<DiffersSinceCertifiedBadge since={comparedSinceCertified(certifiedAt, later('differs', '2026-11-14T12:20:00.000Z'))} />);
     expect(differs).toContain('data-testid="block-certification-differs-since"');
     expect(differs).toContain(DIFFERS_SINCE_CERTIFIED);
     expect(DIFFERS_SINCE_CERTIFIED.length).toBeLessThan(60);
-    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={comparedSinceCertified(certifiedAt, later('matches', '2026-11-14T22:20:00.000Z'))} />)).toBe('');
+    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={comparedSinceCertified(certifiedAt, later('matches', '2026-11-14T12:20:00.000Z'))} />)).toBe('');
     expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={null} />)).toBe('');
   });
 
@@ -180,5 +182,85 @@ describe('V14: one rule for a certified query compared again later', () => {
     const html = renderToStaticMarkup(<ComparisonResult result={result('differs')} recording="with-compare" recorded certified onRecord={noop} primaryButton={{}} t={themes.paper} />);
     expect(html).toContain('It is already certified');
     expect(html).not.toContain('When you certify it');
+  });
+});
+
+describe('V2: a comparison made after certification is never "when certified"', () => {
+  // Certified at 08:00 UTC on 11 Nov: 11 Nov on every clock from UTC-8 to UTC+15.
+  const certification = { ...receipt, certifiedAt: '2026-11-11T08:00:00.000Z', checks: ['metadata', 'validation', 'run'] };
+  const differs13 = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-13: 4 of 5 values at whole numbers';
+  const standing = (words: string, comparedAt: string): ReportQueryMatch => ({
+    match: { verdict: words.startsWith('Matches') ? 'matches' : 'differs', words, report: 'warriors_regular_wins_2014_2018_edited', comparedAt },
+  });
+  const lines = (view: ReturnType<typeof certificationReportView>) => renderToStaticMarkup(<CertificationReportLines view={view} t={themes.paper} />);
+
+  it('reads the day a receipt line names', () => {
+    expect(receiptLineDay(differs13)).toBe('2026-11-13');
+    expect(receiptLineDay(MATCH)).toBe('2026-11-11');
+    expect(receiptLineDay('Differs from sales_2026-01-01, 2026-11-12: 1 of 3 values at cents')).toBe('2026-11-12');
+    expect(receiptLineDay('run')).toBeUndefined();
+  });
+
+  it('a later Differs on the receipt with nothing at certification: "not compared" then, the Differs since, and the warning', () => {
+    // The receipt carries a line about a comparison made after it was certified (the V14 retest's 11 Nov query).
+    const onReceipt = { ...certification, warnings: [differs13] };
+    const view = certificationReportView(onReceipt, standing(differs13, '2026-11-13T12:00:00.000Z'));
+    const html = lines(view);
+    expect(html).toContain('Old report when certified: not compared');
+    expect(html).toContain(`Old report since certified: ${wordsOnViewerClock(differs13, '2026-11-13T12:00:00.000Z')}`);
+    expect(html).not.toContain('Old report when certified: Differs');
+    expect(html.indexOf('when certified')).toBeLessThan(html.indexOf('since certified'));
+    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={view.since} />)).toContain(DIFFERS_SINCE_CERTIFIED);
+  });
+
+  it('says the same by the line\'s own day when the comparison\'s time is not to hand', () => {
+    const view = certificationReportView({ ...certification, warnings: [differs13] }, null);
+    expect(view.notCompared).toBe(true);
+    expect(view.then).toEqual([]);
+    expect(view.since).toEqual({ verdict: 'differs', words: differs13 });
+    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={view.since} />)).toContain(DIFFERS_SINCE_CERTIFIED);
+  });
+
+  it('a query certified without a comparison and compared since: "not compared" then, the comparison since', () => {
+    const view = certificationReportView(certification, standing(differs13, '2026-11-13T12:00:00.000Z'));
+    const html = lines(view);
+    expect(html).toContain('Old report when certified: not compared');
+    expect(html).toContain('Old report since certified: Differs from');
+    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={view.since} />)).toContain(DIFFERS_SINCE_CERTIFIED);
+  });
+
+  it('keeps a Matches at certification as "when certified", beside a later Differs', () => {
+    const atCertification = 'Matches warriors_regular_wins_2014_2018 · every value compared (5 of 5 at whole numbers, 2026-11-11)';
+    const view = certificationReportView({ ...certification, checks: ['run', atCertification], warnings: [differs13] }, standing(differs13, '2026-11-13T12:00:00.000Z'));
+    const html = lines(view);
+    expect(html).toContain(`Old report when certified: ${atCertification}`);
+    expect(html).toContain('Old report since certified: Differs from');
+    expect(html).not.toContain('not compared');
+  });
+
+  it('a comparison made minutes before certifying, after midnight UTC, stays "when certified", on the viewer\'s clock', () => {
+    // 10:30 PM and 10:44 PM on 11 Nov in California: the server wrote the comparison's day as 2026-11-12 (UTC).
+    const serverWords = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-12: 4 of 5 values at whole numbers';
+    const comparedAt = '2026-11-12T06:30:00.000Z';
+    const view = certificationReportView({ ...certification, certifiedAt: '2026-11-12T06:44:27.000Z', warnings: [serverWords] }, standing(serverWords, comparedAt));
+    expect(view.since).toBeNull();
+    expect(view.notCompared).toBe(false);
+    expect(view.then).toEqual([{ line: wordsOnViewerClock(serverWords, comparedAt), matched: false }]);
+    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={view.since} />)).toBe('');
+  });
+
+  it('says a comparison\'s day on the viewer\'s clock, and leaves words with no day alone', () => {
+    const comparedAt = '2026-11-12T06:30:00.000Z';
+    const date = new Date(comparedAt);
+    const local = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    expect(wordsOnViewerClock('Differs from x, 2026-11-12: 4 of 5 values', comparedAt)).toBe(`Differs from x, ${local}: 4 of 5 values`);
+    expect(wordsOnViewerClock('Differs from x: 4 of 5 values', comparedAt)).toBe('Differs from x: 4 of 5 values');
+    expect(reportCheckStatusWords(standing('Differs from x, 2026-11-12: 4 of 5 values', comparedAt))).toBe(`Last compared: Differs from x, ${local}: 4 of 5 values.`);
+  });
+
+  it('a query never compared says nothing about an old report', () => {
+    const view = certificationReportView(certification, { match: null });
+    expect(view).toEqual({ then: [], notCompared: false, since: null });
+    expect(lines(view)).toBe('');
   });
 });

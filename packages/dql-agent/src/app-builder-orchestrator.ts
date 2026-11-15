@@ -1549,7 +1549,7 @@ function normalizeComponents(
       role: split.role,
       view,
       ...(style ? { style } : {}),
-      rationale: plainPlannerText(stringValue(record.rationale) ?? 'Selected from the bounded App source candidate set.'),
+      rationale: plannerReasonText(stringValue(record.rationale) ?? 'Selected from the bounded App source candidate set.'),
     }];
   });
 }
@@ -1568,6 +1568,23 @@ export function plainPlannerText(text: string): string {
     .replace(/\bsourceId\b/g, 'data')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+/**
+ * A planner's "Why" line in App Studio's words (V14 retest: every reason read "Certified block …"). A block is a
+ * saved query to a person, and a source id ("dql:block:top_customers") is named by its name.
+ */
+export function plannerReasonText(text: string): string {
+  // Capitalized only where a sentence starts.
+  const said = (replacement: string) => (match: string, offset: number, whole: string) => (
+    /^[A-Z]/.test(match) && (offset === 0 || /[.!?:]\s+$/.test(whole.slice(0, offset)))
+      ? `${replacement.charAt(0).toUpperCase()}${replacement.slice(1)}`
+      : replacement
+  );
+  return plainPlannerText(text)
+    .replace(/\bdql:block:([A-Za-z0-9_.-]+)/g, '$1')
+    .replace(/\b(?:DQL )?blocks\b/gi, said('saved queries'))
+    .replace(/\b(?:DQL )?block\b/gi, said('saved query'));
 }
 
 /** A chart style without its sort. */

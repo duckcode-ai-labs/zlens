@@ -5,6 +5,8 @@ import type { ThemeMode } from '../../store/types';
 import { STATUS_COLORS, pickableBlocks, type BlockEntry } from './block-types';
 import { useNotebook } from '../../store/NotebookStore';
 import { authoredDomainIds, authoredDomainOptions } from '../domains/authored-domain-options';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { savedQueryTagsShown } from '../../snowflake-app/snowflake-app-words';
 
 export type { BlockEntry } from './block-types';
 
@@ -160,6 +162,7 @@ function BlockRow({
   compact: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
+  const snowflakeApp = useSnowflakeApp();
   const statusColor = STATUS_COLORS[block.status] ?? t.textMuted;
   return (
     <button
@@ -211,7 +214,7 @@ function BlockRow({
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: t.textMuted }}>
         <span style={{ background: t.pillBg, padding: '1px 6px', borderRadius: 4 }}>{block.domain || 'no domain'}</span>
         {block.owner && <span>by {block.owner}</span>}
-        {(block.tags ?? []).slice(0, compact ? 2 : 4).map((tag) => (
+        {savedQueryTagsShown(block.tags, snowflakeApp).slice(0, compact ? 2 : 4).map((tag) => (
           <span key={tag} style={{ background: t.pillBg, padding: '1px 6px', borderRadius: 4 }}>#{tag}</span>
         ))}
       </div>
