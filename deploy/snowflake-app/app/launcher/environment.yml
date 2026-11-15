@@ -1,0 +1,7 @@
+# The launcher's Streamlit version, from Snowflake's own package channel (no outside access).
+# Open ZLens uses st.link_button (Streamlit 1.27 or later); without this file apps get 1.22.0.
+name: sf_env
+channels:
+  - snowflake
+dependencies:
+  - streamlit=1.35.0

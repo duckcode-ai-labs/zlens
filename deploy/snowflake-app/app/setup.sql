@@ -185,7 +185,8 @@ BEGIN
   endpoints := (EXECUTE IMMEDIATE 'SHOW ENDPOINTS IN SERVICE core.zlens');
   LET c CURSOR FOR endpoints;
   FOR endpoint IN c DO
-    IF (endpoint."ingress_url" LIKE '%snowflakecomputing.app%') THEN
+    -- Endpoints move from *.snowflakecomputing.app to *.snowflake.app (Snowflake behavior change 2451).
+    IF (endpoint."ingress_url" LIKE '%.snowflakecomputing.app%' OR endpoint."ingress_url" LIKE '%.snowflake.app%') THEN
       url := 'https://' || endpoint."ingress_url";
     END IF;
   END FOR;
@@ -281,3 +282,122 @@ CREATE OR REPLACE VIEW app_public.history AS
   SELECT changed_at, changed_by, item, kind, version, change, certified
   FROM core.history_log;
 GRANT SELECT ON VIEW app_public.history TO APPLICATION ROLE app_admin;
+
+-- Launch app (V2): Snowsight's Launch app button opens this page (manifest default_streamlit). It
+-- starts ZLens when it has stopped, waits until Snowflake reports it READY, and only then offers
+-- Open ZLens and its address, so no one lands on Snowflake's "service is not yet running" page. It
+-- reads no customer data and calls nothing outside Snowflake: only the two procedures below. It runs
+-- on the app's own extra-small warehouse, which an open page keeps running (about 15 minutes after
+-- its last use). app_url() stays for SQL.
+
+-- The state the launcher shows: the service status, its address and the configured ZLens user.
+-- Starts nothing. READY means the service is RUNNING and its container reports READY (a service
+-- reports RUNNING; READY is its container's state); RUNNING with a container not ready yet is PENDING.
+CREATE OR REPLACE PROCEDURE app_public.launcher_status()
+RETURNS VARIANT
+LANGUAGE SQL
+AS
+$$
+DECLARE
+  svc_status VARCHAR DEFAULT '';
+  url VARCHAR DEFAULT '';
+  zlens_user VARCHAR DEFAULT '';
+  ready_containers INTEGER DEFAULT 0;
+  other_containers INTEGER DEFAULT 0;
+  services RESULTSET;
+  containers RESULTSET;
+  endpoints RESULTSET;
+BEGIN
+  BEGIN
+    services := (EXECUTE IMMEDIATE 'SHOW SERVICES LIKE ''ZLENS'' IN SCHEMA core');
+    LET sc CURSOR FOR services;
+    FOR svc IN sc DO
+      svc_status := UPPER(svc."status");
+    END FOR;
+  EXCEPTION WHEN OTHER THEN
+    NULL;
+  END;
+  IF (svc_status = 'RUNNING') THEN
+    BEGIN
+      containers := (EXECUTE IMMEDIATE 'SHOW SERVICE CONTAINERS IN SERVICE core.zlens');
+      LET cc CURSOR FOR containers;
+      FOR ctr IN cc DO
+        IF (UPPER(ctr."status") = 'READY') THEN
+          ready_containers := ready_containers + 1;
+        ELSE
+          other_containers := other_containers + 1;
+        END IF;
+      END FOR;
+    EXCEPTION WHEN OTHER THEN
+      NULL;
+    END;
+    svc_status := IFF(ready_containers > 0 AND other_containers = 0, 'READY', 'PENDING');
+  END IF;
+  BEGIN
+    endpoints := (EXECUTE IMMEDIATE 'SHOW ENDPOINTS IN SERVICE core.zlens');
+    LET c CURSOR FOR endpoints;
+    FOR endpoint IN c DO
+      IF (endpoint."ingress_url" LIKE '%.snowflakecomputing.app%' OR endpoint."ingress_url" LIKE '%.snowflake.app%') THEN
+        url := 'https://' || endpoint."ingress_url";
+      END IF;
+    END FOR;
+  EXCEPTION WHEN OTHER THEN
+    NULL;
+  END;
+  BEGIN
+    SELECT COALESCE(SYS_CONTEXT('SNOWFLAKE$APPLICATION', 'GET_CONFIGURATION_VALUE', 'ZLENS_USER'), '') INTO :zlens_user;
+  EXCEPTION WHEN OTHER THEN
+    NULL;
+  END;
+  RETURN OBJECT_CONSTRUCT('status', :svc_status, 'url', :url, 'zlens_user', :zlens_user);
+END;
+$$;
+GRANT USAGE ON PROCEDURE app_public.launcher_status() TO APPLICATION ROLE app_user;
+
+-- Starts ZLens when it has stopped and returns at once (the launcher then reads the state every few
+-- seconds). Anything else (starting, stopping, ready) is left alone. The same start as app_url().
+CREATE OR REPLACE PROCEDURE app_public.launcher_start()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+  svc_status VARCHAR DEFAULT '';
+  pool VARCHAR;
+  services RESULTSET;
+BEGIN
+  pool := CURRENT_DATABASE() || '_POOL';
+  services := (EXECUTE IMMEDIATE 'SHOW SERVICES LIKE ''ZLENS'' IN SCHEMA core');
+  LET sc CURSOR FOR services;
+  FOR svc IN sc DO
+    svc_status := UPPER(svc."status");
+  END FOR;
+  IF (svc_status = 'SUSPENDED') THEN
+    BEGIN
+      ALTER COMPUTE POOL IDENTIFIER(:pool) RESUME;
+    EXCEPTION WHEN OTHER THEN NULL;  -- already running, or it resumes with the service
+    END;
+    BEGIN
+      ALTER SERVICE core.zlens RESUME;
+    EXCEPTION WHEN OTHER THEN NULL;  -- already starting
+    END;
+    RETURN 'starting';
+  END IF;
+  RETURN LOWER(:svc_status);
+END;
+$$;
+GRANT USAGE ON PROCEDURE app_public.launcher_start() TO APPLICATION ROLE app_user;
+
+-- The page itself, on the app's own warehouse (created by core.ensure_zlens above), so no one is
+-- asked to pick one.
+EXECUTE IMMEDIATE $$
+DECLARE
+  stmt VARCHAR;
+BEGIN
+  stmt := 'CREATE OR REPLACE STREAMLIT app_public.launcher FROM ''/launcher'' MAIN_FILE = ''launcher.py'' TITLE = ''ZLens'' QUERY_WAREHOUSE = ' || CURRENT_DATABASE() || '_WH';
+  EXECUTE IMMEDIATE :stmt;
+  RETURN 'ok';
+END;
+$$;
+GRANT USAGE ON STREAMLIT app_public.launcher TO APPLICATION ROLE app_user;
+GRANT USAGE ON STREAMLIT app_public.launcher TO APPLICATION ROLE app_admin;
