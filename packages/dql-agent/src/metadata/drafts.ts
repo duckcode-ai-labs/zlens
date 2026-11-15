@@ -134,6 +134,17 @@ export function normalizeDraftQuestion(question: string): string {
   return withoutTrailing(folded, '?.!;:,').trim();
 }
 
+/**
+ * The words of a question, for "the same question asked again": case, punctuation, quotes and possessives ignored
+ * ("the Warriors' wins?" and "the warriors wins" are one question).
+ */
+export function draftQuestionKey(question: string): string {
+  return normalizeDraftQuestion(question)
+    .replace(/'s\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 /** Snake_case identifier rule the namer enforces: `^[a-z][a-z0-9_]*$`. */
 const SEMANTIC_NAME_RE = /^[a-z][a-z0-9_]*$/;
 
@@ -350,7 +361,14 @@ export function upsertGeneratedDqlArtifactDraft(
  * certify it later. Never certified: the draft's status is always `draft`.
  */
 export interface ReviewRequiredAnswerDraftRecord {
+  /** The question the draft is named and filed under: the asked words, or a follow-up's reading. */
   question: string;
+  /**
+   * The words the person asked, as they stand on their own (a follow-up carries the question it follows). A
+   * repeat is the same question by these words even when the AI's reading of it came out worded differently
+   * (new-user test V13: drafts went from 38 to 45 on repeats). Recorded as the draft's source question.
+   */
+  askedQuestion?: string;
   /** The SQL that produced the answer (compiled SQL of the DQL artifact when there is one). */
   sql: string;
   /** The transient DQL artifact the answer ran; its source is saved as the draft body. */
@@ -457,7 +475,9 @@ export function upsertReviewRequiredAnswerDraft(
   // A saved query a person wrote under the same name is never taken over: the draft gets the next free name.
   const atSlug = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : undefined;
   const slugIsAskDraft = atSlug !== undefined && automaticAskDraftState(atSlug) !== undefined;
-  const sameQuestion = slugIsAskDraft ? relativePath : findReviewDraftByQuestion(projectRoot, rec.question);
+  // The same question by its asked words, when the reading it is filed under came out worded differently.
+  const sameQuestion = slugIsAskDraft ? relativePath
+    : findReviewDraftByQuestion(projectRoot, rec.question) ?? (rec.askedQuestion ? findReviewDraftByQuestion(projectRoot, rec.askedQuestion) : undefined);
   if (sameQuestion) {
     const existingPath = join(projectRoot, sameQuestion);
     const existing = readFileSync(existingPath, 'utf-8');
@@ -501,14 +521,14 @@ function reviewDraftBody(
         question: rec.question,
         proposedContractId: draft.proposedContractId,
         proposedDomain: draft.proposedDomain,
-        sourceQuestion: rec.question,
+        sourceQuestion: rec.askedQuestion?.trim() || rec.question,
         dqlArtifact: {
           kind: (rec.dqlArtifact?.kind ?? 'sql_block'),
           source: withProposedDomain(renameDraftBlock(forceDraftStatus(artifactSource), draft.slug), draft.proposedDomain),
           ...(rec.dqlArtifact?.name ? { name: rec.dqlArtifact.name } : {}),
         } as GeneratedDraftSourceDqlArtifact,
       }, relativePath, draft.owner, { answerFingerprint: draft.fingerprint, sourceRunId: rec.runId })
-    : renderGeneratedDraft({ slug: draft.slug, question: rec.question, proposedSql: rec.sql, proposedContractId: draft.proposedContractId, proposedDomain: draft.proposedDomain, owner: draft.owner, answerFingerprint: draft.fingerprint, sourceRunId: rec.runId }, relativePath);
+    : renderGeneratedDraft({ slug: draft.slug, question: rec.question, ...(rec.askedQuestion?.trim() ? { sourceQuestion: rec.askedQuestion.trim() } : {}), proposedSql: rec.sql, proposedContractId: draft.proposedContractId, proposedDomain: draft.proposedDomain, owner: draft.owner, answerFingerprint: draft.fingerprint, sourceRunId: rec.runId }, relativePath);
 }
 
 // ── Automatic Ask drafts: which ones Ask wrote, and which nobody has changed ──
@@ -625,7 +645,7 @@ export function clearAutomaticAskDrafts(projectRoot: string): { removed: string[
 
 /** The automatic draft already saved for this question (by its words, case and closing punctuation ignored). */
 export function findReviewDraftByQuestion(projectRoot: string, question: string): string | undefined {
-  const wanted = normalizeDraftQuestion(question);
+  const wanted = draftQuestionKey(question);
   if (!wanted) return undefined;
   let found: string | undefined;
   visitDraftFiles(projectRoot, (relativePath, filePath) => {
@@ -635,7 +655,7 @@ export function findReviewDraftByQuestion(projectRoot: string, question: string)
     const asked = [
       /^\s*source_question\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(content)?.[1],
       /\bexamples\s*=\s*\[\s*\{\s*question\s*=\s*"((?:[^"\\]|\\.)*)"/.exec(content)?.[1],
-    ].filter((value): value is string => Boolean(value)).map((value) => normalizeDraftQuestion(value.replace(/\\"/g, '"').replace(/\\\\/g, '\\')));
+    ].filter((value): value is string => Boolean(value)).map((value) => draftQuestionKey(value.replace(/\\"/g, '"').replace(/\\\\/g, '\\')));
     if (asked.includes(wanted)) { found = relativePath; return true; }
   });
   return found;

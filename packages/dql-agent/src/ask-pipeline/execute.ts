@@ -16,7 +16,7 @@ import { divideDecimal, formatDecimal, parseExactDecimal, subtractDecimal } from
 export interface ResultColumnMeta {
   name: string;
   kind: 'currency' | 'percent' | 'number' | 'count' | 'duration' | 'date' | 'text' | 'boolean';
-  /** `USD` for currency; `fraction` (0.626) or `percentage_points` (10.8) for percent. */
+  /** `USD` for currency; for a percent `fraction` (0.626 is 62.6%), `percent` (62.6, already on the 0-100 scale) or `percentage_points` (10.8, a difference between two percentages: 10.8 pp). */
   unit?: string;
   decimals?: number;
   /** The vocabulary ref the column carries, when known. */

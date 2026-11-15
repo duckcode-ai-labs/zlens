@@ -16,6 +16,8 @@ import { upsertReviewRequiredAnswerDraft, type AgentRun, type AgentRunReviewDraf
 
 interface ReviewAnswer {
   question: string;
+  /** The asked words as they stand on their own, the key a repeat is found by (see askedQuestionOf). */
+  askedQuestion?: string;
   sql: string;
   dqlArtifact?: { source: string; name?: string; kind?: string };
   domain?: string;
@@ -52,8 +54,22 @@ export function standaloneQuestionOf(run: Pick<AgentRun, 'question' | 'conversat
   return carried || FOLLOW_UP_WORDS.test(run.question) ? reading : run.question;
 }
 
+/**
+ * THE SAME QUESTION ASKED AGAIN FINDS ITS DRAFT, whatever the AI's reading of it said this time. A question whose
+ * words stand on their own is found by those words; a follow-up ("Which of those had a winning record?") by the
+ * question it followed and its own words, and only when that question is known (new-user test V13: repeats whose
+ * reading came out worded differently made new drafts, 38 to 45).
+ */
+export function askedQuestionOf(run: Pick<AgentRun, 'question'>, priorQuestion?: string): string | undefined {
+  const asked = run.question.replace(/\s+/g, ' ').trim();
+  if (!asked) return undefined;
+  if (!FOLLOW_UP_WORDS.test(asked)) return asked;
+  const prior = priorQuestion?.replace(/\s+/g, ' ').trim();
+  return prior ? `${prior} Then: ${asked}` : undefined;
+}
+
 /** The review-required answer a run produced, when it produced one worth keeping. */
-export function reviewRequiredAnswerOf(run: AgentRun): ReviewAnswer | null {
+export function reviewRequiredAnswerOf(run: AgentRun, options: { priorQuestion?: string } = {}): ReviewAnswer | null {
   if (run.status !== 'completed' && run.status !== 'needs_review') return null;
   // A certified answer already is a saved query; nothing to review.
   if (run.trustState === 'certified') return null;
@@ -73,8 +89,10 @@ export function reviewRequiredAnswerOf(run: AgentRun): ReviewAnswer | null {
     const sql = text(dql?.compiledSql) ?? text(payload.sql);
     if (!sql) continue;
     const source = text(dql?.source);
+    const askedQuestion = askedQuestionOf(run, options.priorQuestion);
     return {
       question: standaloneQuestionOf(run, payload),
+      ...(askedQuestion ? { askedQuestion } : {}),
       sql,
       ...(source ? { dqlArtifact: { source, ...(text(dql?.name) ? { name: text(dql?.name)! } : {}), ...(text(dql?.kind) ? { kind: text(dql?.kind)! } : {}) } } : {}),
       ...(text(payload.domain) ? { domain: text(payload.domain)! } : {}),
@@ -91,13 +109,14 @@ export function reviewRequiredAnswerOf(run: AgentRun): ReviewAnswer | null {
 export function captureReviewRequiredDraft(
   projectRoot: string,
   run: AgentRun,
-  options: { owner?: string } = {},
+  options: { owner?: string; priorQuestion?: string } = {},
 ): AgentRunReviewDraftV1 | undefined {
-  const answer = reviewRequiredAnswerOf(run);
+  const answer = reviewRequiredAnswerOf(run, options.priorQuestion ? { priorQuestion: options.priorQuestion } : {});
   if (!answer) return undefined;
   try {
     const saved = upsertReviewRequiredAnswerDraft(projectRoot, {
       question: answer.question,
+      ...(answer.askedQuestion ? { askedQuestion: answer.askedQuestion } : {}),
       sql: answer.sql,
       ...(answer.dqlArtifact ? { dqlArtifact: answer.dqlArtifact } : {}),
       ...(answer.domain ? { proposedDomain: answer.domain } : {}),

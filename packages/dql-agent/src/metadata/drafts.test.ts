@@ -5,7 +5,7 @@ import { buildManifest, parse } from '@zlens/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, readdirSync } from 'node:fs';
 import { utimesSync } from 'node:fs';
-import { automaticAskDraftState, clearAutomaticAskDrafts, deriveGeneratedDraftSlug, deriveReviewDraftSlug, deriveSemanticDraftName, listAutomaticAskDrafts, upsertGeneratedDqlArtifactDraft, upsertGeneratedDraft, upsertReviewRequiredAnswerDraft } from './drafts.js';
+import { automaticAskDraftState, clearAutomaticAskDrafts, deriveGeneratedDraftSlug, deriveReviewDraftSlug, deriveSemanticDraftName, draftQuestionKey, listAutomaticAskDrafts, upsertGeneratedDqlArtifactDraft, upsertGeneratedDraft, upsertReviewRequiredAnswerDraft } from './drafts.js';
 
 describe('generated draft blocks', () => {
   let projectRoot: string;
@@ -384,5 +384,43 @@ describe('fewer automatic Ask drafts (V13)', () => {
     expect(saved).toMatchObject({ created: true, path: 'blocks/_drafts/how_many_teams_2.dql' });
     expect(readFileSync(mine, 'utf-8')).toBe(original);
     expect(() => parse(readFileSync(join(projectRoot, saved.path), 'utf-8'), saved.path)).not.toThrow();
+  });
+});
+
+describe('a question asked again keeps one draft, whatever its reading said (V14, from the V13 retest: 38 to 45 drafts)', () => {
+  let projectRoot: string;
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'dql-ask-repeat-drafts-'));
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'drafts' }), 'utf-8');
+  });
+  afterEach(() => rmSync(projectRoot, { recursive: true, force: true }));
+  const draftFiles = (dir = join(projectRoot, 'blocks', '_drafts')) => existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith('.dql')) : [];
+
+  it('reads "the same question" by its words: case, punctuation and possessives aside', () => {
+    expect(draftQuestionKey("How many games did the Warriors' win?")).toBe(draftQuestionKey('how many games did the warriors win'));
+    expect(draftQuestionKey("Which team's arena is the biggest?")).toBe('which team arena is the biggest');
+  });
+
+  it('a repeat filed under a differently worded reading and other SQL finds the draft by the asked words, and counts the ask', () => {
+    const asked = 'Which teams did Kevin Durant play for, and in which seasons?';
+    const first = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'List the teams Kevin Durant played for in each season, from his player-season records', askedQuestion: asked, sql: 'SELECT season, team FROM player_games GROUP BY 1, 2' });
+    expect(first.created).toBe(true);
+    const again = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Teams and seasons Kevin Durant played in, by team nickname', askedQuestion: 'which teams did kevin durant play for and in which seasons', sql: 'SELECT s.season, t.nickname FROM games s JOIN teams t ON t.id = s.team GROUP BY 1, 2' });
+    expect(again).toMatchObject({ created: false, path: first.path, askedTimes: 2 });
+    expect(draftFiles()).toHaveLength(1);
+    // Nobody changed the draft, so it holds the newer answer and the words it was asked in.
+    const content = readFileSync(join(projectRoot, first.path), 'utf-8');
+    expect(content).toContain('source_question = "which teams did kevin durant play for and in which seasons"');
+    expect(content).toContain('t.nickname');
+    expect(() => parse(content, first.path)).not.toThrow();
+    // Asked a third time in the first words, it is still the one draft.
+    expect(upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Durant teams by season', askedQuestion: asked, sql: 'SELECT 3' })).toMatchObject({ created: false, path: first.path, askedTimes: 3 });
+  });
+
+  it('the same SQL asked in other words still reuses its draft, and another question gets its own', () => {
+    const first = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Home win percent', askedQuestion: 'What percentage of games does the home team win?', sql: 'SELECT AVG(home_win) FROM games' });
+    expect(upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Share of home wins', askedQuestion: 'How often does the home team win?', sql: 'select avg(home_win)  from games' })).toMatchObject({ created: false, path: first.path, askedTimes: 2 });
+    expect(upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Away win percent', askedQuestion: 'What percentage of games does the away team win?', sql: 'SELECT AVG(1 - home_win) FROM games' }).created).toBe(true);
+    expect(draftFiles()).toHaveLength(2);
   });
 });

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRun } from '@zlens/agent';
-import { captureReviewRequiredDraft, reviewRequiredAnswerOf, standaloneQuestionOf } from './review-draft-capture.js';
+import { askedQuestionOf, captureReviewRequiredDraft, reviewRequiredAnswerOf, standaloneQuestionOf } from './review-draft-capture.js';
 
 const roots: string[] = [];
 afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
@@ -102,5 +102,30 @@ describe('every Tier-2 (review-required) Ask answer leaves a durable draft', () 
     const first = captureReviewRequiredDraft(root, run());
     const again = captureReviewRequiredDraft(root, run({ id: 'run-3', question: 'which team had the most wins in season 2017' }, { sql: 'SELECT 79', dqlArtifact: undefined }));
     expect(again).toMatchObject({ path: first!.path, created: false, askedTimes: 2 });
+  });
+
+  it('a repeat in a long chat finds its draft by the asked words, however its reading came out (V14, from V13: drafts 38 to 45)', () => {
+    const root = project();
+    const asked = 'Which teams did Kevin Durant play for, and in which seasons?';
+    // In a long chat the turn is bound to the one before, so the draft is filed under its reading.
+    const first = captureReviewRequiredDraft(root, run({ question: asked, conversationBinding: 'prior_result' }, { askIntentV1: { reading: 'List the teams Kevin Durant played for in each season, from his player-season records' } }));
+    const again = captureReviewRequiredDraft(root, run({ id: 'run-4', question: asked, conversationBinding: 'prior_result' }, { askIntentV1: { reading: 'Teams and seasons for Kevin Durant by team nickname' }, sql: 'SELECT 1', dqlArtifact: undefined }));
+    expect(first!.created).toBe(true);
+    expect(again).toMatchObject({ path: first!.path, created: false, askedTimes: 2 });
+  });
+
+  it('a follow-up is found again by the question it followed and its own words, never by its few words alone', () => {
+    expect(askedQuestionOf({ question: 'Which teams did Kevin Durant play for, and in which seasons?' })).toBe('Which teams did Kevin Durant play for, and in which seasons?');
+    expect(askedQuestionOf({ question: 'Which of those had a winning record?' })).toBeUndefined();
+    expect(askedQuestionOf({ question: 'Which of those had a winning record?' }, 'Which 5 teams scored the most points per game in 2019?'))
+      .toBe('Which 5 teams scored the most points per game in 2019? Then: Which of those had a winning record?');
+    const root = project();
+    const prior = 'Which 5 teams scored the most points per game in 2019?';
+    const followUp = (id: string, reading: string) => run({ id, question: 'Which of those had a winning record?', conversationBinding: 'prior_result' }, { askIntentV1: { reading }, sql: `SELECT '${id}'`, dqlArtifact: undefined });
+    const first = captureReviewRequiredDraft(root, followUp('run-5', 'Of the 5 teams ranked by points per game in 2019, which had a winning record?'), { priorQuestion: prior });
+    const again = captureReviewRequiredDraft(root, followUp('run-6', 'Of the top 5 scoring teams of 2019, which won more than half their games?'), { priorQuestion: prior });
+    expect(again).toMatchObject({ path: first!.path, created: false, askedTimes: 2 });
+    // After another question, the same words are another question.
+    expect(captureReviewRequiredDraft(root, followUp('run-7', 'Of the 3 teams with the most rebounds, which had a winning record?'), { priorQuestion: 'Which 3 teams had the most rebounds?' })!.created).toBe(true);
   });
 });

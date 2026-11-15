@@ -71,6 +71,9 @@ describe('a declared units contract wins over the column name', () => {
   it('formats fractions, percentage points, counts, currency and grains by the meta', () => {
     expect(formatDisplayValue('drink_revenue_pct', 0.6263, [], { meta: { kind: 'percent', unit: 'fraction' } })).toBe('62.63%');
     expect(formatDisplayValue('revenue_growth_mom', 10.84, [], { meta: { kind: 'percent', unit: 'percentage_points', decimals: 1 } })).toBe('10.8 pp');
+    // A share already on the 0-100 scale is a percent, never "pp" (V13, Q14); pp is for a difference of two percents.
+    expect(formatDisplayValue('home_win_percent', 58.8, [], { meta: { kind: 'percent', unit: 'percent', decimals: 1 } })).toBe('58.8%');
+    expect(formatDisplayValue('home_win_percent', 58.7, [], { meta: { kind: 'percent', unit: 'percent' } })).toBe('58.7%');
     expect(formatDisplayValue('orders', 2085, [], { meta: { kind: 'count' } })).toBe('2,085');
     expect(formatDisplayValue('aov', 10.7364, [], { meta: { kind: 'currency', unit: 'USD' } })).toBe('$10.74');
     expect(formatDisplayValue('eu_revenue', 10.7364, [], { meta: { kind: 'currency', unit: 'EUR' } })).toMatch(/€10\.74/);

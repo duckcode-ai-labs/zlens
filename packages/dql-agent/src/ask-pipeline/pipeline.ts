@@ -3,7 +3,7 @@ import { withoutTrailing } from '../text-ends.js';
 import type { AgentProvider, ProviderRunOptions } from '../providers/types.js';
 import { executeCandidate, fillPeriodGaps, literalIsFieldName, relationName, statementFailure, type ExecuteDeps, type ExecutedRows } from './execute.js';
 import { describeIntent, intentExecutionFingerprint, intentRefs, type AnalyticalIntentV1, type IntentPredicate } from './intent.js';
-import { composeAnsweredText, composeAnswerRecord, composeFailedText, composeGapText, describeResultColumns, labelFor, type AskStoryStepV1, type ContextLedgerV1, type GapKind, type PipelineOutcome, type PipelineReceipt } from './outcomes.js';
+import { composeAnsweredText, composeAnswerRecord, composeFailedText, composeGapText, describeResultColumns, labelFor, scaledPercentUnit, withoutRepeatedColumns, type AskStoryStepV1, type ContextLedgerV1, type GapKind, type PipelineOutcome, type PipelineReceipt } from './outcomes.js';
 import { entails, prepare, type PrepareDeps, type PreparedCandidate, type PreparedRefusal, type PrepareResult } from './prepare/index.js';
 import { blocksNamedByQuestion } from './named-blocks.js';
 import { applySkillPolicies } from './policies.js';
@@ -13,6 +13,8 @@ import { isGovernedEntry, keepMembersApart, normalizeEffectiveIntent, resolveInt
 import { buildVocabularyIndex, renderCard, type RenderedCards, type VocabularyDomainHeader, type VocabularyEntry, type VocabularyIndex } from './vocabulary.js';
 import { readByOwnWords } from './lexical-reading.js';
 import { readByCertifiedQuestion } from './certified-question.js';
+import { clarificationForOpenQuestion, distinctOptions } from './vague-question.js';
+import { readingWithoutOtherTables } from './reading-tables.js';
 import { mergePhysicalRelationBinding, physicalRelationIdentity, physicalRelationText, samePhysicalRelation } from './physical-binding.js';
 
 /**
@@ -647,7 +649,36 @@ function settledResolution(intent: AnalyticalIntentV1, vocabulary: VocabularyInd
   return { status: 'resolved', intent: validation.intent, attempts: 0, problems: [] };
 }
 
+/**
+ * THE WAY A TURN ENDS, held to two rules whichever path got there (new-user test V13).
+ *
+ * A question that wrote no SQL because it names no measure or no period ("How are the Warriors doing lately?") is
+ * asked back, never reported as "Not in this data": that is only for what the data truly lacks (a payroll no table
+ * holds). And a clarification offers each choice once: two buttons both labelled "EFFICIENCY RATING" are one.
+ */
 export async function runAskPipeline(input: RunAskPipelineInput): Promise<PipelineOutcome> {
+  const outcome = await runAskPipelineOnce(input);
+  if (outcome.kind === 'clarify') {
+    const options = distinctOptions(outcome.options);
+    return options.length === outcome.options.length ? outcome : { ...outcome, options };
+  }
+  if (outcome.kind === 'gap' && (outcome.gap === 'not_modeled' || outcome.gap === 'ambiguous') && !outcome.executedSql) {
+    // An "ambiguous" gap may be about a name two members share: only the question's own words make it vague.
+    const question = clarificationForOpenQuestion(input.question, outcome.message, { wordsOnly: outcome.gap === 'ambiguous' });
+    if (!question) return outcome;
+    const receipt = outcome.receipt;
+    delete receipt.failure;
+    const entry: AskStoryStepV1 = { version: 1, phase: 'read', title: 'The question names no measure or no period: asked which one it means', state: 'done', at: Date.now(), detail: outcome.message.slice(0, 600) };
+    (receipt.story ??= []).push(entry);
+    try { input.onStep?.(entry); } catch { /* a progress view never fails a run */ }
+    const intent: AnalyticalIntentV1 = outcome.intent ?? { version: 1, kind: 'analytics', reading: input.question, measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' } as AnalyticalIntentV1;
+    receipt.intent = intent; receipt.reading = intent.reading;
+    return { kind: 'clarify', intent, question, options: [], text: question, receipt };
+  }
+  return outcome;
+}
+
+async function runAskPipelineOnce(input: RunAskPipelineInput): Promise<PipelineOutcome> {
   // A settled reading stands in for the question wherever later stages quote it.
   const settled = input.resolvedIntent;
   if (settled) input = { ...input, question: settled.intent.reading || input.question };
@@ -829,17 +860,27 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       // The host may correct a reading the statement proved wrong (it said a restriction could not be applied,
       // and the statement applies it): the answer, the receipt and what is saved from them read the correction.
       const corrected = candidate.proof.find((line) => line.startsWith('reading: '))?.slice('reading: '.length).trim();
-      const reading = corrected ? { ...asRead, reading: corrected } : asRead;
+      const settledReading = corrected ? { ...asRead, reading: corrected } : asRead;
+      // The reading names only the tables the SQL read, or none (new-user test V13, K3: "per the player season
+      // facts" above a Source line naming LOCAL_PLAYER_GAME_FACTS).
+      const knownTables = input.vocabulary.entries.filter((entry) => entry.kind === 'relation')
+        .flatMap((entry) => [entry.physical?.binding ? physicalRelationText(entry.physical.binding) : '', entry.physical?.relation ?? '', entry.model ?? '', entry.name])
+        .filter(Boolean);
+      const heldReading = readingWithoutOtherTables(settledReading.reading, candidate.relations ?? [], knownTables);
+      const reading = heldReading && heldReading !== settledReading.reading ? { ...settledReading, reading: heldReading } : settledReading;
       receipt.intent = reading; receipt.reading = reading.reading;
       receipt.executed = { tier: candidate.tier, sqlFingerprint: fingerprintSql(candidate.sql), rowCount: executed.result.rowCount, ms: Math.round(executed.result.executionTimeMs), proofs: executed.proofs };
       timings.total = Math.round(now() - started);
       // The AI wrote the arithmetic: a statement that multiplies by 100 hands
-      // back percentage points, so a percent column is not multiplied again
-      // (8.06 growth is 8.06 pp, not 806%).
+      // back values on the 0-100 scale, so a percent column is not multiplied
+      // again (8.06 growth is 8.1%, not 806%). It is still a percent: "58.8%",
+      // and "pp" only for a difference of two percentages (new-user test V13, Q14).
       const inPoints = /\*\s*100(?:\.0*)?(?![\d.])|(?<![\d.])100(?:\.0*)?\s*\*/.test(candidate.sql);
-      const columnsMeta = describeResultColumns(reading, executed.result, input.vocabulary)
-        .map((meta) => (inPoints && meta.kind === 'percent' && meta.unit === 'fraction' ? { ...meta, unit: 'percentage_points' as const } : meta));
-      const result: ExecutedRows = { ...executed.result, columnsMeta };
+      // A column that only repeats another (a season's name that is the season) is not shown.
+      const shown = withoutRepeatedColumns(executed.result);
+      const columnsMeta = describeResultColumns(reading, shown, input.vocabulary)
+        .map((meta) => (inPoints && meta.kind === 'percent' && meta.unit === 'fraction' ? { ...meta, unit: scaledPercentUnit(meta.name) } : meta));
+      const result: ExecutedRows = { ...shown, columnsMeta };
       receipt.context = { ...receipt.context!, used: { joins: [], relations: [...new Set(candidate.relations ?? [])], tier: candidate.tier, ...(candidate.engine ? { engine: candidate.engine } : {}) } };
       // Say why the governed tiers did not answer, from their own refusals: a
       // governed metric that exists but cannot take this reading's filter is
