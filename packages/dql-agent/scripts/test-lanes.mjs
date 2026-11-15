@@ -227,7 +227,7 @@ const EXPECTED_TEST_FILES = 200;
 // keeping a planner title only when it is a complete one (app-builder-orchestrator.test.ts +6), a source's own
 // words against a question (app-builder-source-match.test.ts +5), and certified data named in the request
 // reaching the planner first (app-source-catalog.test.ts +1; V14 Apps).
-const EXPECTED_TESTS = 2929;
+const EXPECTED_TESTS = 2931;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2848.
