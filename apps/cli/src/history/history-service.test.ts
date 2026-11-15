@@ -231,6 +231,9 @@ describe('certified versions, draft edits and restore', () => {
     expect(item.versions[0]!.detail).toBe('Draft edit of certified v1. SQL changed. Not certified yet');
     expect(item.banner).toEqual({ draft: 2, certified: 1 });
     expect(item.item.name).toBe('wins');
+    // Opened from the draft edit itself, it is the same saved query's History.
+    expect(history.item(beside).item.key).toBe(WINS);
+    expect(history.blockHistory(beside).entries).toHaveLength(2);
 
     const compared = await history.compare(WINS, 1, 2);
     expect(compared.from).toMatchObject({ version: 1, state: 'certified', certifiedBy: 'JSMITH', oldReport: expect.stringMatching(/^Matches warriors_wins/) });

@@ -358,6 +358,15 @@ export class HistoryIndex {
     });
   }
 
+  /**
+   * The item a path is part of now: a saved query for its companion YAML or for the draft edit saved beside it,
+   * else the path itself (then followed through renames by `versions`).
+   */
+  itemKeyFor(path: string): string {
+    const ref = this.mapper.itemFor(path, this.lookups);
+    return ref.key;
+  }
+
   /** The item key an older key now goes by (after a rename), or the key itself. */
   currentKey(itemKey: string): string {
     let key = itemKey;

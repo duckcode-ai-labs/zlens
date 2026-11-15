@@ -421,7 +421,8 @@ export class HistoryService {
 
   private requireItem(itemKey: string): ItemVersion[] {
     if (!isTrackedItemKey(itemKey)) throw new HistoryError('History keeps saved queries, Apps, notebooks and model files only.', 400, 'HISTORY_NOT_TRACKED');
-    const versions = this.index.versions(itemKey);
+    // The draft edit beside a certified saved query, or a companion YAML, is part of that saved query's History.
+    const versions = this.index.versions(itemKey).length ? this.index.versions(itemKey) : this.index.versions(this.index.itemKeyFor(itemKey));
     if (!versions.length) throw new HistoryError('History has no versions of this item yet.', 404, 'HISTORY_ITEM_NOT_FOUND');
     return versions;
   }
@@ -756,9 +757,10 @@ export class HistoryService {
   /** The Git-history response the saved query's History tab has always read (`/api/blocks/history`). */
   blockHistory(path: string): { entries: Array<{ hash: string; date: string; author: string; message: string }>; status: 'ok' } {
     if (!isTrackedItemKey(path)) return { entries: [], status: 'ok' };
+    const versions = this.index.versions(path).length ? this.index.versions(path) : this.index.versions(this.index.itemKeyFor(path));
     return {
       status: 'ok',
-      entries: this.index.versions(path).map((version) => ({
+      entries: versions.map((version) => ({
         hash: version.commit.oid,
         date: version.commit.at,
         author: version.commit.author.kind === 'ai' && version.commit.author.askedBy ? `${version.commit.author.name} for ${version.commit.author.askedBy}` : version.commit.author.name,
