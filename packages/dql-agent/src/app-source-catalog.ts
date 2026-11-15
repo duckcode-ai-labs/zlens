@@ -8,6 +8,7 @@ import type {
   MetricCapabilityContract,
 } from '@zlens/core';
 import { normalizeDatasetDescriptor, normalizeMetricCapabilityContract } from '@zlens/core';
+import { namedInRequest, namedInRequestFirst } from './app-builder-source-match.js';
 import {
   acquireActiveKnowledgeSnapshot,
   type MetadataObject,
@@ -394,7 +395,20 @@ export function shortlistAppSources(
     domains: options.domains,
     sourcePolicy: options.sourcePolicy,
   });
-  const matched = rankAppSourcesByTrust(primary.items.filter(allowed).slice(0, limit));
+  // A certified source whose own name names part of the request ("Warriors Ppg Regular Vs Playoffs 2016" for
+  // the Warriors' 2016 points per game) reaches the planner first, however many tables match the words better
+  // (V13 retest: an exact certified match was listed below the plan and called a gap).
+  const named = prompt.trim()
+    ? namedInRequestFirst(prompt, queryAppSourceCatalog(projectRoot, {
+      query: prompt,
+      limit: 50,
+      lifecycles: ['certified'],
+      domains: options.domains,
+      sourcePolicy: options.sourcePolicy,
+    }).items.filter((item) => allowed(item) && item.trust === 'certified')).filter((item) => namedInRequest(prompt, item)).slice(0, 4)
+    : [];
+  const namedIds = new Set(named.map((item) => item.sourceId));
+  const matched = [...named, ...rankAppSourcesByTrust(primary.items.filter((item) => allowed(item) && !namedIds.has(item.sourceId)).slice(0, limit))].slice(0, limit);
   if (matched.length >= limit) return { ...primary, items: matched, nextCursor: undefined };
   const fallback = queryAppSourceCatalog(projectRoot, {
     limit: fetchLimit,

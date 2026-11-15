@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { QueryResult } from '../../../store/types';
 import { DQL_SERIES_DARK, DQL_SERIES_LIGHT } from '../chart-palettes';
-import { axisTickLabel, buildVizOption, chronological, MAX_SERIES } from './viz-option';
+import { axisTickLabel, buildVizOption, chronological, chronologicalOrder, MAX_SERIES } from './viz-option';
 import { renderOptionToSvg } from './EChartsChart';
 
 const monthly: QueryResult = {
@@ -74,6 +74,29 @@ describe('buildVizOption (RFC 0008 step 4)', () => {
     const seasons = { columns: ['SEASON', 'WINS'], rows: [2015, 2014, 2016, 2018, 2017].map((season) => ({ SEASON: season, WINS: season - 1950 })), rowCount: 5 } as any;
     const built = buildVizOption({ chartType: 'bar', result: seasons, themeMode: 'paper', config: { chart: 'bar', x: 'SEASON', y: 'WINS' } })!;
     expect(built.categories).toEqual(['2014', '2015', '2016', '2017', '2018']);
+  });
+
+  // V13 retest: a certified line of the Warriors' wins drew seasons 2018, 2017, 2014, 2016, 2015 (sorted by wins),
+  // a rise that never happened.
+  it('draws a line in season order whatever its sort, and a line it cannot put in axis order as bars', () => {
+    const wins = { columns: ['SEASON', 'WINS'], rows: [[2018, 57], [2017, 58], [2014, 67], [2016, 67], [2015, 73]].map(([SEASON, WINS]) => ({ SEASON, WINS })), rowCount: 5 } as any;
+    for (const sort of ['asc', 'desc', 'none', undefined] as const) {
+      const line = buildVizOption({ chartType: 'line', result: wins, themeMode: 'paper', config: { chart: 'line', x: 'SEASON', y: 'WINS', style: { labels: 'last', ...(sort ? { sort } : {}) } } })!;
+      expect(line.categories).toEqual(['2014', '2015', '2016', '2017', '2018']);
+      expect(series(line.option)[0].type).toBe('line');
+      expect(series(line.option)[0].data.map((point: any) => point?.value ?? point)).toEqual([67, 73, 67, 58, 57]);
+    }
+    // Bars over seasons keep a sort by value the author chose.
+    const bars = buildVizOption({ chartType: 'bar', result: wins, themeMode: 'paper', config: { chart: 'bar', x: 'SEASON', y: 'WINS', style: { sort: 'desc' } } })!;
+    expect(bars.categories).toEqual(['2015', '2014', '2016', '2017', '2018']);
+    // A line over names sorted by value has no axis order: it is drawn as bars, never as a trend.
+    const sortedNames = buildVizOption({ chartType: 'line', result: regions, themeMode: 'paper', config: { chart: 'line', style: { sort: 'asc' } } })!;
+    expect(series(sortedNames.option)[0].type).toBe('bar');
+    expect(sortedNames.categories).toEqual(['APAC', 'EU', 'US']);
+    // Unsorted, a line over names stays a line in query order, as before.
+    expect(series(buildVizOption({ chartType: 'line', result: regions, themeMode: 'paper', config: { chart: 'line' } })!.option)[0].type).toBe('line');
+    expect(chronologicalOrder(['2015-16', 'x'])).toBeUndefined();
+    expect(chronologicalOrder(['2016', '2014'])).toEqual(['2014', '2016']);
   });
 
   it('labels only the last mark when asked, and sorts by value', () => {

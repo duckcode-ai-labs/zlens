@@ -78,7 +78,8 @@ const REQUIRED_TEST_FILES = [
 // 197 with an Ask draft's description cut at a word, never mid-word (dql-artifacts.test.ts, +1 file, +1 test).
 // 198 with a slow reading keeping time for the SQL (ask-pipeline/slow-reading.test.ts, +1 file, +4 tests).
 // 199 with the V14 Ask answer fixes (ask-pipeline/v14-answers.test.ts, +1 file, +19 tests).
-const EXPECTED_TEST_FILES = 199;
+// 200 with a source's own words against a Describe with AI question (app-builder-source-match.test.ts, +1 file, +5 tests).
+const EXPECTED_TEST_FILES = 200;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -221,10 +222,15 @@ const EXPECTED_TEST_FILES = 199;
 // question asked back, a stated year read as the season, a share as a percent, numbers with separators and labels,
 // one button per choice, readings that name only the tables read (ask-pipeline/v14-answers.test.ts +19), and one
 // draft per asked question (metadata/drafts.test.ts +3).
-const EXPECTED_TESTS = 2917;
+// 2929 with Describe with AI never listing a pick as a gap, picking the certified saved query that answers each
+// part of a request exactly, reading a question about something the request never names as the request, and
+// keeping a planner title only when it is a complete one (app-builder-orchestrator.test.ts +6), a source's own
+// words against a question (app-builder-source-match.test.ts +5), and certified data named in the request
+// reaching the planner first (app-source-catalog.test.ts +1; V14 Apps).
+const EXPECTED_TESTS = 2929;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2814.
+// The ordinary lane's share is the difference: 2848.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

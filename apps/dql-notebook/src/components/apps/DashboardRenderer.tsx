@@ -61,7 +61,8 @@ import {
   presetMatches, tileSizeForPreset, tileSizePatch, TILE_SIZE_PRESETS, type TileSizePresetId,
 } from './dashboard-tile-sizing';
 import {
-  buildDashboardStory, isStakeholderHiddenReviewTile, prepareStakeholderItems, storyFilterChips,
+  buildDashboardStory, isStakeholderHiddenReviewTile, prepareStakeholderItems, prepareStoryItems, stakeholderHiddenCounts,
+  stakeholderHiddenNote, storyFilterChips,
 } from './dashboard-presentation';
 import {
   escapeRegExp, evidenceMetricRank, formatDashboardValue, formatGenUiLabel, isNumericColumn,
@@ -398,9 +399,15 @@ export function DashboardRenderer({
   // Story mode intentionally SHOWS review-required tiles: the appendix exists to
   // surface AI-generated analysis, clearly badged — so it bypasses the stakeholder
   // review-tile hiding that governs classic grids.
+  // The same numbers are still shown once there (V13 retest).
   const storyItems = useMemo(
-    () => (storySections ? activeLayout.items : null),
-    [activeLayout.items, storySections],
+    () => (storySections ? (editable ? activeLayout.items : prepareStoryItems(activeLayout.items, tileResults)) : null),
+    [activeLayout.items, editable, storySections, tileResults],
+  );
+  // The hidden-tiles line counts the tiles this view really leaves out, and says why (V13 retest).
+  const hiddenTilesNote = useMemo(
+    () => (editable ? undefined : stakeholderHiddenNote(stakeholderHiddenCounts(activeLayout.items, storyItems ?? visibleItems, tileResults))),
+    [activeLayout.items, editable, storyItems, tileResults, visibleItems],
   );
   // The auto-written Summary is off unless the page's author added it (D6).
   const summaryAdded = pageShowsSummary(dashboard.metadata);
@@ -1220,12 +1227,10 @@ export function DashboardRenderer({
           announced only when EVERY tile was hidden. Adding an AI result to a
           page that already had tiles therefore looked like nothing had been
           saved. Say so whenever anything is hidden. */}
-      {!editable && visibleItems.length > 0 && (hiddenReviewTileCount + hiddenPresentationTileCount) > 0 ? (
+      {!editable && visibleItems.length > 0 && hiddenTilesNote ? (
         <div role="status" style={saveStatusStyle('var(--text-tertiary)')}>
           <ShieldCheck size={13} />
-          {hiddenReviewTileCount + hiddenPresentationTileCount} tile
-          {hiddenReviewTileCount + hiddenPresentationTileCount === 1 ? ' is' : 's are'} hidden from this
-          stakeholder view because {hiddenReviewTileCount > 0 ? 'they are not certified yet' : 'a certified tile already answers the same question'}. Switch to Edit to see everything on this page.
+          {hiddenTilesNote}
         </div>
       ) : null}
       {(!embeddedHeader || editable) && (

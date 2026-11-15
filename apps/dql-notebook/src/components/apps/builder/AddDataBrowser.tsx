@@ -45,6 +45,7 @@ import {
   tilesUsingSource,
   type AddDataKind,
 } from './app-data';
+import { useSnowflakeApp } from '../../../snowflake-app/snowflake-app-mode';
 
 type DraftSources = AppStudioBuildDraft['sources'];
 type SourcePolicy = AppStudioBuildDraft['sourcePolicy'];
@@ -449,7 +450,8 @@ function AddDataRow({
   const origin = sourceOriginLabel(item);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWords = certifyWords(useHostUi()).menu;
-  const meta = [origin, dataTrustLabel(item), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', ownerWords(item)].filter(Boolean).join(' · ');
+  const snowflake = useSnowflakeApp();
+  const meta = [origin, dataTrustLabel(item), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', ownerWords(item, { snowflake })].filter(Boolean).join(' · ');
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} role="listitem" data-source-id={sourceId} data-origin={origin}>
     <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
       <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>

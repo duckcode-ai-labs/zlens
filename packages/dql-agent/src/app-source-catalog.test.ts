@@ -169,6 +169,30 @@ describe('AppSourceCatalogService', () => {
     expect(shortlist.items.map((source) => source.lifecycle)).toEqual(['certified', 'draft']);
   });
 
+  // V13 retest: the certified "Warriors Ppg Regular Vs Playoffs 2016" was listed below a plan that called it a gap.
+  it('gives the planner a certified source whose name the request names first, however many others match its words', async () => {
+    mkdirSync(join(projectRoot, 'domains', 'nba', 'blocks'), { recursive: true });
+    for (let index = 1; index <= 14; index += 1) {
+      writeFileSync(join(projectRoot, 'domains', 'nba', 'blocks', `scoring-${index}.dql`), `block "Warriors scoring per game draft ${index}" {
+  domain = "nba"
+  status = "draft"
+  description = "Golden State Warriors points scored per game in the regular season and the playoffs, 2016, draft ${index}"
+  query = \"\"\"SELECT 1 AS POINTS\"\"\"
+}`);
+    }
+    writeFileSync(join(projectRoot, 'domains', 'nba', 'blocks', 'ppg.dql'), `block "warriors_ppg_regular_vs_playoffs_2016" {
+  domain = "nba"
+  status = "certified"
+  description = "Warriors PPG 2016"
+  query = \"\"\"SELECT 'Playoffs' AS GAME_TYPE, 119.3 AS POINTS_PER_GAME\"\"\"
+}`);
+    await ensureAgentProjectReady(projectRoot);
+    const request = 'Compare how the Golden State Warriors scored per game in the 2016 regular season and in the 2016 playoffs';
+    const shortlist = shortlistAppSources(projectRoot, request, { sourcePolicy: 'include_review_required', domains: ['nba'] });
+    expect(shortlist.items).toHaveLength(12);
+    expect(shortlist.items[0]).toMatchObject({ name: 'warriors_ppg_regular_vs_playoffs_2016', trust: 'certified' });
+  });
+
   it('a legacy certified-only caller still sees only certified data', async () => {
     await ensureAgentProjectReady(projectRoot);
 

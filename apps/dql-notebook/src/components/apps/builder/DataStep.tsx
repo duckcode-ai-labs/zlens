@@ -23,6 +23,8 @@ export interface DataStepAiProps {
   status: 'running' | 'ready' | 'error';
   /** The App's goal (the frame goal, or the prompt while the first plan runs). */
   goal: string;
+  /** The name the plan gives the App (its title, applied with the plan), shown in place of the draft's name (V13). */
+  appName?: string;
   /** Absent until the first proposal arrives. */
   model?: AppStudioAiDataModel;
   /** The activity steps (app-studio-ai-activity.ts) and the current one. */
@@ -204,7 +206,7 @@ function AiDataStep({
     <header className="data-step-header">
       <button type="button" className="ghost-icon" onClick={onBack} aria-label="Back to Apps" title="Back to Apps"><ArrowLeft size={16} /></button>
       <div>
-        <small>{draft.name}</small>
+        <small>{ai.appName ?? draft.name}</small>
         <h1 id="studio-data-step-title">{model ? words.pickedHeading(model.picked.length) : words.pendingHeading}</h1>
         <p className="data-step-goal">For: <strong>{ai.goal}</strong></p>
         <p>{words.intro}</p>

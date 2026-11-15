@@ -84,7 +84,9 @@ export interface StudioErrorWords {
 /** Technical details with no code in them (V12: Describe with AI showed "APP_BUILD_PLANNER_OUTPUT_INVALID: …"). */
 type PlainTechnical = (raw: string) => string | undefined;
 const PLAIN_TECHNICAL: Array<[RegExp, PlainTechnical]> = [
-  [/APP_BUILD_PLANNER_OUTPUT_INVALID/, () => 'The AI answered, but its reply was not a plan ZLens could read.'],
+  // V13 retest: "The AI answered, but its reply was not a plan ZLens could read." was still a technical reply
+  // to a person who can only pick the data or try again, which the message already says: no details at all.
+  [/APP_BUILD_PLANNER_OUTPUT_INVALID/, () => undefined],
   [/APP_BUILD_PLANNER_TIMEOUT/, (raw) => {
     const seconds = /longer than (\d+) s/.exec(raw)?.[1];
     return seconds ? `The AI did not answer within ${Math.round(Number(seconds) / 60) >= 2 ? `${Math.round(Number(seconds) / 60)} minutes` : `${seconds} seconds`}.` : 'The AI did not answer in time.';

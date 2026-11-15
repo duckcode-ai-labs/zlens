@@ -283,6 +283,15 @@ export function appStudioUncoveredRequirements(proposal: AppStudioAiProposal): A
     .map((requirement) => ({ id: requirement.id, question: requirement.question }));
 }
 
+/**
+ * The name a plan gives a new App described with AI: its short title, applied with the plan (V13: names were the
+ * description cut at 60 characters). Undefined when the App keeps its name.
+ */
+export function appStudioProposalAppName(proposal: Pick<AppStudioAiProposal, 'operations'>): string | undefined {
+  const operation = proposal.operations.find((candidate) => candidate.type === 'set_name');
+  return operation?.type === 'set_name' && operation.name.trim() ? operation.name.trim() : undefined;
+}
+
 /** Questions AI must have answered before it can build pages. */
 export function appStudioUnresolvedClarifications(proposal: AppStudioAiProposal): AppStudioAiProposal['clarifications'] {
   return proposal.clarifications.filter((item) => item.required && !item.answerId);

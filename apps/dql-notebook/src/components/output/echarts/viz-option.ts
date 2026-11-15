@@ -116,7 +116,7 @@ function cartesianOption(
   format: (value: number) => string,
   config?: CellChartConfig,
 ): VizOptionOutput {
-  const isLine = chartType === 'line' || chartType === 'area';
+  const wantsLine = chartType === 'line' || chartType === 'area';
   const stacked = chartType === 'stacked-bar' || Boolean(style.stack);
   const colorCol = config?.color && result.columns.includes(config.color) && config.color !== labelCol ? config.color : undefined;
   const measures = seriesMeasures(result, labelCol, valueCol, chartType, config);
@@ -155,20 +155,26 @@ function cartesianOption(
   const droppedSeries = Math.max(0, series.length - MAX_SERIES);
   series = series.slice(0, MAX_SERIES);
 
-  if (style.sort && style.sort !== 'none' && series[0]) {
-    const first = series[0].values;
-    const direction = style.sort === 'asc' ? 1 : -1;
-    categories = [...categories].sort((a, b) => direction * ((first.get(a) ?? -Infinity) - (first.get(b) ?? -Infinity)));
-  }
   // A time axis runs left to right. The shared DATE_NAME_RE also matches
   // words like "category", so the orientation uses whole name parts or the
   // values themselves.
   // A season or fiscal year is a period too: seasons read 2014, 2015, 2016, never in query order (V12).
   const timeLabels = TIME_NAME_RE.test(labelCol) || isYearLikeColumn(labelCol) || categories.every((value) => /^\d{4}-\d{2}(-\d{2})?(T|$)/.test(value));
+  const sorted = Boolean(style.sort && style.sort !== 'none');
+  // A line is drawn in its axis order, whatever the sort (V13: a certified line of wins drew seasons 2018, 2017,
+  // 2014, 2016, 2015, a rise that never happened). A line whose points can't be put in that order, because they
+  // were sorted by value and are not periods, is drawn as bars.
+  const ordered = timeLabels ? chronologicalOrder(categories) : undefined;
+  const isLine = wantsLine && (ordered !== undefined || !sorted);
+  if (sorted && series[0] && !isLine) {
+    const first = series[0].values;
+    const direction = style.sort === 'asc' ? 1 : -1;
+    categories = [...categories].sort((a, b) => direction * ((first.get(a) ?? -Infinity) - (first.get(b) ?? -Infinity)));
+  }
   const timeAxis = isLine || timeLabels;
   // Queries need not return periods in order; a time axis is drawn oldest
-  // to newest unless the author chose a sort.
-  if (timeLabels && (!style.sort || style.sort === 'none')) categories = chronological(categories);
+  // to newest unless the author chose a sort for bars.
+  if (ordered && (isLine || !sorted)) categories = ordered;
   if (!isLine) categories = categories.slice(0, config?.maxItems ?? DEFAULT_MAX_CATEGORIES);
   // Long category lists read better as horizontal bars; dates stay on x.
   // Shelves (RFC 0009) set the orientation: a dimension on Rows lists
@@ -665,9 +671,14 @@ function unique(values: string[]): string[] {
 
 /** Order period labels by time when every label reads as a date or a number; otherwise keep them. */
 export function chronological(categories: string[]): string[] {
+  return chronologicalOrder(categories) ?? categories;
+}
+
+/** Period labels in time order, or undefined when a label reads as neither a date nor a number. */
+export function chronologicalOrder(categories: string[]): string[] | undefined {
   const numeric = categories.every((value) => value.trim() !== '' && Number.isFinite(Number(value)));
   const keys = categories.map((value) => (numeric ? Number(value) : Date.parse(value)));
-  if (keys.some((key) => !Number.isFinite(key))) return categories;
+  if (keys.some((key) => !Number.isFinite(key))) return undefined;
   return categories
     .map((value, index) => ({ value, key: keys[index]!, index }))
     .sort((a, b) => a.key - b.key || a.index - b.index)

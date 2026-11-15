@@ -54,8 +54,9 @@ describe('Describe with AI could not plan the App (new-user test V8, item 4)', (
     const tree = flatten(<DataStep {...props} />);
     expect(markup).toContain('Data for this App');
     expect(markup).toContain(AI_PLAN_FAILED_WORDS);
-    // The code is only under Technical details.
-    expect(markup.split('<details')[0]).not.toContain('APP_BUILD_PLANNER_OUTPUT_INVALID');
+    // No code, and no technical reply under Technical details (V13 retest: the empty "(3)" App's Continue).
+    expect(markup).not.toContain('APP_BUILD_PLANNER_OUTPUT_INVALID');
+    expect(markup).not.toContain('Technical details');
     (button(tree, 'Try AI again').props.onClick as () => void)();
     expect(onRetry).toHaveBeenCalledTimes(1);
     const addData = tree.find((element) => element.type === AddDataBrowser)!;
@@ -178,6 +179,13 @@ function renderAi(ai: DataStepAiProps, aiBrowser = browser) {
 describe('AI Data step (design D3, AI path)', () => {
   const ordersId = orderLinesDataset.sourceId!;
   const marginId = marginMetrics.sourceId!;
+
+  // V13 retest: the header was the description cut at 60 characters; the plan's short title is shown instead.
+  it('names the App with the plan\'s title while the plan is reviewed', () => {
+    const { markup } = renderAi(aiProps({ appName: 'Warriors 2016 PPG: Regular vs Playoffs' }));
+    expect(markup).toContain('<small>Warriors 2016 PPG: Regular vs Playoffs</small>');
+    expect(renderAi(aiProps()).markup).toContain(`<small>${draftWith().name}</small>`);
+  });
 
   it('shows the picks with type, trust, domain, the planner reason and their tiles', () => {
     const { markup } = renderAi(aiProps());
@@ -302,10 +310,12 @@ describe('AI Data step (design D3, AI path)', () => {
     expect(visible).toContain(AI_PLAN_FAILED_WORDS);
     expect(visible.join(' ')).not.toContain('APP_BUILD_PLANNER_OUTPUT_INVALID');
     expect(textOf(alert.props.children)).toContain(AI_PLAN_FAILED_WORDS);
-    expect(markup).toContain('<summary>Technical details</summary>');
     // V12: the code showed under Technical details. Not even there now, in the banner or the step.
     expect(markup).not.toMatch(/APP_BUILD_|configured App Builder provider/);
-    expect(markup).toContain('The AI answered, but its reply was not a plan ZLens could read.');
+    // V13 retest: nor a technical reply ("The AI answered, but its reply was not a plan ZLens could read."): the
+    // message says what to do, and there are no details to open.
+    expect(markup).not.toContain('Technical details');
+    expect(markup).not.toContain('not a plan ZLens could read');
     const banner = renderToStaticMarkup(<StudioErrorBanner error={error} />);
     expect(banner).not.toContain('APP_BUILD_');
     expect(banner).toContain(AI_PLAN_FAILED_WORDS);

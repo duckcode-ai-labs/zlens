@@ -39,6 +39,7 @@ import {
   projectAppIdentities,
   uniqueNewAppIdentity,
   appNameFromGoal,
+  appNameFromGoalParts,
   createAppBuildDraft,
   createBlankAppBuildPage,
   newAppBuildDraftId,
@@ -522,7 +523,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         rebound,
         (draft, expectedRevision) => storage.saveAppBuildDraft(draft, { expectedRevision }),
         (draft) => {
-          if (!isEmptyNewAppShell(draft, storage.listAppBuildOperations(draft.id).length)) return false;
+          if (!isEmptyNewAppShell(draft, appDraftContentEditCount(storage.listAppBuildOperations(draft.id)))) return false;
           try {
             deleteStoredAppBuildDraft(projectRoot, draft);
             return true;
@@ -4431,6 +4432,107 @@ function materializeAppBuildProposalReviewAnalyses(
   };
 }
 
+/** A line's style without a sort: a line is drawn in time order, never sorted by its values (V13). */
+function lineInAxisOrder(type: string, style: NonNullable<DashboardGridItem['viz']['style']>): NonNullable<DashboardGridItem['viz']['style']> {
+  if ((type !== 'line' && type !== 'area') || !style.sort || style.sort === 'none') return style;
+  const { sort: _sort, ...rest } = style;
+  return rest;
+}
+
+/**
+ * The name a Describe with AI plan gives a new App whose name was drawn from its description (and so may be a
+ * placeholder): the planner's short title, else, when that name had to be cut, one made from the picks. Undefined
+ * when the App keeps its name: one the author typed or the App already had, an App with tiles, or no better name.
+ */
+export function plannedAppName(
+  projectRoot: string,
+  draft: Pick<AppBuildDraft, 'id' | 'name' | 'baseApp' | 'state' | 'frame' | 'pages'>,
+  plannerTitle: string | undefined,
+  pickNames: string[],
+): string | undefined {
+  if (draft.baseApp || draft.state === 'project_published') return undefined;
+  if (draft.pages.some((page) => page.layout.items.some((item) => !item.text))) return undefined;
+  const fromGoal = appNameFromGoalParts(draft.frame.goal);
+  const current = (numberedCopyBase(draft.name) ?? draft.name).trim();
+  if (!fromGoal.name || current.toLowerCase() !== fromGoal.name.toLowerCase()) return undefined;
+  const fromPicks = (): string | undefined => {
+    const names = Array.from(new Set(pickNames.map((name) => name.trim()).filter(Boolean)));
+    if (!names.length) return undefined;
+    const both = names.length === 2 ? `${names[0]} and ${names[1]}` : undefined;
+    const choice = both && both.length <= 60 ? both : names.length > 1 && `${names[0]} and ${names.length - 1} more`.length <= 60 ? `${names[0]} and ${names.length - 1} more` : names[0]!;
+    return choice.length <= 60 ? choice : undefined;
+  };
+  const chosen = plannerTitle ?? (fromGoal.cut ? fromPicks() : undefined);
+  if (!chosen || chosen.toLowerCase() === current.toLowerCase()) return undefined;
+  return uniqueNewAppIdentity(chosen, { appIds: [], names: takenAppIdentities(projectRoot, draft.id).names }, 'app-name-only').name;
+}
+
+/** How a page's intro names one of its sources. */
+export interface PlannedIntroSource {
+  name: string;
+  certified: boolean;
+  kind: 'saved query' | 'table' | 'Metrics';
+}
+
+/** A catalog source as a page intro names it. */
+function introSourceFromCatalog(source: AppSourceCatalogRecord, readable: (title: string) => string): PlannedIntroSource {
+  const dataset = source.capabilities.dataset;
+  return {
+    name: readable(source.title),
+    certified: source.trust === 'certified',
+    kind: source.kind === 'semantic' || dataset?.kind === 'semantic' || source.capabilities.semanticModelId
+      ? 'Metrics'
+      : dataset && !dataset.result && (source.tags ?? []).includes('from-table') ? 'table' : 'saved query',
+  };
+}
+
+/** A proposal's source as a page intro names it: its saved query or table name, read as words. */
+function introSourceFromDraft(source: AppBuildDraftSource): PlannedIntroSource {
+  const identity = source.qualifiedIdentity?.split('::')[2] ?? source.sourceRef.split('/').pop()?.replace(/\.dql$/i, '') ?? source.id;
+  const words = /\s/.test(identity) ? identity : identity.split(/[_-]+/).filter(Boolean).map((word) => {
+    const lower = word.toLowerCase();
+    if (lower === 'vs') return lower;
+    if (/^[a-z]{2,4}$/.test(lower) && !/[aeiouy]/.test(lower)) return lower.toUpperCase();
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }).join(' ');
+  const dataset = source.capabilities?.dataset;
+  return {
+    name: words,
+    certified: source.trustState === 'certified',
+    kind: source.kind === 'governed_semantic' || dataset?.kind === 'semantic' ? 'Metrics' : dataset && !dataset.result ? 'table' : 'saved query',
+  };
+}
+
+/** Whether a text tile is an intro `plannedPageIntro` wrote. */
+function isPlannedPageIntro(markdown: string): boolean {
+  return /^#[^\n]*\n+This page shows /.test(markdown);
+}
+
+/**
+ * A planned page's intro: what the page shows and where its numbers come from, from its picks ("This page shows
+ * Warriors Wins by Season, from the certified saved query Warriors Regular Season Wins 2014 2018."), under the
+ * App's name. Not the App's name and its description again (V13).
+ */
+export function plannedPageIntro(
+  appName: string,
+  tiles: Array<Pick<DashboardGridItem, 'title' | 'sourceId' | 'text'>>,
+  sources: Map<string, PlannedIntroSource>,
+): string | undefined {
+  const list = (items: string[]) => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+  const shown = tiles.filter((tile) => !tile.text);
+  const titles = Array.from(new Set(shown.map((tile) => tile.title?.trim() ?? '').filter(Boolean)));
+  if (!titles.length) return undefined;
+  const picked = Array.from(new Set(shown.flatMap((tile) => tile.sourceId && sources.has(tile.sourceId) ? [tile.sourceId] : [])))
+    .map((sourceId) => sources.get(sourceId)!);
+  const from = picked.length === 1
+    ? `the ${picked[0]!.certified ? 'certified ' : ''}${picked[0]!.kind} ${picked[0]!.name}`
+    : picked.length > 1
+      ? `${picked.every((source) => source.certified) ? `${picked.length} certified sources: ` : ''}${list(picked.slice(0, 3).map((source) => source.name))}${picked.length > 3 ? ' and more' : ''}`
+      : '';
+  const named = titles.length > 4 ? `${titles.slice(0, 4).join(', ')} and more` : list(titles);
+  return `# ${appName}\n\nThis page shows ${named}${from ? `, from ${from}` : ''}.`;
+}
+
 /** A tile or source name in a planner note: "top_customers" reads "Top Customers". */
 function plannerNoteTitle(title: string): string {
   const trimmed = title.trim();
@@ -4493,9 +4595,10 @@ export async function proposeAppBuildDraftOperations(
   }
   if (!initialPage) throw new Error('The App draft needs a page before AI can compose it.');
   const {
-    datasetPlannedQueryCoversRequirement,
     ensureAgentProjectReady,
     planAppBuildBrief,
+    plannedComponentCoversRequirement,
+    readableSourceTitle,
     resolveAppSourceCatalogRecords,
     shortlistAppSources,
   } = await import('@zlens/agent');
@@ -4703,7 +4806,7 @@ export async function proposeAppBuildDraftOperations(
       sourceId: source.sourceId,
       sourceRevision: source.sourceRevision,
       ...(query ? { query } : { block: { ref: source.executionRef } }),
-      viz: { ...viz, ...(component.style ? { style: component.style } : {}) },
+      viz: { ...viz, ...(component.style ? { style: lineInAxisOrder(viz.type, component.style) } : {}) },
       title: component.title,
       sourceClass: source.kind === 'semantic' ? 'governed_semantic' : certified ? 'certified_block' : 'exploratory_analysis',
       filterBindings: source.capabilities.filters.map((filter) => ({
@@ -4737,8 +4840,19 @@ export async function proposeAppBuildDraftOperations(
     type: 'upsert_source',
     source: appDraftSourceFromCatalog(source),
   }));
+  // A new App named from its description takes the plan's title, or one from its picks, in place of the
+  // description cut short (V13: "Give a coach one page with the Warriors' regular-season").
+  const planName = plannedAppName(projectRoot, draft, brief.appTitle, plannedSources.map((source) => readableSourceTitle(source.title)));
+  const appName = planName ?? draft.name;
   const nextPages = pageStates.map((state) => {
-    const items = [...state.structuralItems, ...state.plannedItems];
+    // The template's intro says what the page shows, from its picks, not the App's name and its description again (V13).
+    const intro = state.plannedItems.length
+      ? plannedPageIntro(appName, state.plannedItems, new Map(plannedSources.map((source) => [source.sourceId, introSourceFromCatalog(source, readableSourceTitle)])))
+      : undefined;
+    const structural = intro
+      ? state.structuralItems.map((item) => item.text && isTemplateIntro(item.text.markdown ?? '', draft.frame.goal) ? { ...item, text: { ...item.text, markdown: intro } } : item)
+      : state.structuralItems;
+    const items = [...structural, ...state.plannedItems];
     const plannedPage = brief.pages.find((candidate) => candidate.id === state.planId)!;
     const plannedSections = plannedPage.sections.map((section, index) => ({
       id: section.id,
@@ -4883,9 +4997,11 @@ export async function proposeAppBuildDraftOperations(
       if (!component.requirementIds.includes(requirement.id)) return false;
       const source = byId.get(component.sourceId);
       if (!source) return false;
+      // The planner's own rule, so a pick it keeps is never also listed as a gap (V13): a saved query shown
+      // as it is covers the question its columns, or its own name and description, answer.
       return source.capabilities.dataset
-        ? Boolean(component.query && datasetPlannedQueryCoversRequirement(component.query, requirement, source.capabilities.dataset))
-        : catalogSourceSatisfiesRequirement(source, requirement);
+        ? plannedComponentCoversRequirement(component, requirement, source)
+        : catalogSourceSatisfiesRequirement(source, requirement) || plannedComponentCoversRequirement(component, requirement, source);
     });
     return {
       requirementId: requirement.id,
@@ -4907,6 +5023,7 @@ export async function proposeAppBuildDraftOperations(
     ? mergeAddModeRequirements(draft, brief.frame, brief.requirements, coverage)
     : { frame: brief.frame, requirements: brief.requirements, coverage };
   const operations: AppBuildDraftOperation[] = [
+    ...(planName ? [{ type: 'set_name' as const, name: planName }] : []),
     {
       type: 'set_frame',
       frame: proposedFrame,
@@ -7348,6 +7465,9 @@ function operationsForSelectedAppBuildSources(
     if (operation.type === 'add_tile' && !removedTileIds.has(operation.tile.i)) return [operation.tile.i];
     return [];
   }));
+  const keptSources = new Map(operations.flatMap((operation) => (
+    operation.type === 'upsert_source' && selected.has(operation.source.id) ? [[operation.source.id, introSourceFromDraft(operation.source)] as const] : []
+  )));
   const keptCoverage = (item: AppBuildDraft['coverage'][number]) => {
     const sourceIds = item.sourceIds.filter((sourceId) => selected.has(sourceId));
     const componentIds = item.componentIds.filter((componentId) => keptComponentIds.has(componentId));
@@ -7361,7 +7481,16 @@ function operationsForSelectedAppBuildSources(
       return !operation.task.sourceId || selected.has(operation.task.sourceId) ? [operation] : [];
     }
     if (operation.type === 'upsert_page') {
-      const items = operation.page.layout.items.filter((item) => !removedTileIds.has(item.i));
+      const kept = operation.page.layout.items.filter((item) => !removedTileIds.has(item.i));
+      // The intro the plan wrote names only the tiles the author kept.
+      const pageRemoved = operation.page.layout.items.some((item) => removedTileIds.has(item.i));
+      const items = pageRemoved ? kept.map((item) => {
+        const markdown = item.text?.markdown ?? '';
+        if (!item.text || !isPlannedPageIntro(markdown)) return item;
+        const heading = /^#\s*([^\n]*)/.exec(markdown)?.[1]?.trim() ?? '';
+        const intro = plannedPageIntro(heading, kept, keptSources);
+        return intro ? { ...item, text: { ...item.text, markdown: intro } } : item;
+      }) : kept;
       const story = operation.page.story
         ? { ...operation.page.story, eligibleTileIds: (operation.page.story.eligibleTileIds ?? []).filter((id) => !removedTileIds.has(id)) }
         : undefined;
@@ -8422,16 +8551,28 @@ function isTemplateIntro(markdown: string, goal: string | undefined): boolean {
   return Boolean(fromGoal && body === fromGoal);
 }
 
+/** Saved operations that only pick data or record an AI plan's questions: no page, tile or name anyone made. */
+const PICK_OPERATION_TYPES = new Set<AppBuildDraftOperation['type']>([
+  'upsert_source', 'remove_source', 'set_frame', 'set_requirements', 'set_coverage', 'set_source_policy',
+  'set_preview_receipt', 'clear_preview_receipt',
+]);
+
+/** How many saved edits changed a draft's pages, tiles or name; picking data and an AI plan's questions are not counted. */
+export function appDraftContentEditCount(records: Array<{ operations: AppBuildDraftOperation[] }>): number {
+  return records.filter((record) => record.operations.some((operation) => !PICK_OPERATION_TYPES.has(operation.type))).length;
+}
+
 /**
  * An empty shell: a new App's draft (never published, no published App behind it) that holds nothing anyone
- * made. It has no data, no tile but the template's intro, at most one page, and no edit was ever saved to it.
- * Describe with AI made one for every try that did not plan (V12). Anything with a tile, data or an edit is
- * never one.
+ * made. It has no tile but the template's intro, at most one page, and no edit to its pages, tiles or name was
+ * ever saved (`editCount`, see `appDraftContentEditCount`). Describe with AI made one for every try that did not
+ * plan (V12). Data picked for it with no tile using it does not make it an App (V13 retest: "(3)" kept two
+ * pre-filled sources and stayed, and its Continue planned it again). Anything with a tile or an edit is never one.
  */
 export function isEmptyNewAppShell(draft: AppBuildDraft, editCount: number): boolean {
   if (draft.baseApp || draft.state === 'project_published' || editCount > 0) return false;
-  if ((draft.sources ?? []).length > 0 || (draft.pages ?? []).length > 1) return false;
-  return (draft.pages ?? []).every((page) => (page.layout?.items ?? []).every((item) => (
+  if ((draft.pages ?? []).length > 1) return false;
+  return (draft.pages ?? []).every((page) => (page.datasets ?? []).length === 0 && (page.layout?.items ?? []).every((item) => (
     Boolean(item.text) && !item.query && !item.sourceId && !item.block && isTemplateIntro(item.text?.markdown ?? '', draft.frame?.goal)
   )));
 }
@@ -8448,7 +8589,7 @@ export function removeEmptyAppCopies(projectRoot: string): string[] {
   try {
     const drafts = storage.listAppBuildDrafts();
     names = [...projectAppIdentities(projectRoot).names, ...drafts.map((draft) => draft.name)];
-    shells = drafts.filter((draft) => numberedCopyBase(draft.name ?? '') !== undefined && isEmptyNewAppShell(draft, storage.listAppBuildOperations(draft.id).length));
+    shells = drafts.filter((draft) => numberedCopyBase(draft.name ?? '') !== undefined && isEmptyNewAppShell(draft, appDraftContentEditCount(storage.listAppBuildOperations(draft.id))));
   } finally {
     storage.close();
   }

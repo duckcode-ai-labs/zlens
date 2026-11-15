@@ -270,7 +270,15 @@ export {
   planAppBuildBrief,
   deterministicDatasetQuery,
   datasetPlannedQueryCoversRequirement,
+  plannedComponentCoversRequirement,
+  plannerAppTitle,
+  APP_TITLE_MAX,
 } from './app-builder-orchestrator.js';
+export {
+  readableSourceTitle,
+  sourceAnswersQuestion,
+  questionGroundedInRequest,
+} from './app-builder-source-match.js';
 export {
   DATASET_PROOF_RELATIVE_PATH,
   LOCAL_DATASET_PROOF_RELATIVE_PATH,

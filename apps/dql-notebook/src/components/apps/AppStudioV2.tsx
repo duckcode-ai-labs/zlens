@@ -155,6 +155,7 @@ import {
   appStudioProposalSourceAddMode,
   appStudioProposalRequiredSourceIds,
   appStudioPlannerProvenanceLabel,
+  appStudioProposalAppName,
   appStudioAiComposeRequest,
   appStudioAiDataModel,
   appStudioNewDataSources,
@@ -3600,6 +3601,7 @@ export function AppStudioV2({
     const aiStep = aiDataFlow && (proposal || aiActivity) ? {
       status: aiActivity?.status === 'running' ? 'running' as const : aiActivity?.status === 'error' ? 'error' as const : 'ready' as const,
       goal: proposalSummary?.frame?.goal || draft.frame.goal || prompt,
+      ...(proposal && appStudioProposalAppName(proposal) ? { appName: appStudioProposalAppName(proposal) } : {}),
       ...(proposal && proposalSummary ? { model: appStudioAiDataModel(proposal, proposalSummary, selectedProposalSourceIds, knownItems) } : {}),
       activitySteps: planWords.activitySteps,
       activityIndex: aiActivityIndex,

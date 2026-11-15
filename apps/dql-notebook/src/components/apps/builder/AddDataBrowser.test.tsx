@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { WarehouseTableSummary } from '../../../api/client';
 import { AddDataBrowser } from './AddDataBrowser';
-import { appDataSourceFromCandidate } from './app-data';
+import { appCardOwner, appDataSourceFromCandidate, isPlaceholderOwner, ownerWords } from './app-data';
+import { setSnowflakeApp } from '../../../snowflake-app/snowflake-app-mode';
 import { draftRevenueQuery, draftWith, marginMetrics, monthlyRevenueQuery, orderLinesDataset, ordersTableDataset, topCustomersQuery } from './app-data.fixtures';
 
 const catalog = [ordersTableDataset, orderLinesDataset, monthlyRevenueQuery, marginMetrics, topCustomersQuery, draftRevenueQuery];
@@ -192,5 +193,37 @@ describe('a table says what became of it (new-user round 3, problem 7)', () => {
     expect(row('dev.customers')).not.toContain('Check customers and add it');
     expect(row('dev.items')).toContain('Table · Not certified yet · dev');
     expect(row('dev.items')).toContain('aria-label="Check order_items and add it"');
+  });
+});
+
+// V13 retest: in the app for Snowflake a table card said "Owner: Node" (the server's own user) and shared Apps
+// carried a "local" tag.
+describe('owners in the app for Snowflake', () => {
+  it('says only a real owner, never the server\'s user or a laptop placeholder', () => {
+    expect(ownerWords({ owner: 'node@local' })).toBe('Owner: Node');
+    expect(ownerWords({ owner: 'node@local' }, { snowflake: true })).toBe('');
+    expect(ownerWords({ owner: 'local', ownerName: 'local' }, { snowflake: true })).toBe('');
+    expect(ownerWords({ owner: 'DATA_ANALYST' }, { snowflake: true })).toBe('Owner: DATA_ANALYST');
+    expect(ownerWords({ owner: 'analytics@example.com' }, { snowflake: true })).toBe('Owner: Analytics (example.com)');
+    expect(['local', 'owner@local', 'node@local', 'Node', ''].every(isPlaceholderOwner)).toBe(true);
+    expect(isPlaceholderOwner('test_admin')).toBe(false);
+    // An App card: the real owner, or nothing; elsewhere as before.
+    expect(appCardOwner({ ownerName: 'local', owners: ['owner@local'] }, true)).toBeUndefined();
+    expect(appCardOwner({ ownerName: 'local', owners: ['DATA_ANALYST'] }, true)).toBe('DATA_ANALYST');
+    expect(appCardOwner({ owners: [] }, false)).toBe('owner@local');
+  });
+
+  it('leaves "Owner: Node" off a table card in the Add data list', () => {
+    const table = { ...ordersTableDataset, owner: 'node@local' };
+    try {
+      setSnowflakeApp(true);
+      const markup = render({ initialItems: [table] });
+      expect(markup).toContain('Table · Certified · Commerce');
+      expect(markup).not.toContain('Owner: Node');
+      expect(markup).not.toMatch(/Owner: local/i);
+    } finally {
+      setSnowflakeApp(false);
+    }
+    expect(render({ initialItems: [table] })).toContain('Owner: Node');
   });
 });
