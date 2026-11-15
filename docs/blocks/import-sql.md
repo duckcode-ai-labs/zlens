@@ -25,7 +25,8 @@ Pick one:
 
 - **Paste SQL**: paste one or more queries.
 - **Upload files**: pick `.sql` files, Tableau workbooks or Power BI files.
-- **Local path**: a file or folder inside your project.
+- **Local path**: a file or folder inside your project. The ZLens app for Snowflake has no project
+  folder to point at, so it offers only the first two.
 
 ZLens reads `.sql` files, Tableau workbooks and Power BI files (see
 [Tableau and Power BI](#tableau-and-power-bi) below). A `.sql` file can hold
@@ -33,7 +34,9 @@ many queries: ZLens splits at `;`, at `GO` lines, and where a new statement
 starts on its own line, so a pasted page of reports with only a blank line
 between them works too. A comment
 right above a query names its draft (`-- Revenue by store`), and so does a
-`-- name:` line.
+`-- name:` line. Without either, ZLens names it from the columns, in plain sentence case
+whatever case the SQL used: `SELECT SEASON, SUM(...) AS WINS ... GROUP BY SEASON` becomes
+**Wins by season**.
 
 Scripts become the queries they end in:
 

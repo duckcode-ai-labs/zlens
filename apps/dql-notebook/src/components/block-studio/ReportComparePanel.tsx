@@ -59,9 +59,11 @@ function readAsBase64(file: File): Promise<string> {
   });
 }
 
-export function ReportComparePanel({ query, queryPath, worksheets, onRecorded, primaryButton, t }: {
+export function ReportComparePanel({ query, queryPath, certified = false, worksheets, onRecorded, primaryButton, t }: {
   /** The saved query to compare, instead of the metrics the file's columns name. */
   query?: string;
+  /** That saved query is already certified: its receipt keeps what was true then. */
+  certified?: boolean;
   /** The saved query's file, so it is found by its file as well as its name. */
   queryPath?: string;
   worksheets?: Array<{ name: string; filters: Array<{ field: string; words: string }> }>;
@@ -223,6 +225,7 @@ export function ReportComparePanel({ query, queryPath, worksheets, onRecorded, p
           result={result}
           recording={recording}
           recorded={recorded}
+          certified={certified}
           onRecord={() => void record(result.id)}
           primaryButton={primaryButton}
           t={t}
@@ -232,17 +235,26 @@ export function ReportComparePanel({ query, queryPath, worksheets, onRecorded, p
   );
 }
 
-/** Where a recorded result now lives, and where it shows next. */
-export function recordedWords(result: ReportComparison): string {
+/**
+ * Where a recorded result now lives, and where it shows next. A certified query's receipt keeps what was
+ * true when it was certified; a later result shows beside it, and a Differs warns next to Certified (V14).
+ */
+export function recordedWords(result: ReportComparison, certified = false): string {
+  if (result.target?.kind === 'query' && certified) {
+    const warns = result.comparison.verdict === 'differs' ? ', with a warning next to Certified' : '';
+    return `Recorded for the saved query ${result.target.name}. It is already certified: its receipt keeps what was true when it was certified, and this result shows beside it${warns}.`;
+  }
   if (result.target?.kind === 'query') return `Recorded for the saved query ${result.target.name}. When you certify it, its receipt shows this result.`;
   return 'Recorded beside each metric it compared. Approving a draft shows this result.';
 }
 
 /** One comparison, read top to bottom: the verdict, why, then every difference shown. */
-export function ComparisonResult({ result, recording, recorded, onRecord, primaryButton, t }: {
+export function ComparisonResult({ result, recording, recorded, certified = false, onRecord, primaryButton, t }: {
   result: ReportComparison;
   recording: ReportCompareRecording | null;
   recorded: boolean;
+  /** The saved query compared is already certified. */
+  certified?: boolean;
   onRecord: () => void;
   primaryButton: CSSProperties;
   t: Theme;
@@ -298,7 +310,7 @@ export function ComparisonResult({ result, recording, recorded, onRecord, primar
       {result.filters.seen.length > 0 && (
         <span style={text}>Filters ZLens can see, as saved (they may have been changed before exporting): {result.filters.seen.join('; ')}</span>
       )}
-      {recorded && <span style={text}>{recordedWords(result)}</span>}
+      {recorded && <span style={text}>{recordedWords(result, certified)}</span>}
       {!recorded && recording === 'separate' && <button onClick={onRecord} style={primaryButton}>Record this result</button>}
       {recording === 'refused' && <span style={text}>Another person could see different figures here, so this result is yours and is not recorded. Someone who sees every row can compare the file and record it.</span>}
     </div>

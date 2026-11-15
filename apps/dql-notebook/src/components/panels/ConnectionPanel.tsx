@@ -49,7 +49,8 @@ import {
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
 import { AppearanceSettings } from '../settings/AppearanceSettings';
-import { connectionValueText } from './connection-values';
+import { connectionDetailRows } from './connection-values';
+import { metadataIndexDetail, metadataSyncingMessage } from '../../snowflake-app/snowflake-app-words';
 import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 export interface ConnectionInfo {
@@ -445,7 +446,7 @@ export function ConnectionPanel({
       return;
     }
     setMetadataSyncing(true);
-    setMetadataMessage('Synchronizing selected metadata into local SQLite…');
+    setMetadataMessage(metadataSyncingMessage(isSnowflakeApp()));
     try {
       const response = await api.applyConnectionMetadataScope(info.default, {
         mode: metadataMode,
@@ -849,13 +850,12 @@ export function ConnectionPanel({
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {Object.entries(cfg ?? {})
-                  .filter(([k]) => k !== 'driver' && k !== 'type')
+                {connectionDetailRows(cfg, snowflakeApp, isSensitiveField)
                   .map(([k, v]) => (
                     <div key={k} style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
                       <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.fontMono, minWidth: 70, flexShrink: 0 }}>{k}</span>
                       <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-                        {isSensitiveField(k) ? '••••••••' : connectionValueText(v, snowflakeApp)}
+                        {v}
                       </span>
                     </div>
                   ))}
@@ -1227,7 +1227,7 @@ export function ConnectionPanel({
         <div style={{ fontSize: 11.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
           {setupSchemaQuestion
             ? `Tick the schemas that hold your tables. ${rowsPrivacy(info?.valueProfile, false, isSnowflakeApp())}`
-            : 'ZLens synchronizes this authorized scope into local SQLite. Warm Ask, Notebook, and Saved queries searches use that index instead of scanning the warehouse.'}
+            : metadataIndexDetail(isSnowflakeApp())}
         </div>
       </div>
       <div style={{ border: `1px solid ${t.cellBorder}`, borderRadius: 9, padding: '11px 12px', background: t.editorBg, display: 'flex', flexDirection: 'column', gap: 9 }}>

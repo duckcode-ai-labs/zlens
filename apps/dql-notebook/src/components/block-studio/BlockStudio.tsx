@@ -72,7 +72,9 @@ function selectedTimeGrains(
 import { themes } from '../../themes/notebook-theme';
 import type { Theme, ThemeMode } from '../../themes/notebook-theme';
 import { ReportComparePanel, verdictTone } from './ReportComparePanel';
-import { reportMatchReceipt, SavedQueryReportCheck } from './SavedQueryReportCheck';
+import { CertificationReportLines, comparedSinceCertified, DiffersSinceCertifiedBadge, reportMatchReceipt, SavedQueryReportCheck, useQueryReportMatch } from './SavedQueryReportCheck';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { importAddSqlStep, importContextHint, importEmptyMessage, importSourceModes, importStartDetail, savedQueryFolderWords, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
 import { SQLCellEditor } from '../cells/SQLCellEditor';
 import { ChartOutput, CHART_TYPE_OPTIONS, resolveChartType } from '../output/ChartOutput';
 import { MiniLineageGraph } from '../lineage/MiniLineageGraph';
@@ -143,6 +145,7 @@ const TREE_OVERSCAN = 10;
 
 export function BlockStudio() {
   const hostUi = useHostUi();
+  const snowflakeApp = useSnowflakeApp();
   const readOnlyBlocks = hostReadOnly(hostUi, 'block_library');
   const readOnlyBlocksReason = readOnlyBlocks ? readOnlyReason(hostUi, 'block_library') : '';
   // The host certifies through its own review: Certify here proposes (RFC 0010 HH-9).
@@ -326,6 +329,13 @@ export function BlockStudio() {
   const dbtStatusQuery = useQuery({
     queryKey: ['block-studio', 'dbt-status'],
     queryFn: () => api.getBlockStudioDbtStatus(),
+    staleTime: 30_000,
+  });
+  // The tables ZLens indexed (Settings » Database). The Database tree here lists a dbt project's
+  // relations only, so without dbt the home said "0 tables" while 18 were indexed (V14).
+  const indexedTablesQuery = useQuery({
+    queryKey: ['block-studio', 'indexed-tables'],
+    queryFn: async () => (await api.getConnections()).metadataStatus?.relationCount ?? 0,
     staleTime: 30_000,
   });
   const semanticLayerQuery = useQuery({
@@ -571,6 +581,13 @@ export function BlockStudio() {
   const blockType = draftMetadata?.blockType ?? 'custom';
   const isSemanticBlock = blockType === 'semantic';
   const hasActiveDraft = Boolean(state.blockStudioDraft.trim() || state.blockStudioMetadata || state.activeBlockPath);
+  const breadcrumbName = savedQueriesCrumb({
+    name: activeBlockName || state.blockStudioMetadata?.name,
+    hasActiveDraft,
+    importing: workspaceMode === 'import',
+    semantic: isSemanticBlock,
+    snowflakeApp,
+  });
 
   // Opening an EXISTING block from the library lands on the read-only detail
   // overview; new drafts (no saved path) go straight to the builder. A block the
@@ -1675,10 +1692,14 @@ export function BlockStudio() {
           >
             <ChevronLeft size={12} strokeWidth={2} /> Saved queries
           </button>
-          <ChevronRight size={11} color={t.textMuted} style={{ flexShrink: 0 }} />
-          <span style={{ fontSize: 12.5, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>
-            {activeBlockName || state.blockStudioMetadata?.name || (hasActiveDraft ? 'new_block' : (isSemanticBlock ? 'semantic' : 'sql'))}
-          </span>
+          {breadcrumbName ? (
+            <>
+              <ChevronRight size={11} color={t.textMuted} style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>
+                {breadcrumbName}
+              </span>
+            </>
+          ) : null}
           {state.blockStudioMetadata?.reviewStatus && (
             <BlockStatusBadge status={blockDisplayStatus(state.blockStudioMetadata.reviewStatus, state.blockStudioMetadata, proposesCertification)} t={t} />
           )}
@@ -1812,7 +1833,7 @@ export function BlockStudio() {
               dbtStatus={state.blockStudioDbtStatus}
               semanticStats={semanticStats}
               semanticObjectCount={semanticObjectCount}
-              databaseStats={databaseStats}
+              databaseStats={{ ...databaseStats, tables: homeTableCount(databaseStats.tables, state.schemaTables.length, indexedTablesQuery.data) }}
               onCreateSql={readOnlyBlocks ? undefined : () => beginManualDraft('custom')}
               onCreateSemantic={readOnlyBlocks ? undefined : () => beginManualDraft('semantic')}
               readOnlyReason={readOnlyBlocksReason}
@@ -2722,6 +2743,7 @@ export function BlockStudioStartPage({
       Icon: Blocks,
     },
   ].filter((card): card is NonNullable<typeof card> => Boolean(card));
+  const snowflakeApp = useSnowflakeApp();
   const dbtReady = Boolean(dbtStatus?.artifacts.manifest.exists);
   const semanticMetricCount = dbtStatus?.counts.metrics ?? semanticStats.metrics;
   const sourceSummary = dbtStatus
@@ -2738,12 +2760,15 @@ export function BlockStudioStartPage({
             Start from SQL you already have, or describe the business asset you want ZLens to build from project context.
           </div>
         </div>
+        {/* The app for Snowflake has no dbt project: no dbt chip there (V14). */}
+        {snowflakeApp ? null : (
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 10px', border: `1px solid ${dbtReady ? '#2ea04340' : t.headerBorder}`, borderRadius: 8, background: dbtReady ? '#2ea0430d' : t.cellBg }}>
           <CheckCircle2 size={15} strokeWidth={2} color={dbtReady ? '#2ea043' : t.textMuted} aria-hidden="true" />
           <span style={{ fontSize: 11, color: dbtReady ? '#2ea043' : t.textMuted, fontWeight: 700, fontFamily: t.font }}>
             {dbtReady ? 'dbt ready' : 'dbt pending'}
           </span>
         </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
@@ -2758,7 +2783,7 @@ export function BlockStudioStartPage({
         {onImport && (
           <PrimaryStartAction
             title="Import SQL"
-            detail="Paste scripts, upload files, or point at a folder. ZLens analyzes candidates without writing files until you save."
+            detail={importStartDetail(snowflakeApp)}
             label="Start import"
             Icon={FileInput}
             onClick={onImport}
@@ -2798,8 +2823,8 @@ export function BlockStudioStartPage({
       </details>
 
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
-        <ReadinessChip Icon={Database} label={projectLabel ? `${projectLabel} dbt` : 'dbt context'} value={sourceSummary} tone={dbtReady ? 'success' : 'neutral'} t={t} />
-        <ReadinessChip Icon={Database} label="Database" value={`${databaseStats.tables} tables`} tone={databaseStats.tables > 0 ? 'success' : 'neutral'} t={t} />
+        {snowflakeApp ? null : <ReadinessChip Icon={Database} label={projectLabel ? `${projectLabel} dbt` : 'dbt context'} value={sourceSummary} tone={dbtReady ? 'success' : 'neutral'} t={t} />}
+        <ReadinessChip Icon={Database} label="Database" value={`${databaseStats.tables.toLocaleString()} ${databaseStats.tables === 1 ? 'table' : 'tables'}`} tone={databaseStats.tables > 0 ? 'success' : 'neutral'} t={t} />
         <ReadinessChip Icon={Blocks} label="DQL semantic layer" value={`${semanticObjectCount} objects`} tone={semanticObjectCount > 0 ? 'success' : 'neutral'} t={t} />
       </section>
     </div>
@@ -3335,8 +3360,12 @@ export function BlockDetailView({
   blockPath?: string | null;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const certified = (metadata?.reviewStatus ?? '').toLowerCase() === 'certified';
   const receiptLines = reportMatchReceipt(metadata?.certification);
+  // The old report check: the box below and, for a certified query, a comparison made since it was certified.
+  const reportCheck = useQueryReportMatch(metadata?.name && blockPath ? metadata.name : undefined);
+  const comparedSince = certified ? comparedSinceCertified(metadata?.certification?.certifiedAt, reportCheck.status) : null;
   const proposed = certified && blockDisplayStatus('certified', metadata, proposes) === 'proposed';
   const name = metadata?.name || 'block';
   const semanticFields = isSemanticBlock ? parseSemanticVisualFields(source) : null;
@@ -3374,12 +3403,13 @@ export function BlockDetailView({
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.fontMono, letterSpacing: '-0.01em' }}>{name}</span>
               {metadata?.reviewStatus ? <BlockStatusBadge status={certified && metadata.certificationSourceChanged ? 'pending_recertification' : proposed ? 'proposed' : metadata.reviewStatus} t={t} /> : null}
+              <DiffersSinceCertifiedBadge since={comparedSince} />
               {metadata?.reviewStatus === 'deprecated' ? (
                 <BlockReplacementLink info={{ status: metadata.reviewStatus, replacedBy: metadata.replacedBy, deprecatedOn: metadata.deprecatedOn, replacement: metadata.replacement }} t={t} onOpen={onOpenReplacement} />
               ) : null}
             </div>
             <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4 }}>
-              {[metadata?.domain, metadata?.folderPath ? `folder: ${metadata.folderPath}` : null, metadata?.owner, ...(metadata?.tags?.length ? [metadata.tags.join(', ')] : [])].filter(Boolean).join(' · ') || 'Unsaved draft'}
+              {[metadata?.domain, savedQueryFolderWords(metadata?.folderPath, snowflakeApp), metadata?.owner, ...(metadata?.tags?.length ? [metadata.tags.join(', ')] : [])].filter(Boolean).join(' · ') || 'Unsaved draft'}
             </div>
             {certified ? (
               <div data-testid="block-certification-receipt" style={{ fontSize: 11.5, color: t.textMuted, marginTop: 4 }}>
@@ -3387,12 +3417,7 @@ export function BlockDetailView({
                 {metadata?.certification && plainCertificationChecks(receiptLines.checks).length ? (
                   <div data-testid="block-certification-checks">Checks passed: {plainCertificationChecks(receiptLines.checks).join(' · ')}</div>
                 ) : null}
-                {receiptLines.matched.map((line) => (
-                  <div key={line} data-testid="block-certification-report-match" style={{ color: 'var(--status-success)' }}>Old report: {line}</div>
-                ))}
-                {receiptLines.warnings.map((line) => (
-                  <div key={line} data-testid="block-certification-report-warning" style={{ color: 'var(--status-warning)' }}>Old report: {line}</div>
-                ))}
+                <CertificationReportLines certification={metadata?.certification} since={comparedSince} t={t} />
                 {metadata?.certification ? (
                   <details className="dql-technical-details">
                     <summary style={{ cursor: 'pointer' }}>Technical details</summary>
@@ -3444,7 +3469,7 @@ export function BlockDetailView({
         </div>
 
         {metadata?.name && blockPath ? (
-          <SavedQueryReportCheck name={metadata.name} path={blockPath} primaryButton={primaryImportButtonStyle(t)} t={t} />
+          <SavedQueryReportCheck name={metadata.name} path={blockPath} certified={certified} status={reportCheck.status} onRecorded={reportCheck.reload} primaryButton={primaryImportButtonStyle(t)} t={t} />
         ) : null}
 
         {/* outputs */}
@@ -3825,7 +3850,7 @@ function SemanticBlockBuilder({
   );
 }
 
-function CompactBlockIdentity({
+export function CompactBlockIdentity({
   metadata,
   domains,
   onTextChange,
@@ -3840,6 +3865,7 @@ function CompactBlockIdentity({
   onTagsChange: (tags: string[]) => void;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const options = blockDomainOptions(metadata?.domain, domains);
   const input = compactBuilderInputStyle(t);
   return (
@@ -3875,9 +3901,12 @@ function CompactBlockIdentity({
               style={{ ...input, fontFamily: t.fontMono }}
             />
           </FieldLabel>
-          <div style={{ marginTop: 5, fontSize: 10, color: t.textMuted, fontFamily: t.fontMono }}>
-            {blockStudioPathPreview(metadata)}
-          </div>
+          {/* A file path means nothing in the app for Snowflake (V14): there is no folder of files to open. */}
+          {snowflakeApp ? null : (
+            <div style={{ marginTop: 5, fontSize: 10, color: t.textMuted, fontFamily: t.fontMono }}>
+              {blockStudioPathPreview(metadata)}
+            </div>
+          )}
         </div>
         <div style={{ gridColumn: '1 / -1' }}>
           <FieldLabel label="Description" t={t}><input value={metadata?.description ?? ''} onChange={(event) => onTextChange('description', event.target.value)} placeholder="What business question does this answer?" style={input} /></FieldLabel>
@@ -4073,7 +4102,7 @@ function BuilderModeBar({ mode, onModeChange, t }: { mode: 'semantic' | 'custom'
   );
 }
 
-function SqlBlockVisualBuilder({
+export function SqlBlockVisualBuilder({
   source,
   metadata,
   domainOptions,
@@ -4096,6 +4125,7 @@ function SqlBlockVisualBuilder({
   fillingCertification: boolean;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const input = compactBuilderInputStyle(t);
   const parsedQuery = source.match(/query\s*=\s*"""([\s\S]*?)"""/i)?.[1]?.trim() ?? '';
   // Local editing state so keystrokes never fight the source round-trip (the
@@ -4129,7 +4159,7 @@ function SqlBlockVisualBuilder({
           onChange={(event) => editSql(event.target.value)}
           spellCheck={false}
           style={{ border: '1px solid var(--border-default)', background: 'var(--bg-1)', borderRadius: 8, padding: '10px 12px', fontSize: 11.5, lineHeight: 1.6, fontFamily: t.fontMono, color: t.textPrimary, outline: 'none', resize: 'vertical' }}
-          placeholder={'SELECT\n  category,\n  SUM(revenue) AS revenue\nFROM {{ ref(\'orders\') }}\nGROUP BY 1'}
+          placeholder={sqlPlaceholder(snowflakeApp)}
         />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <button
@@ -4141,7 +4171,7 @@ function SqlBlockVisualBuilder({
             Convert to DQL script
           </button>
           <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: t.font }}>
-            Detects <span style={{ fontFamily: t.fontMono }}>{'${params}'}</span> and grounds tables against dbt. Open the DQL Source editor for the full script.
+            {sqlConvertHint(snowflakeApp).before}<span style={{ fontFamily: t.fontMono }}>{'${params}'}</span>{sqlConvertHint(snowflakeApp).after}
           </span>
         </div>
       </PanelBox>
@@ -4398,7 +4428,7 @@ function smartImportStatusTone(status: SmartImportItemStatus): 'ok' | 'warn' | '
   return 'info';
 }
 
-function BlockStudioImportWorkspace({
+export function BlockStudioImportWorkspace({
   session,
   sessions,
   sessionsLoading,
@@ -4427,6 +4457,7 @@ function BlockStudioImportWorkspace({
   t: Theme;
   inline?: boolean;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const [mode, setMode] = useState<ImportSourceMode>('paste');
   const [path, setPath] = useState('');
   const [pasteSql, setPasteSql] = useState('');
@@ -5029,8 +5060,8 @@ function BlockStudioImportWorkspace({
             </button>
             {sourceOpen ? (
               <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }}>
-                  {(['paste', 'upload', 'path'] as const).map((value) => (
+                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${importSourceModes(snowflakeApp).length}, minmax(0, 1fr))`, gap: 4 }}>
+                  {importSourceModes(snowflakeApp).map((value) => (
                     <button
                       key={value}
                       onClick={() => setMode(value)}
@@ -5093,7 +5124,7 @@ function BlockStudioImportWorkspace({
                   {loading ? smartImportPhaseLabel(smartPhase) : 'Generate DQL drafts'}
                 </button>
                 <div style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, lineHeight: 1.45 }}>
-                  Uses dbt, MetricFlow, warehouse catalog, and existing DQL context when available.
+                  {importContextHint(snowflakeApp)}
                 </div>
               </>
             ) : (
@@ -5959,14 +5990,15 @@ function ImportStep({ index, active, complete, title, detail, t }: { index: numb
 }
 
 function ImportGuide({ t }: { t: Theme }) {
+  const snowflakeApp = useSnowflakeApp();
   const items = [
-    ['1', 'Add SQL', 'Paste SQL, upload SQL, Tableau or Power BI files, or point to a folder of them.'],
+    ['1', 'Add SQL', importAddSqlStep(snowflakeApp)],
     ['2', 'Generate drafts', 'ZLens analyzes statements, project metadata, tables, and business context.'],
     ['3', 'Review and certify', 'Preview results, edit metadata, then certify the governed saved query.'],
   ];
   return (
     <div style={{ display: 'grid', gap: 12 }}>
-      <EmptyPanel message="Add SQL to analyze DQL candidates without creating saved query files." />
+      <EmptyPanel message={importEmptyMessage(snowflakeApp)} />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
         {items.map(([index, title, detail]) => (
           <div key={title} style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, background: t.appBg, padding: 12, display: 'grid', gap: 6 }}>
@@ -7536,6 +7568,22 @@ function filterDatabaseTree(tree: DatabaseSchemaNode[], query: string): Database
   return tree
     .map((node) => filterNode(node))
     .filter((node): node is DatabaseSchemaNode => Boolean(node));
+}
+
+/**
+ * The crumb after "Saved queries" in its toolbar. With nothing open the open-source page says "sql"
+ * (or "semantic"); the app for Snowflake says nothing there, "Import SQL" while importing, and
+ * "New saved query" for an unnamed draft (V14).
+ */
+export function savedQueriesCrumb(input: { name?: string | null; hasActiveDraft: boolean; importing: boolean; semantic: boolean; snowflakeApp: boolean }): string | null {
+  if (input.name) return input.name;
+  if (input.snowflakeApp) return input.hasActiveDraft ? 'New saved query' : input.importing ? 'Import SQL' : null;
+  return input.hasActiveDraft ? 'new_block' : input.semantic ? 'semantic' : 'sql';
+}
+
+/** The tables the Saved queries home counts: the most any source knows of (the tree, the schema list, the index). */
+export function homeTableCount(treeTables: number, schemaTables: number, indexedTables: number | null | undefined): number {
+  return Math.max(treeTables, schemaTables, typeof indexedTables === 'number' && Number.isFinite(indexedTables) ? indexedTables : 0);
 }
 
 function summarizeDatabaseTree(tree: DatabaseSchemaNode[]): { schemas: number; tables: number; columns: number } {

@@ -61,6 +61,17 @@ test('opens a notebook and runs its cell against the seeded warehouse', async ({
   await expect(page.getByText('smoke-true')).toBeVisible();
 });
 
+test('leaving a notebook for Saved queries names Saved queries, not the notebook (V14)', async ({ page }) => {
+  await page.getByRole('button', { name: 'Notebooks', exact: true }).click();
+  await page.getByText('smoke', { exact: false }).first().click();
+  await expect(page.getByTestId('header-file-kind')).toHaveText(/notebook/i);
+  await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
+  // The notebook stays loaded behind Saved queries, but the header and the tab no longer name it.
+  await expect(page.getByTestId('app-header')).toContainText('Saved queries');
+  await expect(page.getByTestId('header-file-kind')).toHaveCount(0);
+  await expect(page).toHaveTitle('Saved queries · ZLens');
+});
+
 test('Saved queries lists the certified saved queries', async ({ page }) => {
   await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
   // Blocks are grouped by domain; the fixture's three blocks sit under "orders".
