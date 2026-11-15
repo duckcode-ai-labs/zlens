@@ -261,3 +261,23 @@ BEGIN
 END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.restore_backup(VARCHAR) TO APPLICATION ROLE app_admin;
+
+-- History (V15): ZLens keeps a version of every saved query, App and notebook each time it is saved,
+-- inside this app (on its volume; no Git program, no outside connection). It also copies a log of the
+-- changes here, in batches, without any SQL, values or file content: when, who, which item, its kind
+-- and version, what kind of change, and whether it was a certification. The table is kept through
+-- upgrades; commit_id lets ZLens write a batch again without doubling it.
+CREATE TABLE IF NOT EXISTS core.history_log (
+  commit_id VARCHAR,
+  changed_at TIMESTAMP_TZ,
+  changed_by VARCHAR,
+  item VARCHAR,
+  kind VARCHAR,
+  version NUMBER,
+  change VARCHAR,
+  certified BOOLEAN
+);
+CREATE OR REPLACE VIEW app_public.history AS
+  SELECT changed_at, changed_by, item, kind, version, change, certified
+  FROM core.history_log;
+GRANT SELECT ON VIEW app_public.history TO APPLICATION ROLE app_admin;

@@ -68,11 +68,14 @@ import { resolveNpmInvocation } from './npm-runtime.js';
 import { allowedOllamaEndpoint, OLLAMA_ENDPOINT_REFUSED, savedOllamaEndpoint } from './ollama-endpoint.js';
 import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, NO_EGRESS_DBT_CLOUD_REASON, NO_EGRESS_METRICFLOW_REASON, noEgressRepositoryRefusal } from './deployment-locks.js';
 import { ZLENS_FAVICON_SVG } from './brand-page.js';
-import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, withSnowflakeUser, type SnowflakeIngress } from './snowflake-ingress.js';
+import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, snowflakeSignedInUser, withSnowflakeUser, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
 import { LONG_REQUEST_PATH, answerLongRequest, handleLongRequestPoll } from './long-request.js';
 import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions } from './snowflake-app-settings.js';
 import { SnowflakeAppBackups } from './snowflake-app-backups.js';
+import { HistoryService } from './history/history-service.js';
+import { HISTORY_ROUTE_PREFIX, handleHistoryRequest } from './history/history-routes.js';
+import { ZLENS_AUTHOR } from './history/history-store.js';
 import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
 import {
   ensureDqlGitignore,
@@ -5334,6 +5337,36 @@ async function executePreparedArtifactTraceBoundary<T>(input: {
 }
 
 
+/**
+ * V15 History in the ZLens app for Snowflake (decisions H1–H10): opens it, creating its repository with the first
+ * version on the first start. Undefined outside the app (open source and Enterprise keep Source control and the Git
+ * program's history), and when it cannot open: saving then works as before, without versions.
+ */
+async function openSnowflakeHistory(input: {
+  projectRoot: string;
+  appOptions: SnowflakeAppSettingsOptions | undefined;
+  query: (sql: string) => Promise<Array<Record<string, unknown>>>;
+  warehouse: () => string | undefined;
+  onRestored: (paths: string[]) => Promise<void>;
+}): Promise<HistoryService | undefined> {
+  if (!input.appOptions) return undefined;
+  const history = new HistoryService({
+    projectRoot: input.projectRoot,
+    ...(input.appOptions.appName ? { sqlLog: { appName: input.appOptions.appName, query: input.query, warehouse: input.warehouse } } : {}),
+    onRestored: input.onRestored,
+    // Tests start many servers: no quiet look for background changes there.
+    ...(process.env.VITEST ? { sweepDelayMs: 0 } : {}),
+  });
+  try {
+    const started = await history.start();
+    if (started.created) console.log('[zlens] History starts here: every save in ZLens is kept as a version, inside this app.');
+    return history;
+  } catch (error) {
+    console.warn(`[zlens] History could not open, so saves are not kept as versions: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
 export async function startLocalServer(opts: LocalServerOptions): Promise<number> {
   // RFC 0010: everything this server does — each request it answers and the work its startup begins — runs as its
   // own, so a host that runs several servers in one process never has one server's hooks used for another's.
@@ -5356,10 +5389,26 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // First, before any store opens and migrates itself forward: when another
   // ZLens version last opened this project, copy its state aside (upgrade-backups.ts).
   backUpOnVersionChange(projectRoot, runtimeVersion);
+  // Inside Snowflake (the ZLens app): Snowflake signs the person in (snowflake-ingress.ts).
+  const snowflakeIngress = opts.snowflakeIngress ?? snowflakeIngressFromEnv();
+  // V15 History, in the app for Snowflake only: a version of every save, kept in a repository of its own beside the
+  // project (history/history-service.ts). Opened before the upgrade steps, so what they change is ZLens's version.
+  const snowflakeHistory = await openSnowflakeHistory({
+    projectRoot,
+    appOptions: snowflakeIngress ? (opts.snowflakeAppSettings ?? snowflakeAppSettingsFromEnv()) : undefined,
+    query: (sql) => snowflakeAppQuery(sql),
+    warehouse: () => (typeof connection?.warehouse === 'string' ? connection.warehouse : undefined),
+    onRestored: async (paths) => {
+      await refreshLocalMetadataCatalog(projectRoot);
+      if (paths.some((path) => path.startsWith('semantic-layer/'))) await reloadSemanticLayer();
+      scheduleProjectRefresh('history-restore');
+    },
+  });
   // Upgrade step (V13): the empty "… (2)"–"(n)" copies V12 made of one App go to the trash; anything with a tile or an edit stays.
   try {
     const moved = removeEmptyAppCopies(projectRoot);
     if (moved.length) console.log(`ZLens: moved ${moved.length} empty copies of an App to the trash (${moved.join(', ')}). Nothing in them was made by anyone.`);
+    if (moved.length) await snowflakeHistory?.commitPending(ZLENS_AUTHOR, 'upgrade', `Upgrade moved ${moved.length} empty copies of an App to the trash`);
   } catch (error) {
     console.warn(`ZLens: could not check for empty App copies: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -5416,7 +5465,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const allowedOrigins = new Set((opts.allowedOrigins ?? (readEnv('ZLENS_ALLOWED_ORIGINS') ?? '').split(','))
     .map((value) => value.trim().replace(/\/$/, ''))
     .filter(Boolean));
-  const snowflakeIngress = opts.snowflakeIngress ?? snowflakeIngressFromEnv();
   // RFC 0010: with a host, Dataset grain proofs are each person's (their row rules decided them); none stays shared.
   if (hostHooks) {
     try {
@@ -5574,7 +5622,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       if (result.export) console.log(`[zlens] Copied the projects to the backup stage: ${result.export.file}.`);
       if (result.error) console.warn(`[zlens] Backup failed: ${result.error}`);
     };
-    idleSuspender.onBeforeSuspend(async () => { logDaily(await snowflakeBackups.daily(20)); });
+    idleSuspender.onBeforeSuspend(async () => {
+      // History first: changes made in the background become a version, and the day's SQL log is written.
+      if (snowflakeHistory) {
+        await snowflakeHistory.sweep();
+        await snowflakeHistory.flushSqlLog({ atStop: true });
+      }
+      logDaily(await snowflakeBackups.daily(20));
+    });
     const longRun = setInterval(() => { void snowflakeBackups.daily(30).then(logDaily); }, 60 * 60_000);
     longRun.unref?.();
   }
@@ -15396,6 +15451,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       mkdirSync(dirname(snowflakeAppSetupMarker), { recursive: true });
       writeFileSync(snowflakeAppSetupMarker, JSON.stringify(snowflakeAppSetup, null, 2) + '\n', 'utf-8');
       console.log(`[zlens] Read ${snowflakeAppSetup.relations ?? 0} tables and views in ${database} (${schemas.join(', ')}) and drafted ${snowflakeAppSetup.drafted} models for review.`);
+      // What the set-up wrote into the project is ZLens's version, not the next person's (V15 History).
+      void snowflakeHistory?.commitPending(ZLENS_AUTHOR, 'setup', `Set up from ${database}: drafted models for review`).catch(() => undefined);
     } catch (error) {
       snowflakeAppSetup = { state: 'failed', database, error: error instanceof Error ? error.message : String(error), at: new Date().toISOString() };
       console.warn(`[zlens] Could not set up from ${database} by itself: ${snowflakeAppSetup.error}`);
@@ -15492,6 +15549,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           return;
         }
       }
+    }
+    // V15 History: once a request that changed tracked files has answered, they become a version by the person
+    // Snowflake signed in (one commit per request, queued). Refused and failed requests change nothing.
+    if (snowflakeHistory && path.startsWith('/api/')) {
+      const signedIn = req.headers[SNOWFLAKE_USER_HEADER];
+      const historyUser = (Array.isArray(signedIn) ? signedIn[0] : signedIn)?.trim() || undefined;
+      res.once('finish', () => {
+        snowflakeHistory.afterRequest({ user: historyUser, method: req.method, path, status: res.statusCode })?.catch((error: unknown) => {
+          console.warn(`[zlens] History could not save a version: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      });
     }
     // RFC 0010 HH-6: every API request that changes something or is refused
     // is reported to the host's audit sink, with who it was once known.
@@ -15698,6 +15766,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const operation = operationCoordinator.cancel(operationId);
       res.writeHead(operation ? 200 : 404, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(serializeJSON(operation ?? { error: 'Operation not found.' }));
+      return;
+    }
+
+    // V15 History (the app for Snowflake): the project's changes, an item's versions, compare and restore.
+    if (snowflakeHistory && path.startsWith(HISTORY_ROUTE_PREFIX)) {
+      await handleHistoryRequest(req, res, url, {
+        history: snowflakeHistory,
+        user: snowflakeSignedInUser(),
+        readJSON: (request) => readJSON(request),
+        serialize: serializeJSON,
+        run: async (source) => {
+          const preview = await runBlockStudioPreviewSource(source, requireActiveConnection(), {});
+          return { columns: preview.result.columns, rows: preview.result.rows };
+        },
+        mayOpen: (file) => !hostedRequest() || hostedProjectFile(projectRoot, /^apps\/[^/]+$/.test(file) ? `${file}/dql.app.json` : file, { privateDrafts: privateDraftsAllowed() }) !== null,
+      });
       return;
     }
 
@@ -28352,10 +28436,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(serializeJSON({ entries: [], status: 'error', error: HOSTED_FILE_REFUSED, code: 'PERMISSION_DENIED' }));
           return;
         }
-        // The app for Snowflake has no Git (its image holds no git): say what it keeps instead.
+        // The app for Snowflake has no Git program: its versions come from History (V15). Without History, it
+        // says what it keeps instead.
         if (snowflakeApp) {
+          const resolved = named ? resolveBlockHistoryPath(projectRoot, named) : undefined;
+          if (snowflakeHistory && resolved && !resolved.ok) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(serializeJSON({ entries: [], status: 'error', message: resolved.error }));
+            return;
+          }
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ entries: [], status: 'git_unavailable', message: SNOWFLAKE_APP_NO_HISTORY }));
+          res.end(serializeJSON(snowflakeHistory && resolved?.ok
+            ? snowflakeHistory.blockHistory(resolved.relativePath)
+            : { entries: [], status: 'git_unavailable', message: SNOWFLAKE_APP_NO_HISTORY }));
           return;
         }
         const history = await readBlockHistory(projectRoot, named);
@@ -33755,6 +33848,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
   server.once('close', () => {
     runtimeClosing = true;
+    snowflakeHistory?.stop();
     unregisterServerHooks(scope.id);
     unregisterRelatedFields();
     syncProcessHostHooks();

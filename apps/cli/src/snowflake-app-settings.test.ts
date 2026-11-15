@@ -205,7 +205,7 @@ describe('the server, set up from Snowsight', () => {
 });
 
 describe('the page the app for Snowflake serves', () => {
-  it('is marked as the app for Snowflake, has no Git history to show, and carries the ZLens icon', async () => {
+  it('is marked as the app for Snowflake, reads versions from its own History, and carries the ZLens icon', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-sf-app-page-'));
     roots.push(projectRoot);
     writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'sf', connections: { default: { driver: 'sqlite', filepath: 'main.sqlite' } } }));
@@ -232,10 +232,10 @@ describe('the page the app for Snowflake serves', () => {
     expect((await call('/assets')).status).toBe(404);
     expect((await call('/assets/missing.js')).status).toBe(404);
 
-    // The image has no git: the History tab says what the app keeps instead of "Git is not installed".
-    const history = await (await call('/api/blocks/history?path=blocks/a.dql')).json() as { status: string; message: string };
-    expect(history).toEqual({ entries: [], status: 'git_unavailable', message: SNOWFLAKE_APP_NO_HISTORY });
-    expect(history.message).not.toMatch(/PATH|install/i);
+    // The image has no git: the History tab reads the app's own History (V15), never "Git is not installed".
+    const history = await (await call('/api/blocks/history?path=blocks/a.dql')).json() as { status: string; message?: string };
+    expect(history).toEqual({ entries: [], status: 'ok' });
+    expect(SNOWFLAKE_APP_NO_HISTORY).not.toMatch(/PATH|install/i);
 
     for (const icon of ['/favicon.svg', '/favicon.ico']) {
       const response = await call(icon);
