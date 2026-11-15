@@ -36,9 +36,9 @@ ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_backup_stage
 -- idle_minutes: ZLens stops its own service after this many minutes with no one using it (projects
 -- are kept; opening it starts it again). The compute pool then suspends AUTO_SUSPEND_SECS later.
 -- Longer costs more: the pool's one CPU_X64_XS node bills about 0.06 credits an hour while it runs.
--- Shorter means more cold starts: about 2 minutes when only the service stopped, 5 to 15 when the
--- pool suspended too (measured). An upgrade applies a new value here; the pool's own settings are
--- set only when it is created.
+-- Shorter means more cold starts: about 2 to 3 minutes each, with the pool suspended or not (V13
+-- test, 1.7 to 2.6 minutes). An upgrade applies a new value here; the pool's own settings are set
+-- only when it is created.
 CREATE OR REPLACE PROCEDURE core.ensure_zlens(resume BOOLEAN)
 RETURNS VARCHAR
 LANGUAGE SQL
@@ -97,7 +97,7 @@ AS
 $$
 BEGIN
   CALL core.ensure_zlens(TRUE);
-  RETURN 'ZLens is starting: about 2 minutes, or 5 to 15 when its compute pool was stopped too. CALL app_public.app_url() gives its address once it is ready.';
+  RETURN 'ZLens is starting: about 2 to 3 minutes. CALL app_public.app_url() waits until it is ready, then gives its address.';
 END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.start_app() TO APPLICATION ROLE app_admin;
@@ -119,10 +119,12 @@ END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.stop_app() TO APPLICATION ROLE app_admin;
 
--- ZLens's address in the browser (Snowflake signs the person in there). While ZLens is starting or
--- stopped it says so, with an honest wait: opening the address too early shows Snowflake's own
--- "service is not yet running" page, and each reload of it asks the person to sign in again.
--- An unknown state gives the address, as before.
+-- ZLens's address in the browser (Snowflake signs the person in there). Opening the address while
+-- ZLens is stopped or starting shows Snowflake's own "service is not yet running" page, and each
+-- reload of that page asks the person to sign in again. So when ZLens is stopped this starts it,
+-- and while it starts this waits until it is ready (SYSTEM$WAIT_FOR_SERVICES, at most 4 minutes; a
+-- start takes about 2 to 3), then gives the address. Still not ready by then: it says so, with an
+-- honest wait. An unknown state gives the address, as before.
 CREATE OR REPLACE PROCEDURE app_public.app_url()
 RETURNS VARCHAR
 LANGUAGE SQL
@@ -131,12 +133,55 @@ $$
 DECLARE
   url VARCHAR DEFAULT '';
   svc_status VARCHAR DEFAULT '';
-  pool_state VARCHAR DEFAULT '';
-  wait_text VARCHAR;
+  pool VARCHAR;
+  wait_result VARCHAR DEFAULT '';
   endpoints RESULTSET;
   services RESULTSET;
-  pools RESULTSET;
+  services_after RESULTSET;
 BEGIN
+  pool := CURRENT_DATABASE() || '_POOL';
+  BEGIN
+    services := (EXECUTE IMMEDIATE 'SHOW SERVICES LIKE ''ZLENS'' IN SCHEMA core');
+    LET sc CURSOR FOR services;
+    FOR svc IN sc DO
+      svc_status := UPPER(svc."status");
+    END FOR;
+  EXCEPTION WHEN OTHER THEN
+    NULL;  -- the state could not be read: fall back to the address
+  END;
+  -- Still stopping: it cannot be started until it has stopped, a moment later.
+  IF (svc_status = 'SUSPENDING') THEN
+    RETURN 'ZLens is stopping (it stops itself when no one has used it for a while; your projects are kept). Run CALL app_public.app_url() again in a minute: it starts ZLens and waits until it is ready.';
+  END IF;
+  -- Stopped (by itself after its idle minutes, or by stop_app()): start it, as opening its address would.
+  IF (svc_status = 'SUSPENDED') THEN
+    BEGIN
+      ALTER COMPUTE POOL IDENTIFIER(:pool) RESUME;
+    EXCEPTION WHEN OTHER THEN NULL;  -- already running, or it resumes with the service
+    END;
+    BEGIN
+      ALTER SERVICE core.zlens RESUME;
+    EXCEPTION WHEN OTHER THEN NULL;  -- already starting
+    END;
+  END IF;
+  -- Starting: wait until it is ready, so the address opens ZLens rather than Snowflake's page.
+  -- SYSTEM$WAIT_FOR_SERVICES returns once the service is READY (or FAILED) and fails after 240 seconds.
+  IF (svc_status IN ('SUSPENDED', 'PENDING')) THEN
+    BEGIN
+      SELECT SYSTEM$WAIT_FOR_SERVICES(240, 'core.zlens') INTO :wait_result;
+    EXCEPTION WHEN OTHER THEN
+      NULL;  -- not ready within 4 minutes: the state read below says so
+    END;
+    BEGIN
+      services_after := (EXECUTE IMMEDIATE 'SHOW SERVICES LIKE ''ZLENS'' IN SCHEMA core');
+      LET sa CURSOR FOR services_after;
+      FOR svc IN sa DO
+        svc_status := UPPER(svc."status");
+      END FOR;
+    EXCEPTION WHEN OTHER THEN
+      NULL;
+    END;
+  END IF;
   endpoints := (EXECUTE IMMEDIATE 'SHOW ENDPOINTS IN SERVICE core.zlens');
   LET c CURSOR FOR endpoints;
   FOR endpoint IN c DO
@@ -144,34 +189,20 @@ BEGIN
       url := 'https://' || endpoint."ingress_url";
     END IF;
   END FOR;
-  BEGIN
-    services := (EXECUTE IMMEDIATE 'SHOW SERVICES LIKE ''ZLENS'' IN SCHEMA core');
-    LET sc CURSOR FOR services;
-    FOR svc IN sc DO
-      svc_status := UPPER(svc."status");
-    END FOR;
-    pools := (EXECUTE IMMEDIATE 'SHOW COMPUTE POOLS LIKE ''' || CURRENT_DATABASE() || '_POOL''');
-    LET pc CURSOR FOR pools;
-    FOR p IN pc DO
-      pool_state := UPPER(p."state");
-    END FOR;
-  EXCEPTION WHEN OTHER THEN
-    NULL;  -- the state could not be read: fall back to the address
-  END;
-  wait_text := IFF(pool_state IN ('SUSPENDED', 'STARTING', 'STOPPING'),
-    '5 to 15 minutes, because Snowflake is starting its compute pool too',
-    'about 2 minutes');
-  IF (svc_status IN ('SUSPENDED', 'SUSPENDING') AND url <> '') THEN
-    RETURN 'ZLens is stopped (it stops itself when no one has used it for a while; your projects are kept). '
-      || 'Opening its address starts it again, and the first page then takes ' || wait_text || '. '
-      || 'Until then Snowflake shows "service is not yet running": wait rather than reload, because each reload asks you to sign in again. '
-      || 'Address: ' || url;
-  END IF;
-  IF (svc_status = 'PENDING' OR url = '') THEN
-    RETURN 'ZLens is starting. This takes ' || wait_text || '. Run CALL app_public.app_url() again in a minute: it gives the address once ZLens is ready.';
+  IF (url = '') THEN
+    RETURN 'ZLens is starting, and Snowflake has not given it an address yet. A start takes about 2 to 3 minutes. Run CALL app_public.app_url() again in a minute: it waits until ZLens is ready, then gives the address.';
   END IF;
   IF (svc_status IN ('FAILED', 'INTERNAL_ERROR')) THEN
     RETURN 'ZLens did not start (Snowflake reports ' || svc_status || '). An admin can run CALL app_public.start_app() to try again. Its address: ' || url;
+  END IF;
+  IF (svc_status = 'SUSPENDED') THEN
+    RETURN 'ZLens has not started yet (Snowflake still reports it stopped). Run CALL app_public.app_url() again in a minute; if this comes back again, an admin can run CALL app_public.start_app(). Its address: ' || url;
+  END IF;
+  IF (svc_status = 'PENDING') THEN
+    RETURN 'ZLens is still starting. A start takes about 2 to 3 minutes, and longer right after an install or an upgrade. '
+      || 'Wait, then open the address once: ' || url || ' '
+      || '(Opened before ZLens is ready, it shows the Snowflake page "service is not yet running", and each reload asks you to sign in again. '
+      || 'Or run CALL app_public.app_url() again: it waits until ZLens is ready.)';
   END IF;
   RETURN url;
 END;

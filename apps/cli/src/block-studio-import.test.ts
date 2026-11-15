@@ -317,15 +317,36 @@ limit 3;
     });
 
     const candidate = session.candidates[0];
-    expect(candidate.name).toBe('Top Players By Total Points 2017');
+    expect(candidate.name).toBe('Top players by total points 2017');
     expect(candidate.description).toBe('Ranks players by total points for 2017 using TRANSFORMED.int_player_stats, including games played.');
     expect(candidate.tags).toEqual(expect.arrayContaining(['transformed', 'player', 'stats', 'total', 'points', '2017']));
-    expect(candidate.dqlSource).toContain('block "Top Players By Total Points 2017"');
+    expect(candidate.dqlSource).toContain('block "Top players by total points 2017"');
     expect(candidate.dqlSource).toContain('pattern = "ranking"');
     expect(candidate.dqlSource).toContain('grain = "player_name"');
     expect(candidate.dqlSource).toContain('outputs = ["player_name", "total_points", "games_played"]');
     expect(candidate.dqlSource).toContain('allowedFilters = ["game_date_est", "player_name"]');
     expect(candidate.dqlSource).toContain('sourceSystems = ["transformed"]');
+  });
+
+  it('V14: names a query read from Snowflake SQL in one plain case, not "WINS By SEASON"', () => {
+    const root = tempProject();
+    const named = (sql: string) => createBlockStudioImportSession(root, { inputMode: 'paste', sources: [{ path: 'pasted.sql', content: sql }] }).candidates[0]!;
+    // The tester's query: upper-case Snowflake columns.
+    const wins = named(`SELECT f.SEASON, SUM(CASE WHEN f.WL = 'W' THEN 1 ELSE 0 END) AS WINS
+FROM NBA.TRANSFORMED.LOCAL_TEAM_GAME_FACTS f
+WHERE f.SEASON BETWEEN 2014 AND 2018
+GROUP BY f.SEASON
+ORDER BY f.SEASON`);
+    expect(wins.name).toBe('Wins by season');
+    expect(wins.dqlSource).toContain('block "Wins by season"');
+    // The same words whatever case the columns were written in.
+    expect(named('select season, sum(pts) as total_points from nba.games group by season').name).toBe('Total points by season');
+    expect(named('select SEASON, sum(PTS) as TotalPoints from NBA.GAMES group by SEASON').name).toBe('Total points by season');
+    expect(named('SELECT TEAM_NAME, SUM(PTS) AS TOTAL_POINTS FROM NBA.GAMES GROUP BY TEAM_NAME ORDER BY TOTAL_POINTS DESC LIMIT 5').name).toBe('Top teams by total points');
+    expect(named('SELECT SUM(PTS) AS TOTAL_POINTS FROM NBA.GAMES').name).toBe('Total points');
+    expect(named('SELECT DISTINCT SEASON FROM NBA.GAMES').name).toBe('Seasons detail');
+    // A name someone wrote is titleized, as before.
+    expect(named('-- name: Warriors wins\nSELECT SEASON, COUNT(*) AS WINS FROM NBA.GAMES GROUP BY SEASON').name).toBe('Warriors Wins');
   });
 
   it('splits named query sections without semicolons', () => {
@@ -387,8 +408,8 @@ select product_type, count(*) as items_sold from dev.products where is_food_item
     expect(session.candidates.map((candidate) => candidate.name)).toEqual([
       'Store Revenue For A Period',
       'Average Order Value Per Customer Type',
-      'Items Sold By Product Type',
-      'Items Sold By Product Type 2',
+      'Items sold by product type',
+      'Items sold by product type 2',
     ]);
     expect(session.candidates[0].description).not.toMatch(/name:/i);
     expect(session.candidates[0].description).toBe('Calculates revenue by location name using dev.orders, dev.locations.');

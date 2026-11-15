@@ -1239,7 +1239,10 @@ function buildSqlCandidate(options: {
   // A name header wins, then a short comment right above the query, then a
   // name read from the SQL. Names that repeat in one import get a number
   // afterwards (giveUniqueNames).
-  const name = metadata.name || metadata.title || inferred.name || basename(statement.sourcePath, extname(statement.sourcePath));
+  // A name someone wrote (header, comment, file) is titleized as before; a name read from the SQL is
+  // already in plain sentence case ("Wins by season") and is kept as it is.
+  const written = metadata.name || metadata.title;
+  const name = written ? titleizeName(written) : inferred.name || titleizeName(basename(statement.sourcePath, extname(statement.sourcePath)));
   const parameters = extractSqlParameters(statement.sql);
   const parameterDecisions: DqlParameterDecision[] = statement.parameters.map((parameter) => ({
     name: parameter.name,
@@ -1268,7 +1271,7 @@ function buildSqlCandidate(options: {
     id: buildCandidateId(sourcePath, statement.statementIndex, statement.sql),
     sourceKind: statement.sourceKind ?? options.sourceKind,
     sourcePath,
-    name: titleizeName(name),
+    name,
     domain: metadata.domain ? sanitizeDomain(metadata.domain) : options.defaults.domain,
     description: metadata.description || inferred.description || `Imported from ${sourcePath}`,
     owner: options.defaults.owner,
@@ -1517,16 +1520,20 @@ function inferStatementBusinessMetadata(sql: string, sourcePath: string, sourceT
   const ranking = /\border\s+by\b[\s\S]*\bdesc\b/i.test(stripSqlComments(sql))
     && (hasRankingLimit(sql) || /\bselect\s+(?:distinct\s+)?top\s*\(?\s*\d+/i.test(sql) || /\bfetch\s+first\b/i.test(sql));
   const dimensionLabel = dimension ? titleizeName(dimension) : '';
+  // One case for the whole name, whatever case the SQL used: Snowflake's WINS and SEASON gave
+  // "WINS By SEASON" (V14); now "Wins by season", "Top players by total points 2017".
+  const year = yearLabel ? ` ${yearLabel}` : '';
   let name = '';
   if (metricLabel && dimension && ranking) {
-    name = `Top ${pluralDimension} By ${metricLabel}${yearLabel ? ` ${yearLabel}` : ''}`;
+    name = `top ${nameWords(pluralDimension)} by ${nameWords(metricLabel)}${year}`;
   } else if (metricLabel && dimension) {
-    name = `${metricLabel} By ${dimensionLabel}${yearLabel ? ` ${yearLabel}` : ''}`;
+    name = `${nameWords(metricLabel)} by ${nameWords(dimensionLabel)}${year}`;
   } else if (metricLabel) {
-    name = `${metricLabel}${yearLabel ? ` ${yearLabel}` : ''}`;
+    name = `${nameWords(metricLabel)}${year}`;
   } else if (dimension) {
-    name = `${pluralDimension} Detail${yearLabel ? ` ${yearLabel}` : ''}`;
+    name = `${nameWords(pluralDimension)} detail${year}`;
   }
+  name = sentenceCase(name);
 
   const selectedMeasures = aggregateAliases.map(titleizeName).filter((label) => label && label !== metricLabel);
   let description = '';
@@ -1908,6 +1915,17 @@ function normalizePattern(value: string | undefined): string {
 
 function normalizeStringList(values: string[] | undefined): string[] {
   return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+}
+
+/** Words of a name read from SQL, lower case: WINS → wins, Total Points → total points, totalPoints → total points. */
+function nameWords(label: string): string {
+  return label.replace(/[_-]+/g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** First letter up, the rest as it is: "wins by season" → "Wins by season". */
+function sentenceCase(text: string): string {
+  const trimmed = text.trim();
+  return trimmed ? `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}` : trimmed;
 }
 
 function titleizeName(name: string): string {

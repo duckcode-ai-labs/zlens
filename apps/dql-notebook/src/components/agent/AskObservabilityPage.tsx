@@ -25,6 +25,7 @@ import {
 import { api, type AskTraceEnvelopeV1, type AskTraceListEntryV1, type AskTraceListQueryV1, type AskTraceStoreStatusV1 } from '../../api/client';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { themes, type Theme } from '../../themes/notebook-theme';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 const PAGE_SIZE = 25;
 
@@ -199,25 +200,53 @@ export function AskObservabilityPage(): JSX.Element {
   );
 }
 
-function StoreStatusCard({ status, loading, error, t }: { status?: AskTraceStoreStatusV1; loading: boolean; error?: string; t: Theme }): JSX.Element {
-  const unavailable = Boolean(error) || (status && (!status.available || !status.recordingEnabled));
-  const Icon = unavailable ? AlertTriangle : status?.recordingEnabled ? CheckCircle2 : LoaderCircle;
+/**
+ * What the trace store card says. On a laptop the traces are local; in the app for Snowflake they stay
+ * in the person's Snowflake account, and there is no "local runtime" for them to rebuild (V14).
+ */
+export function traceStoreWords(input: { status?: AskTraceStoreStatusV1; loading: boolean; error?: string; snowflakeApp?: boolean }): { title: string; detail: string } {
+  const { status, loading, error } = input;
+  const ready = Boolean(status?.available && status.recordingEnabled);
+  if (input.snowflakeApp) {
+    return {
+      title: error
+        ? 'The trace catalog could not be loaded.'
+        : ready ? 'Trace recording is ready.' : loading ? 'Checking trace recording…' : 'Trace recording is unavailable.',
+      detail: error
+        ? 'Refresh the page. Existing Ask results remain available.'
+        : ready
+          ? 'Traces stay in your Snowflake account, redacted. Full prompts, SQL, rows, provider responses and credentials are not kept here.'
+          : status?.reason === 'disabled'
+            ? 'Trace recording is turned off for this app.'
+            : status?.reason === 'unsupported_schema'
+              ? 'This version of ZLens cannot read the trace index. It is rebuilt at the next upgrade; then retry.'
+              : 'ZLens did not report a usable trace store.',
+    };
+  }
   const title = error
     ? 'The local trace catalog could not be loaded.'
-    : status?.available && status.recordingEnabled
+    : ready
       ? 'Local trace recording is ready.'
       : loading
         ? 'Checking local trace recording…'
         : 'Local trace recording is unavailable.';
   const detail = error
     ? 'Check that the local ZLens runtime is running, then refresh. Existing Ask results remain available.'
-    : status?.available && status.recordingEnabled
+    : ready
       ? 'Traces are local and redacted. Full prompts, SQL, rows, provider responses, credentials, and file paths are not retained here.'
       : status?.reason === 'disabled'
         ? 'Enable local Ask trace recording in the project runtime, then run a new Ask.'
         : status?.reason === 'unsupported_schema'
           ? 'Rebuild the local runtime or trace index to match this ZLens version, then retry.'
           : 'The runtime did not report a usable local trace store.';
+  return { title, detail };
+}
+
+function StoreStatusCard({ status, loading, error, t }: { status?: AskTraceStoreStatusV1; loading: boolean; error?: string; t: Theme }): JSX.Element {
+  const snowflakeApp = useSnowflakeApp();
+  const unavailable = Boolean(error) || (status && (!status.available || !status.recordingEnabled));
+  const Icon = unavailable ? AlertTriangle : status?.recordingEnabled ? CheckCircle2 : LoaderCircle;
+  const { title, detail } = traceStoreWords({ status, loading, error, snowflakeApp });
   return (
     <section role={unavailable ? 'alert' : 'status'} style={{ display: 'flex', gap: 10, padding: '11px 13px', borderRadius: 10, border: `1px solid ${unavailable ? `${t.warning}55` : `${t.accent}33`}`, background: unavailable ? `${t.warning}0d` : `${t.accent}09` }}>
       <Icon size={16} color={unavailable ? t.warning : t.accent} style={{ flexShrink: 0, marginTop: 1 }} />

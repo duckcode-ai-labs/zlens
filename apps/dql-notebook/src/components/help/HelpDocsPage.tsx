@@ -399,10 +399,12 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
       mins: '2 min',
       body: (
         <>
-          <p style={para}>After 60 minutes with no one using it, ZLens stops by itself, and its projects are kept. Opening it again starts it: about 2 minutes, or 5 to 15 when Snowflake also has to start its compute pool.</p>
-          <p style={para}>While it starts, Snowflake shows a short message that the service is not yet running. Wait, then reload once: each reload sends you back to Snowflake's sign-in.</p>
-          <p style={para}>Before a meeting, an admin can start it ahead of time, or ask how long is left:</p>
-          <pre style={codeBlock}>{'CALL ZLENS_APP.app_public.start_app();\nCALL ZLENS_APP.app_public.app_url();'}</pre>
+          <p style={para}>After 60 minutes with no one using it, ZLens stops by itself, and its projects are kept. Starting it again takes about 2 to 3 minutes.</p>
+          <p style={para}>After a stop, ask for its address in a Snowsight worksheet before you open it. This starts ZLens, waits until it is ready (up to 4 minutes), then gives the address. Snowsight's <strong>Launch app</strong> button opens the address at once, without waiting.</p>
+          <pre style={codeBlock}>{'CALL ZLENS_APP.app_public.app_url();'}</pre>
+          <p style={para}>Opened while it starts, Snowflake shows a short message that the service is not yet running. Wait about 2 to 3 minutes, then reload once: each reload sends you back to Snowflake's sign-in.</p>
+          <p style={para}>Before a meeting, an admin can start it a few minutes ahead:</p>
+          <pre style={codeBlock}>{'CALL ZLENS_APP.app_public.start_app();'}</pre>
         </>
       ),
     },
@@ -412,7 +414,7 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
       body: (
         <>
           <div style={{ margin: '14px 0 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {troubleCard('“Service is not yet running”', <>ZLens is starting. Wait a few minutes, then reload once. <span style={inlineCode}>CALL ZLENS_APP.app_public.app_url();</span> says how long is left.</>)}
+            {troubleCard('“Service is not yet running”', <>ZLens is starting: about 2 to 3 minutes. Wait, then reload once. <span style={inlineCode}>CALL ZLENS_APP.app_public.app_url();</span> waits until it is ready, then gives the address.</>)}
             {troubleCard('“This ZLens app is set up for one person”', <>Only the user named on the app's Configurations tab can open it. Your Snowflake admin can change that name there.</>)}
             {troubleCard('Ask cannot reach Claude', <>Your Snowflake admin grants <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> to the app. Then <strong>Settings » AI provider » Test</strong>.</>)}
             {troubleCard('A table is missing', <>Grant it to the app (see <strong>Add more data</strong>), then <strong>Settings » Database » Apply and synchronize</strong>.</>)}

@@ -46,28 +46,34 @@ Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app.
    GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;
    ```
 
-5. **Open it** with **Launch app** on the app's page (it opens a new window). Read the next section
-   first: the first open takes a few minutes.
+5. **Open it.** Read the next section first: ask for its address in a worksheet, then open that
+   address once.
 
 ## The first open: what to expect
 
-- **Snowflake asks you to sign in again.** ZLens has its own address, and Snowflake signs you in there
-  too. The sign-in page names it `SNOWSERVICES_INGRESS`. This is Snowflake's own sign-in.
-- **Then a short message while ZLens starts.** Until ZLens is ready, Snowflake shows a plain page that
-  reads `"service is not yet running (serviceStatus=PENDING)"`. Snowflake serves that page, not ZLens.
-- **How long.** When ZLens stopped after a quiet spell, it takes about 2 minutes. Right after
-  install, or when its compute pool stopped too (about 70 minutes or more with no one using ZLens), it
-  takes 5 to 15 minutes.
-- **Do not reload again and again.** Each reload sends you back to Snowflake's sign-in. Wait a few
-  minutes, then reload once.
-- **Or ask first.** This says whether ZLens is starting, with the wait, and gives the address once it
-  is ready:
+- **Ask for the address first.** Right after install, and whenever ZLens has stopped (it stops
+  itself after 60 idle minutes), run this before you open it. It starts ZLens if it is stopped, waits
+  until it is ready, and then gives the address. A start takes about 2 to 3 minutes, so the call can
+  run for up to 4:
 
   ```sql
   CALL ZLENS_APP.app_public.app_url();
   ```
 
-- **Before a demo or a meeting,** start ZLens 15 minutes ahead:
+- **Launch app does not wait.** Snowsight's **Launch app** button on the app's page opens the
+  address directly, even while ZLens is still starting. After a stop, run `app_url()` first, and use
+  **Launch app** (or the address it gives) once it has answered.
+- **Snowflake asks you to sign in again.** ZLens has its own address, and Snowflake signs you in there
+  too. The sign-in page names it `SNOWSERVICES_INGRESS`. This is Snowflake's own sign-in.
+- **Opened too early,** before ZLens is ready, Snowflake shows a plain page that reads
+  `"service is not yet running (serviceStatus=PENDING)"`. Snowflake serves that page, not ZLens, and it
+  does not refresh by itself.
+- **How long.** A start takes about 2 to 3 minutes, whether only ZLens stopped or its compute pool
+  stopped too. Right after an install or an upgrade it can take longer; `app_url()` then says ZLens
+  is still starting, and gives the address to open once.
+- **Do not reload again and again.** Each reload sends you back to Snowflake's sign-in. Wait about
+  2 to 3 minutes, then reload once, or run `app_url()` again: it waits until ZLens is ready.
+- **Before a demo or a meeting,** start ZLens a few minutes ahead:
 
   ```sql
   CALL ZLENS_APP.app_public.start_app();
@@ -123,7 +129,8 @@ Start it without opening it:
 CALL ZLENS_APP.app_public.start_app();
 ```
 
-Its address, or how long until it is ready:
+Its address. When ZLens is stopped this starts it, and it waits until ZLens is ready (up to 4
+minutes) before it answers:
 
 ```sql
 CALL ZLENS_APP.app_public.app_url();

@@ -28,7 +28,8 @@ import {
   updateHintScopeField,
   type AgentHintScopeField,
 } from './hint-review';
-import { isSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { agentMemoryDetail } from '../../snowflake-app/snowflake-app-words';
 
 const PROVIDER_ORDER: ProviderSettingsId[] = ['claude-code', 'codex', 'anthropic', 'openai', 'gemini', 'ollama', 'custom-openai', 'cortex'];
 // Subscription providers (log in with an installed CLI) render as their own group,
@@ -73,6 +74,7 @@ export function ConnectionRuntimeSettings({
   onProviderConfigured?: (provider: ProviderSettings) => void;
 }) {
   const t = themes[useNotebookStore((state) => state.themeMode)];
+  const snowflakeApp = useSnowflakeApp();
   const [groups, setGroups] = useState<SettingsEnvGroup[]>([]);
   const [providers, setProviders] = useState<ProviderSettings[]>([]);
   const [cliStatus, setCliStatus] = useState<Partial<Record<ProviderSettingsId, ProviderCliStatus>>>({});
@@ -228,7 +230,7 @@ export function ConnectionRuntimeSettings({
             <section style={{ marginTop: section ? 0 : 22 }}>
               <SectionTitle
                 title="Agent learning & memory"
-                detail="Durable business context you add explicitly, plus a separate governed correction queue. Advisory context never overrides current certified metadata, dbt truth, or routing."
+                detail={agentMemoryDetail(snowflakeApp)}
                 t={t}
               />
               <MemoryEditor

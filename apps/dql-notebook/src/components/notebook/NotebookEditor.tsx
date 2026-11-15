@@ -36,6 +36,8 @@ import {
 } from "../../utils/answer-to-notebook";
 import { extractSqlFromText } from "../../utils/block-studio";
 import { useQueryExecution } from "../../hooks/useQueryExecution";
+import { useSnowflakeApp } from "../../snowflake-app/snowflake-app-mode";
+import { notebookAiScopeHint, notebookBreadcrumbParts } from "../../snowflake-app/snowflake-app-words";
 
 interface NotebookEditorProps {
   onOpenFile: (file: NotebookFile) => void;
@@ -740,12 +742,11 @@ function NotebookAiDrawer({
   // Bump to remount the panel so "New chat" clears the transcript, not just the
   // thread id (mirrors Block Studio).
   const [aiPanelEpoch, setAiPanelEpoch] = useState(0);
+  const snowflakeApp = useSnowflakeApp();
   const sourceTitle = sourceCell
     ? `${sourceCell.type.toUpperCase()} cell${sourceCell.name ? ` · ${sourceCell.name}` : ''}`
     : 'Whole notebook';
-  const scopeHint = sourceCell
-    ? 'This cell + dbt, semantic metadata, certified saved queries, prior AI history'
-    : 'Whole notebook + dbt, semantic metadata, certified saved queries, prior AI history';
+  const scopeHint = notebookAiScopeHint(Boolean(sourceCell), snowflakeApp);
   const agentRunSelectedObject = sourceCell
     ? { kind: 'cell' as const, id: sourceCell.id, title: sourceCell.name, path: notebookPath }
     : notebookPath
@@ -1243,9 +1244,10 @@ function historyRunTone(run: NotebookResearchRun, t: Theme): string {
 
 function Breadcrumb({ t }: { t: Theme }) {
   const activeFile = useNotebookStore((state) => state.activeFile);
+  const snowflakeApp = useSnowflakeApp();
   if (!activeFile) return null;
 
-  const parts = activeFile.path.split('/').filter(Boolean);
+  const parts = notebookBreadcrumbParts(activeFile.path, snowflakeApp);
 
   return (
     <div

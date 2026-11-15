@@ -53,8 +53,12 @@ Recorded as maria.lopez@example.com · 10/15/2026, 3:27:48 PM · via the saved q
 The certifier is your git `user.email` (else `$USER@local`), named by git `user.name`; in the ZLens app for
 Snowflake it is the Snowflake user you signed in as. When the saved query was compared
 with its old report and every value matched, the receipt adds a line such as
-`Old report: Matches Sales by Region · every value compared (12 of 12 at 2 decimals, 2026-10-15)`;
+`Old report when certified: Matches Sales by Region · every value compared (12 of 12 at 2 decimals, 2026-10-15)`;
 see [Prove the numbers match](../guides/migrate.md#prove-the-numbers-match).
+
+The receipt states what was true when the saved query was certified, and stays that way. A comparison
+made after that shows beside it (`Old report since certified: …`), and one that differs also puts
+**Differs from the old report since it was certified** next to **CERTIFIED**.
 
 **When it does not pass**, the panel reads **Unable to certify** and lists
 **Fixes before certification**. Each fix says how to fix it and has a button

@@ -12,7 +12,9 @@ import { downloadDashboard } from '../../utils/export-dashboard';
 import { setBlockName } from '../../utils/block-studio';
 import { TaskCenter } from './TaskCenter';
 import { ZLensMark } from './ZLensMark';
-import { PAGE_NAMES } from './page-title';
+import { openFileFor, PAGE_NAMES } from './page-title';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { openFileKind } from '../../snowflake-app/snowflake-app-words';
 import { createNotebookSaveQueue } from '../../utils/notebook-save-queue';
 
 // Saves to one notebook file are serialized; see utils/notebook-save-queue.ts.
@@ -70,7 +72,10 @@ export function Header() {
   // Only notebook/Block Studio are file-editing surfaces; every other view
   // gets a static title and hides the file chip + editor actions.
   const isEditorView = state.mainView === 'notebook' || state.mainView === 'block_studio';
-  const hasActiveEditorFile = isEditorView && Boolean(state.activeFile);
+  // The file this page is about: on Saved queries only an open saved query, never a notebook left open behind it.
+  const editorFile = isEditorView ? openFileFor(state.mainView, state.activeFile) : null;
+  const hasActiveEditorFile = Boolean(editorFile);
+  const snowflakeApp = useSnowflakeApp();
   // Every page names itself (the same names as the browser tab, see page-title.ts).
   const VIEW_TITLES: Partial<Record<typeof state.mainView, string>> = {
     ...PAGE_NAMES,
@@ -78,7 +83,7 @@ export function Header() {
     host_page: productName,
   };
   const headerTitle = isEditorView
-    ? state.activeFile
+    ? editorFile
       ? state.notebookTitle || 'Untitled'
       : state.mainView === 'block_studio'
         ? 'Saved queries'
@@ -214,6 +219,7 @@ export function Header() {
 
   return (
     <div
+      data-testid="app-header"
       style={{
         height: 48,
         flexShrink: 0,
@@ -237,13 +243,14 @@ export function Header() {
             flexShrink: 0,
           }}
         />
-        {state.activeFile && isEditorView && (
+        {editorFile && (
           <span
+            data-testid="header-file-kind"
             style={{
               fontSize: 11,
               fontWeight: 600,
-              color: state.activeFile.type === 'block' ? '#e3b341' : t.accent,
-              background: `${state.activeFile.type === 'block' ? '#e3b341' : t.accent}18`,
+              color: editorFile.type === 'block' ? '#e3b341' : t.accent,
+              background: `${editorFile.type === 'block' ? '#e3b341' : t.accent}18`,
               borderRadius: 4,
               padding: '2px 6px',
               fontFamily: t.font,
@@ -252,10 +259,10 @@ export function Header() {
               flexShrink: 0,
             }}
           >
-            {state.activeFile.type}
+            {openFileKind(editorFile.type, snowflakeApp)}
           </span>
         )}
-        {state.activeFile && isEditorView ? (
+        {editorFile ? (
           editingTitle ? (
             <input
               ref={titleInputRef}
