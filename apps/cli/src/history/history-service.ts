@@ -69,6 +69,8 @@ export interface HistoryFeedEntry {
   commit: string;
   at: string;
   by: HistoryAuthor;
+  /** Why the version was made: a save, a certification, Clear drafts, an upgrade, a restore, … */
+  action: HistoryAction;
   change: HistoryChangeKind;
   kind: HistoryItemKind;
   items: HistoryFeedItem[];
@@ -386,6 +388,7 @@ export class HistoryService {
           commit: commit.oid,
           at: commit.at,
           by: commit.author,
+          action: commit.action,
           change: first.change,
           kind: first.kind,
           items,

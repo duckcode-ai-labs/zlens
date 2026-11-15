@@ -300,7 +300,7 @@ describe('certified versions, draft edits and restore', () => {
     const app = history.item('apps/sales');
     expect(app.item).toMatchObject({ removed: true, name: 'Sales by month' });
     expect(app.versions.map((row) => [row.version, row.state, row.canRestore])).toEqual([[2, 'removed', false], [1, 'saved', true]]);
-    expect(history.feed().entries[0]).toMatchObject({ change: 'removed', canRestore: true });
+    expect(history.feed().entries[0]).toMatchObject({ change: 'removed', action: 'delete', canRestore: true });
 
     await history.restore({ item: 'apps/sales', version: 1, user: 'JSMITH' });
     expect(JSON.parse(readFileSync(join(root, 'apps/sales/dql.app.json'), 'utf-8'))).toEqual({ title: 'Sales by month' });
