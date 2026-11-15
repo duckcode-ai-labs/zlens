@@ -48,7 +48,7 @@ describe('the app package for Snowflake', () => {
 
   it('documents every procedure the app gives the customer, and names the Cortex model', () => {
     const procedures = [...setup.matchAll(/CREATE OR REPLACE PROCEDURE app_public\.(\w+)\(/g)].map((match) => match[1]!);
-    expect(procedures).toEqual(['start_app', 'stop_app', 'app_url', 'backups', 'back_up_now', 'restore_backup']);
+    expect(procedures).toEqual(['start_app', 'stop_app', 'app_url', 'backups', 'back_up_now', 'restore_backup', 'launcher_status', 'launcher_start']);
     for (const name of procedures) expect(readme).toMatch(new RegExp('```sql\\n[^`]*app_public\\.' + name + '\\('));
     expect(readme).toContain(`\`${CORTEX_DEFAULT_MODEL}\``);
     expect(readme).toContain('AI_COMPLETE');
@@ -113,14 +113,60 @@ describe('the app package for Snowflake', () => {
     }
   });
 
-  it('V14: the readme says Launch app opens the address at once, so ask app_url() first after a stop', () => {
+  it('V2: Launch app opens the launcher page, which starts ZLens and offers its address only once it is ready', () => {
+    // The manifest opens the launcher, not the address (Snowflake takes one or the other).
+    const manifest = yaml.load(read('manifest.yml')) as { artifacts: Record<string, unknown> };
+    expect(manifest.artifacts.default_streamlit).toBe('app_public.launcher');
+    expect(manifest.artifacts).not.toHaveProperty('default_web_endpoint');
+    // The page lives in the versioned schema, on the app's own warehouse, for both app roles.
+    expect(setup).toContain("CREATE OR REPLACE STREAMLIT app_public.launcher FROM ''/launcher'' MAIN_FILE = ''launcher.py'' TITLE = ''ZLens'' QUERY_WAREHOUSE = ' || CURRENT_DATABASE() || '_WH'");
+    expect(setup).toContain('GRANT USAGE ON STREAMLIT app_public.launcher TO APPLICATION ROLE app_user;');
+    expect(setup).toContain('GRANT USAGE ON STREAMLIT app_public.launcher TO APPLICATION ROLE app_admin;');
+    // READY only when the service runs and its container reports READY (a service itself reports RUNNING).
+    const status = procedure('launcher_status');
+    expect(status).toContain("SHOW SERVICE CONTAINERS IN SERVICE core.zlens");
+    expect(status).toContain("svc_status := IFF(ready_containers > 0 AND other_containers = 0, 'READY', 'PENDING');");
+    expect(status).toContain("SYS_CONTEXT('SNOWFLAKE$APPLICATION', 'GET_CONFIGURATION_VALUE', 'ZLENS_USER')");
+    expect(status).not.toMatch(/RESUME|SUSPEND;|CREATE /);
+    // Start only resumes a stopped ZLens and returns at once: no long wait inside a page's call.
+    const start = procedure('launcher_start');
+    expect(start).toMatch(/IF \(svc_status = 'SUSPENDED'\) THEN\s+BEGIN\s+ALTER COMPUTE POOL IDENTIFIER\(:pool\) RESUME;[\s\S]*?ALTER SERVICE core\.zlens RESUME;/);
+    expect(start).not.toMatch(/WAIT_FOR_SERVICES|SUSPEND;|CREATE |ensure_zlens/);
+    for (const name of ['launcher_status', 'launcher_start']) {
+      expect(setup).toContain(`GRANT USAGE ON PROCEDURE app_public.${name}() TO APPLICATION ROLE app_user;`);
+    }
+    // Both address forms (Snowflake moves endpoints to *.snowflake.app), in app_url() and the launcher.
+    for (const name of ['app_url', 'launcher_status']) {
+      expect(procedure(name)).toContain("LIKE '%.snowflakecomputing.app%' OR endpoint.\"ingress_url\" LIKE '%.snowflake.app%'");
+    }
+  });
+
+  it('V2: the launcher page calls only the app\'s own procedures, and pins a Streamlit with link_button', () => {
+    const page = read('launcher/launcher.py');
+    const calls = [...page.matchAll(/session\.sql\("([^"]+)"\)/g)].map((match) => match[1]);
+    expect(calls).toEqual(['CALL app_public.launcher_status()', 'CALL app_public.launcher_start()', 'SELECT CURRENT_DATABASE()']);
+    expect(page).not.toMatch(/requests|urllib|http\.client|socket|components\.html/);
+    expect(page).toContain('st.link_button("Open ZLens", status["url"]');
+    // The address is offered only once READY, with a copy of it in case the browser blocks the tab.
+    expect(page).toMatch(/if name == "READY" and status\["url"\]:[\s\S]*?st\.link_button[\s\S]*?st\.code\(status\["url"\]/);
+    expect(page.indexOf('st.link_button')).toBeGreaterThan(page.indexOf('if name == "READY"'));
+    const env = yaml.load(read('launcher/environment.yml')) as { channels: string[]; dependencies: string[] };
+    expect(env.channels).toEqual(['snowflake']);
+    const pin = env.dependencies.find((dep) => dep.startsWith('streamlit='));
+    const [major, minor] = pin!.slice('streamlit='.length).split('.').map(Number);
+    expect(major! > 1 || (major === 1 && minor! >= 27)).toBe(true);
+  });
+
+  it('V2: the readme and Help send people to Launch app, with app_url() as the SQL route', () => {
     const firstOpen = readme.slice(readme.indexOf('## The first open'), readme.indexOf('## What ZLens does first'));
-    expect(firstOpen).toContain('**Launch app**');
-    expect(firstOpen).toMatch(/opens the\s+address directly/);
-    expect(firstOpen).toMatch(/After a stop, run `app_url\(\)` first/);
+    expect(firstOpen).toContain('**Press Launch app.**');
+    expect(firstOpen).toContain('**Open ZLens**');
+    expect(firstOpen).toMatch(/Start from \*\*Launch app\*\* instead/);
     expect(firstOpen).toMatch(/```sql\n\s*CALL ZLENS_APP\.app_public\.app_url\(\);\n\s*```/);
-    // The ask comes before any word about opening it.
-    expect(firstOpen.indexOf('app_public.app_url()')).toBeLessThan(firstOpen.indexOf('**Launch app**'));
+    expect(firstOpen).not.toMatch(/opens the\s+address directly|After a stop, run `app_url\(\)` first/);
+    const help = readFileSync(join(__dirname, '..', '..', 'dql-notebook', 'src', 'components', 'help', 'HelpDocsPage.tsx'), 'utf8');
+    expect(help).toContain('press <strong>Launch app</strong>');
+    expect(help).not.toContain('opens the address at once');
   });
 
   it('V2: the backup stage setting names the same three grants as the readme', () => {

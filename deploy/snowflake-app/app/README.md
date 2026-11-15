@@ -46,38 +46,39 @@ Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app.
    GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;
    ```
 
-5. **Open it.** Read the next section first: ask for its address in a worksheet, then open that
-   address once.
+5. **Open it.** Press **Launch app** on the app's page in Snowsight (next section).
 
 ## The first open: what to expect
 
-- **Ask for the address first.** Right after install, and whenever ZLens has stopped (it stops
-  itself after 60 idle minutes), run this before you open it. It starts ZLens if it is stopped, waits
-  until it is ready, and then gives the address. A start takes about 2 to 3 minutes, so the call can
-  run for up to 4:
+- **Press Launch app.** It opens a small ZLens page inside Snowsight. If ZLens has stopped (it stops
+  itself after 60 idle minutes), the page starts it and shows the time so far: a start takes
+  about 2 to 3 minutes. Once Snowflake reports ZLens ready, the page shows **Open ZLens** and ZLens's
+  address. It never offers the address before then.
+- **Snowflake asks you to sign in again.** Open ZLens opens ZLens's own address in a new tab, and
+  Snowflake signs you in there too. The sign-in page names it `SNOWSERVICES_INGRESS`. This is
+  Snowflake's own sign-in. If your browser blocks the new tab, copy the address from the page.
+- **Close the launcher tab** once ZLens is open. While it stays open it keeps the app's small
+  warehouse running (about 15 minutes after its last use).
+- **Not set up yet, or someone else:** until step 1 is done the page shows the setup steps, and it
+  tells anyone but the named user that ZLens serves someone else, before starting anything.
+- **The address on its own** (a bookmark, or a link shared from Snowsight) does not wait: opened while
+  ZLens is stopped or starting, Snowflake shows a plain page that reads
+  `"service is not yet running (serviceStatus=PENDING)"`, and each reload asks you to sign in again.
+  Start from **Launch app** instead.
+- **In SQL,** this does the same as the page: it starts ZLens if it has stopped, waits until it is
+  ready (the call can run for up to 4 minutes), and then gives the address:
 
   ```sql
   CALL ZLENS_APP.app_public.app_url();
   ```
 
-- **Launch app does not wait.** Snowsight's **Launch app** button on the app's page opens the
-  address directly, even while ZLens is still starting. After a stop, run `app_url()` first, and use
-  **Launch app** (or the address it gives) once it has answered.
-- **Snowflake asks you to sign in again.** ZLens has its own address, and Snowflake signs you in there
-  too. The sign-in page names it `SNOWSERVICES_INGRESS`. This is Snowflake's own sign-in.
-- **Opened too early,** before ZLens is ready, Snowflake shows a plain page that reads
-  `"service is not yet running (serviceStatus=PENDING)"`. Snowflake serves that page, not ZLens, and it
-  does not refresh by itself.
-- **How long.** A start takes about 2 to 3 minutes, whether only ZLens stopped or its compute pool
-  stopped too. Right after an install or an upgrade it can take longer; `app_url()` then says ZLens
-  is still starting, and gives the address to open once.
-- **Do not reload again and again.** Each reload sends you back to Snowflake's sign-in. Wait about
-  2 to 3 minutes, then reload once, or run `app_url()` again: it waits until ZLens is ready.
 - **Before a demo or a meeting,** start ZLens a few minutes ahead:
 
   ```sql
   CALL ZLENS_APP.app_public.start_app();
   ```
+- **People limited to Streamlit:** an account that allows some users only Streamlit pages
+  (`ALLOWED_INTERFACES`) lets them see the launcher, but not open ZLens itself.
 
 Until steps 1 and 2 are done, whoever opens ZLens sees which of them is still missing. ZLens picks up
 changes within a minute, without a restart. Anyone but the named user is told the app is set up for
@@ -134,6 +135,15 @@ minutes) before it answers:
 
 ```sql
 CALL ZLENS_APP.app_public.app_url();
+```
+
+The launcher page (**Launch app**) uses two short calls instead, so it can show progress: the first
+reads ZLens's state, its address and the person it serves, and starts nothing; the second starts a
+stopped ZLens and returns at once. Any user of the app may call them:
+
+```sql
+CALL ZLENS_APP.app_public.launcher_status();
+CALL ZLENS_APP.app_public.launcher_start();
 ```
 
 ### Backups
@@ -211,11 +221,13 @@ The app is free. Snowflake bills your account for what it uses:
 The app asks for three account privileges, each shown on its **Permissions** tab: `BIND SERVICE
 ENDPOINT` (its own address), `CREATE COMPUTE POOL` (one small pool) and `CREATE WAREHOUSE` (its own
 extra-small warehouse), plus the `SNOWFLAKE.CORTEX_USER` database role for Claude. It creates no
-listings, shares or external access integrations.
+listings, shares or external access integrations. Its one Streamlit page, the launcher that **Launch
+app** opens, runs on that same warehouse and calls only the app's own procedures
+`app_public.launcher_status()` and `app_public.launcher_start()`; it reads none of your data.
 
 ## What ZLens reaches, sends, stores and logs
 
-- **Endpoints.** One: `ui` (port 3474), ZLens's web page and its API, at the address `app_url()` returns.
+- **Endpoints.** One: `ui` (port 3474), ZLens's web page and its API, at the address the launcher page and `app_url()` give.
   Snowflake signs people in before any request reaches it, and ZLens serves only the user named on
   the Configurations tab. There is no other way in.
 - **Internet.** None. The app asks for no external access integration, and ZLens runs with downloads,

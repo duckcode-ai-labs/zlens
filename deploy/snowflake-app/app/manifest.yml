@@ -2,9 +2,8 @@ manifest_version: 2
 artifacts:
   setup_script: setup.sql
   readme: README.md
-  default_web_endpoint:
-    service: core.zlens
-    endpoint: ui
+  # Launch app opens the launcher page, which starts ZLens and offers its address once it is ready.
+  default_streamlit: app_public.launcher
   container_services:
     images:
     - <% ctx.env.ZLENS_IMAGE %>

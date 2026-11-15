@@ -342,6 +342,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # The launcher page Snowsight's Launch app opens (app package, not the image): it must compile.
+      - name: the launcher page compiles
+        run: python3 -m py_compile deploy/snowflake-app/app/launcher/launcher.py
       - name: build the Snowflake app image
         run: |
           docker build --platform linux/amd64 --target snowflake-app \
