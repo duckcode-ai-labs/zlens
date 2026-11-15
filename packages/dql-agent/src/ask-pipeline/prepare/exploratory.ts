@@ -28,6 +28,44 @@ export function readOnlyStatementProblem(sql: string): string | undefined {
   return undefined;
 }
 
+const HOLDS = String.raw`(?:holds?|contains?|has|have|stores?|records?|includes?|tracks?|captures?|provides?|describes?|carr(?:y|ies))`;
+const LISTED = String.raw`(?:listed|provided|given|available|supplied|described|above|inspected|these|those)`;
+const TABLES = String.raw`(?:relations?|tables?|schemas?|columns?|fields?|data ?sets?)`;
+/** "No column in the listed relations holds payroll/employee expense data". */
+const NO_COLUMN_HOLDS = new RegExp(String.raw`^(?:there (?:is|are) )?no (?:${TABLES})(?: or (?:${TABLES}))? (?:in|among|across|of|from) (?:the |any of the |any )?(?:${LISTED} )?${TABLES}(?: (?:listed|provided|given|above))? ${HOLDS} (?:any )?(.+)$`, 'i');
+/** "None of the listed tables contain payroll data", "The provided relations do not include payroll". */
+const NONE_HOLDS = new RegExp(String.raw`^(?:none of the|the) (?:${LISTED} )?${TABLES}(?: (?:listed|provided|given|above))? (?:(?:do|does) not |don't |doesn't )?${HOLDS} (?:any )?(.+)$`, 'i');
+/** What the host adds after a decline: how far Ask looked. */
+const LOOKED = /\s*\((Ask looked through (every table it can read|the tables it chose), and no other table has a column for it|Ask also looked in the tables that have a column named for it)\)\s*$/;
+
+/**
+ * A DECLINE IN PLAIN WORDS. The drafter says why no SQL answers the question in its own terms: "No column in the
+ * listed relations holds payroll/employee expense data" (V2, listing retake F9). A reader is told the same thing
+ * in theirs: "None of the tables Ask can read has payroll or employee expense data". A sentence these patterns do
+ * not know keeps its words, with "relations" said as tables.
+ */
+export function plainDeclineReason(message: string): string {
+  const text = message.replace(/\s+/g, ' ').trim();
+  const looked = LOOKED.exec(text);
+  const core = (looked ? text.slice(0, looked.index) : text).replace(/[.\s]+$/, '');
+  const everyTable = !looked || Boolean(looked[2]?.startsWith('every'));
+  const which = everyTable ? 'the tables Ask can read' : 'the tables Ask searched';
+  const said = (words: string) => words.replace(/(?<=[A-Za-z])\/(?=[A-Za-z])/g, ' or ').replace(/[.\s]+$/, '');
+  // Only a sentence in the drafter's terms is said again: one that already reads plainly keeps its words.
+  const technical = /\b(?:relations?|columns?|fields?|listed|provided|schemas?|inspected)\b/i.test(core);
+  const missing = !technical ? undefined : NO_COLUMN_HOLDS.exec(core)?.[1] ?? (/^(?:none of the|the) /i.test(core) ? NONE_HOLDS.exec(core)?.[1] : undefined);
+  if (missing && !/\b(?:but|because|since|although|however)\b/i.test(missing)) {
+    const sentence = `None of ${which} has ${said(missing)}`;
+    // "Every table it can read" is what the sentence already says.
+    return looked && !everyTable ? `${sentence} (${looked[1]})` : sentence;
+  }
+  const plain = said(core)
+    .replace(new RegExp(String.raw`\b(?:the |any of the )?${LISTED} (?:relations|tables|schemas?)\b`, 'gi'), which)
+    .replace(/\brelations\b/gi, 'tables')
+    .replace(/\brelation\b/gi, 'table');
+  return looked ? `${plain} (${looked[1]})` : plain;
+}
+
 export async function prepareExploratory(
   intent: AnalyticalIntentV1 | undefined,
   vocabulary: VocabularyIndex,
@@ -66,7 +104,7 @@ export async function prepareExploratory(
   // The drafter looked at the tables and found nothing that answers the
   // question: an honest "not in this data", never a substitute measure.
   if (drafted && 'declined' in drafted) {
-    return { candidates: [], refusals: [{ tier: 'exploratory', code: 'exploration_declined', message: drafted.declined, repairable: false }] };
+    return { candidates: [], refusals: [{ tier: 'exploratory', code: 'exploration_declined', message: plainDeclineReason(drafted.declined), repairable: false }] };
   }
   // The statement was drafted and failed a check it was given one chance to
   // fix (a stated value or a required filter left out): nothing runs.

@@ -18,6 +18,7 @@
  * no configured email.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
@@ -136,14 +137,48 @@ export function persistOwner(projectRoot: string, owner: string): void {
 }
 
 /**
- * Resolve the default local OSS owner. Always returns a non-empty string. When
- * an explicit owner is given it wins (and is persisted); otherwise the first
- * persisted/derived value is used and persisted for reuse.
+ * WHO OWNS WHAT IS MADE WHEN A HOST SIGNS THE PERSON IN. In the ZLens app for
+ * Snowflake, Snowflake signs the person in and the container's own account
+ * ("zlens@local") is nobody's name: a draft Ask saves, and the owner the
+ * builder offers, are the signed-in Snowflake user's, or empty for a reviewer
+ * to fill (V2, listing retake F4). The host runs each request inside
+ * `withSignedInOwner`, and turns `ownersFromSignInOnly` on for work outside a
+ * request; anywhere else nothing changes.
+ */
+const signedInOwner = new AsyncLocalStorage<{ owner: string }>();
+let signInOnly = false;
+
+/** Runs `work` with `owner` (the signed-in person, or empty for nobody) as the owner of what it creates. */
+export function withSignedInOwner<T>(owner: string | undefined, work: () => T): T {
+  return signedInOwner.run({ owner: nonEmpty(owner) ?? '' }, work);
+}
+
+/** On: outside a signed-in request no owner is derived from git or the machine's user (it stays empty). */
+export function ownersFromSignInOnly(on: boolean): void {
+  signInOnly = on;
+}
+
+/** The signed-in owner of the current work, when a host signs people in: the person, or '' for nobody. */
+export function signedInOwnerOf(): string | undefined {
+  const scope = signedInOwner.getStore();
+  if (scope) return scope.owner;
+  return signInOnly ? '' : undefined;
+}
+
+/**
+ * Resolve the default local OSS owner. Returns a non-empty string, except
+ * where a host signs people in (`withSignedInOwner`): there it is the
+ * signed-in person, or empty, never derived from this machine and never
+ * persisted. When an explicit owner is given it wins (and is persisted
+ * outside a host); otherwise the first persisted/derived value is used and
+ * persisted for reuse.
  */
 export function resolveLocalOwner(projectRoot: string, options: ResolveOwnerOptions = {}): string {
   const persist = options.persist !== false;
 
   const explicit = nonEmpty(options.explicit);
+  const signedIn = signedInOwnerOf();
+  if (signedIn !== undefined) return explicit ?? signedIn;
   if (explicit) {
     if (persist) persistOwner(projectRoot, explicit);
     return explicit;

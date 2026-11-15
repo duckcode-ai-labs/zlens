@@ -1422,21 +1422,42 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       void both;
     });
 
-    it('a year read through the model rule on calendar years is applied, and the answer says how it was read (V12 gate, K4)', async () => {
-      const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
-      const manifest = { ...nba, modeling: { rules: {
-        ...nba.modeling.rules,
-        'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule },
-        'nba.playoff_calendar_year': { localId: 'playoff_calendar_year', domain: 'nba', status: 'draft', expression: 'SEASON is the year a season starts. Rows whose GAME_ID starts with 4 (40,377 rows) or 5 (349 rows) all fall in the calendar year after their SEASON (SEASON 2012\'s 4 rows run 2013-04-20 to 2013-06-20): for those rows, calendar year Y is SEASON Y − 1.' },
-      } } };
-      const shifted = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
-      const { result } = await askNba('Which team won the most playoff games in 2016?', shifted, shifted, manifest);
+    const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
+    const calendarRuleManifest = { ...nba, modeling: { rules: {
+      ...nba.modeling.rules,
+      'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule },
+      'nba.playoff_calendar_year': { localId: 'playoff_calendar_year', domain: 'nba', status: 'draft', expression: 'SEASON is the year a season starts. Rows whose GAME_ID starts with 4 (40,377 rows) or 5 (349 rows) all fall in the calendar year after their SEASON (SEASON 2012\'s 4 rows run 2013-04-20 to 2013-06-20): for those rows, calendar year Y is SEASON Y − 1.' },
+    } } };
+    const shifted = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
+
+    it('a year read through the model rule on calendar years is applied when the question says calendar year, and the answer says how it was read (V12 gate, K4)', async () => {
+      const { result, statements } = await askNba('Which team won the most playoff games in calendar year 2016?', shifted, shifted, calendarRuleManifest);
       expect(result.status).toBe('completed');
+      expect(statements.some((sql) => sql.includes('season = 2015'))).toBe(true);
       expect(result.answer).not.toContain('does not apply "2016"');
       expect(result.answer).toContain('It reads 2016 as SEASON 2015: playoff and play-in games are played in the calendar year after their SEASON, so those of 2016 are SEASON 2015; to count SEASON 2016 instead, say "the 2016 season"');
       // Another year is still not applied.
-      const wrong = await askNba('Which team won the most playoff games in 2016?', shifted.replace('2015', '2013'), shifted.replace('2015', '2013'), manifest);
+      const wrong = await askNba('Which team won the most playoff games in 2016?', shifted.replace('2015', '2013'), shifted.replace('2015', '2013'), calendarRuleManifest);
       expect(wrong.result.answer).toContain('does not apply "2016"');
+    });
+
+    it('without "calendar year", a stated year is the SEASON of that number in every Ask surface, and the answer says how to ask for the other reading (V2, tester V14 PO-2)', async () => {
+      const { result, statements, prompts } = await askNba('Which team won the most playoff games in 2016?', shifted, shifted, calendarRuleManifest);
+      // The drafter is told the rule, and the statement that set the year back is set to the year said.
+      expect(prompts[0]).toContain('- a year the question states is SEASON of that number ("2016" is SEASON = 2016)');
+      const ran = statements.find((sql) => sql.includes('SUM(win)'))!;
+      expect(ran).toContain('season = 2016');
+      expect(ran).not.toContain('season = 2015');
+      expect(result.status).toBe('completed');
+      expect(result.answer).toContain('It reads 2016 as SEASON 2016, whose playoff games are played in 2017; to count the playoff games played in 2016 (SEASON 2015) instead, say "calendar year 2016".');
+      expect(result.answer).not.toContain('reads 2016 as SEASON 2015');
+      expect((result.askPipelineReceipt?.story ?? []).some((entry) => entry.title === 'Read 2016 as SEASON 2016, the year the question states')).toBe(true);
+      // Drafted as SEASON 2016 straight away, the answer says the same.
+      const direct = await askNba('Which team won the most playoff games in 2016?', shifted.replace('2015', '2016'), shifted.replace('2015', '2016'), calendarRuleManifest);
+      expect(direct.result.answer).toContain('It reads 2016 as SEASON 2016, whose playoff games are played in 2017; to count the playoff games played in 2016 (SEASON 2015) instead, say "calendar year 2016".');
+      // Every kind together: nothing is played in another year, nothing to say.
+      const every = await askNba('Counting every game together, how many games did the Warriors win in 2016?', 'SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2016', 'SELECT SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2016', calendarRuleManifest);
+      expect(every.result.answer).not.toMatch(/played in 2017/);
     });
 
     it('a statement over the games themselves, with no kind named, says it counts every kind', async () => {

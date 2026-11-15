@@ -505,6 +505,7 @@ import {
   defaultAskTraceSqlitePath,
   createAskTracePortableBundleV1,
   resolveLocalOwner,
+  ownersFromSignInOnly,
   resolveProposeConfig,
   recordQueryRun,
   recordRuntimeSchemaSnapshot,
@@ -5391,6 +5392,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   backUpOnVersionChange(projectRoot, runtimeVersion);
   // Inside Snowflake (the ZLens app): Snowflake signs the person in (snowflake-ingress.ts).
   const snowflakeIngress = opts.snowflakeIngress ?? snowflakeIngressFromEnv();
+  // There the owner of what ZLens makes is the person Snowflake signed in, or nobody: work outside a request
+  // derives no owner from the container's own account ("zlens@local"; V2, listing retake F4).
+  if (snowflakeIngress) ownersFromSignInOnly(true);
   // V15 History, in the app for Snowflake only: a version of every save, kept in a repository of its own beside the
   // project (history/history-service.ts). Opened before the upgrade steps, so what they change is ZLens's version.
   const snowflakeHistory = await openSnowflakeHistory({
@@ -33848,6 +33852,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
   server.once('close', () => {
     runtimeClosing = true;
+    if (snowflakeIngress) ownersFromSignInOnly(false);
     snowflakeHistory?.stop();
     unregisterServerHooks(scope.id);
     unregisterRelatedFields();

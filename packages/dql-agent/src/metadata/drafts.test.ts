@@ -5,6 +5,7 @@ import { buildManifest, parse } from '@zlens/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { existsSync, readdirSync } from 'node:fs';
 import { utimesSync } from 'node:fs';
+import { withSignedInOwner } from './identity.js';
 import { automaticAskDraftState, clearAutomaticAskDrafts, deriveGeneratedDraftSlug, deriveReviewDraftSlug, deriveSemanticDraftName, draftQuestionKey, listAutomaticAskDrafts, upsertGeneratedDqlArtifactDraft, upsertGeneratedDraft, upsertReviewRequiredAnswerDraft } from './drafts.js';
 
 describe('generated draft blocks', () => {
@@ -422,5 +423,46 @@ describe('a question asked again keeps one draft, whatever its reading said (V14
     expect(upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Share of home wins', askedQuestion: 'How often does the home team win?', sql: 'select avg(home_win)  from games' })).toMatchObject({ created: false, path: first.path, askedTimes: 2 });
     expect(upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Away win percent', askedQuestion: 'What percentage of games does the away team win?', sql: 'SELECT AVG(1 - home_win) FROM games' }).created).toBe(true);
     expect(draftFiles()).toHaveLength(2);
+  });
+});
+
+describe('V2: one draft per name, and its owner in the app for Snowflake (tester V14 retest, listing retake F4)', () => {
+  let projectRoot: string;
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'dql-ask-v2-drafts-'));
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'drafts', identity: { owner: 'zlens@local' } }), 'utf-8');
+  });
+  afterEach(() => rmSync(projectRoot, { recursive: true, force: true }));
+  const question = 'How many games did the Toronto Raptors win in the 2018 regular season?';
+  const slug = deriveReviewDraftSlug(question);
+
+  it('a draft of the same name in another drafts folder is the one answered again, and the answer counts the ask', () => {
+    // Saved before under the nba Domain, named for the same words, with the reading of that time as its question.
+    const old = join(projectRoot, 'domains', 'nba', 'blocks', '_drafts', `${slug}.dql`);
+    mkdirSync(join(projectRoot, 'domains', 'nba', 'blocks', '_drafts'), { recursive: true });
+    writeFileSync(old, `block "${slug}" {\n  type = "custom"\n  status = "draft"\n  owner = "zlens@local"\n  asked_times = 2\n  last_asked = "2026-11-13T10:00:00.000Z"\n  answer_fingerprint = "abc"\n  source_question = "Count the Raptors wins in 2018, based on the team-season win totals"\n  query = """\n    SELECT 58\n  """\n}\n`);
+    const again = upsertReviewRequiredAnswerDraft(projectRoot, { question, askedQuestion: question, sql: 'SELECT SUM(win) FROM team_game_facts WHERE season = 2018' });
+    expect(again).toMatchObject({ created: false, path: `domains/nba/blocks/_drafts/${slug}.dql`, askedTimes: 3 });
+    expect(existsSync(join(projectRoot, 'blocks', '_drafts', `${slug}.dql`))).toBe(false);
+  });
+
+  it('a new draft never takes a name a saved query already has in another drafts folder', () => {
+    mkdirSync(join(projectRoot, 'domains', 'nba', 'blocks', '_drafts'), { recursive: true });
+    const mine = join(projectRoot, 'domains', 'nba', 'blocks', '_drafts', `${slug}.dql`);
+    writeFileSync(mine, `block "${slug}" {\n  type = "custom"\n  status = "draft"\n  query = """\n    SELECT 58\n  """\n}\n`);
+    const saved = upsertReviewRequiredAnswerDraft(projectRoot, { question, sql: 'SELECT 58' });
+    expect(saved).toMatchObject({ created: true, path: `blocks/_drafts/${slug}_2.dql` });
+  });
+
+  it('in the app for Snowflake a draft is owned by the signed-in user, or by nobody, never by the container ("zlens@local")', () => {
+    const signedIn = withSignedInOwner('ANALYST', () => upsertReviewRequiredAnswerDraft(projectRoot, { question, sql: 'SELECT 58' }));
+    expect(readFileSync(join(projectRoot, signedIn.path), 'utf-8')).toMatch(/^\s*owner = "ANALYST"$/m);
+    const nobody = withSignedInOwner(undefined, () => upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many teams are there?', sql: 'SELECT 30' }));
+    const content = readFileSync(join(projectRoot, nobody.path), 'utf-8');
+    expect(content).not.toContain('@local');
+    expect(content).toMatch(/^\s*owner = ""$/m);
+    // Outside the app, the project's owner as before.
+    const local = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'How many players are there?', sql: 'SELECT 2611' });
+    expect(readFileSync(join(projectRoot, local.path), 'utf-8')).toContain('owner = "zlens@local"');
   });
 });

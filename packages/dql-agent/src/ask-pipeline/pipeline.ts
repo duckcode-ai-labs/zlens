@@ -17,6 +17,13 @@ import { clarificationForOpenQuestion, distinctOptions } from './vague-question.
 import { readingWithoutOtherTables } from './reading-tables.js';
 import { mergePhysicalRelationBinding, physicalRelationIdentity, physicalRelationText, samePhysicalRelation } from './physical-binding.js';
 
+/** Every name the project lists a table under: its physical binding, its relation, its model and its own name. */
+function knownRelationNames(vocabulary: VocabularyIndex): string[] {
+  return vocabulary.entries.filter((entry) => entry.kind === 'relation')
+    .flatMap((entry) => [entry.physical?.binding ? physicalRelationText(entry.physical.binding) : '', entry.physical?.relation ?? '', entry.model ?? '', entry.name])
+    .filter(Boolean);
+}
+
 /**
  * INTENT → PREPARE → EXECUTE, as one host-neutral function.
  *
@@ -868,10 +875,7 @@ async function runAskPipelineOnce(input: RunAskPipelineInput): Promise<PipelineO
       const settledReading = corrected ? { ...asRead, reading: corrected } : asRead;
       // The reading names only the tables the SQL read, or none (new-user test V13, K3: "per the player season
       // facts" above a Source line naming LOCAL_PLAYER_GAME_FACTS).
-      const knownTables = input.vocabulary.entries.filter((entry) => entry.kind === 'relation')
-        .flatMap((entry) => [entry.physical?.binding ? physicalRelationText(entry.physical.binding) : '', entry.physical?.relation ?? '', entry.model ?? '', entry.name])
-        .filter(Boolean);
-      const heldReading = readingWithoutOtherTables(settledReading.reading, candidate.relations ?? [], knownTables);
+      const heldReading = readingWithoutOtherTables(settledReading.reading, candidate.relations ?? [], knownRelationNames(input.vocabulary));
       const reading = heldReading && heldReading !== settledReading.reading ? { ...settledReading, reading: heldReading } : settledReading;
       receipt.intent = reading; receipt.reading = reading.reading;
       receipt.executed = { tier: candidate.tier, sqlFingerprint: fingerprintSql(candidate.sql), rowCount: executed.result.rowCount, ms: Math.round(executed.result.executionTimeMs), proofs: executed.proofs };
@@ -1994,9 +1998,13 @@ async function runAskPipelineOnce(input: RunAskPipelineInput): Promise<PipelineO
   // too (new-user test V9 retest: a certified regular-season answer to a question that named no game type).
   const kindsNote = input.kindsNote?.({ sql: candidate.sql, relations: [...new Set([...(candidate.relations ?? []), ...(candidate.joins ?? []).map((step) => step.relation)])] });
   const notes = [...(receipt.grounding ?? []), ...textMatches];
+  // THE READING NAMES ONLY THE TABLES THE STATEMENT READ, on every tier (V2, tester V14: Q12's reading named
+  // "team-season home win totals" over LOCAL_TEAM_GAME_FACTS). Said so in the answer; the reading kept for the next
+  // question is left as it was read.
+  const shownReading = intent.reading ? readingWithoutOtherTables(intent.reading, receipt.context?.used?.relations ?? [], knownRelationNames(input.vocabulary)) : intent.reading;
   return {
     kind: 'answered', intent, candidate, result,
-    text: composeAnsweredText(intent, result, input.vocabulary, candidate.trust, { notes, caveats, tier: candidate.tier, ...(kindsNote ? { scope: [kindsNote] } : {}) }),
+    text: composeAnsweredText(shownReading === intent.reading ? intent : { ...intent, reading: shownReading }, result, input.vocabulary, candidate.trust, { notes, caveats, tier: candidate.tier, ...(kindsNote ? { scope: [kindsNote] } : {}) }),
     record: composeAnswerRecord(intent, result, input.vocabulary, candidate.trust, { notes, caveats: [...caveats, ...(kindsNote ? [kindsNote] : [])], tier: candidate.tier }),
     receipt,
   };

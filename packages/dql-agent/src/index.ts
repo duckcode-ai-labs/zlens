@@ -1262,6 +1262,9 @@ export {
   persistOwner,
   readPersistedOwner,
   resolveLocalOwner,
+  withSignedInOwner,
+  ownersFromSignInOnly,
+  signedInOwnerOf,
 } from "./metadata/identity.js";
 export type { ResolveOwnerOptions } from "./metadata/identity.js";
 export {

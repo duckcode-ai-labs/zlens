@@ -79,7 +79,8 @@ const REQUIRED_TEST_FILES = [
 // 198 with a slow reading keeping time for the SQL (ask-pipeline/slow-reading.test.ts, +1 file, +4 tests).
 // 199 with the V14 Ask answer fixes (ask-pipeline/v14-answers.test.ts, +1 file, +19 tests).
 // 200 with a source's own words against a Describe with AI question (app-builder-source-match.test.ts, +1 file, +5 tests).
-const EXPECTED_TEST_FILES = 200;
+// 201 with the V2 Ask answer fixes (ask-pipeline/v2-answers.test.ts, +1 file, +8 tests).
+const EXPECTED_TEST_FILES = 201;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -228,7 +229,11 @@ const EXPECTED_TEST_FILES = 200;
 // words against a question (app-builder-source-match.test.ts +5), and certified data named in the request
 // reaching the planner first (app-source-catalog.test.ts +1; V14 Apps).
 // 2934 with Describe with AI calling a block a saved query in its reasons (app-builder-orchestrator.test.ts +1; V2).
-const EXPECTED_TESTS = 2934;
+// 2947 with the V2 Ask fixes from the tester's V14 retest and the listing retake: no key read out as a figure, readings
+// that say columns in words and name no other table, "Not in this data" in plain words (ask-pipeline/v2-answers.test.ts
+// +8), one draft per name across drafts folders and its owner in the app for Snowflake (metadata/drafts.test.ts +3),
+// and the signed-in owner (metadata/identity.test.ts +2).
+const EXPECTED_TESTS = 2947;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2853.

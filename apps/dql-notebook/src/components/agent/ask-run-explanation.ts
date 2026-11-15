@@ -387,9 +387,13 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
     // 2. The governed tiers, last outcome per tier.
     const governedRounds = tiers.filter((entry) => [0, 1, 9, 99].includes(Number(entry.round)) && TIER_TITLES[String(entry.tier)]);
     const aiLaneActivity = draftCalls.length > 0 || tiers.some((entry) => Number(entry.round) === 97) || story.some((entry) => entry.phase === 'schema') || executedTier === 'exploratory';
+    // What the AI's SQL step ended with: a decline wrote no SQL ("Not in this data").
+    const aiRefusal = [...refusals].reverse().find((refusal) => refusal.tier === 'exploratory');
     if (!readFailed) {
       if (governedRounds.length === 0 && aiLaneActivity) {
-        push({ id: 'governed', kind: 'semantic', title: 'Certified saved queries and semantic layer', outcome: 'skipped', reason: 'The question is not about a certified saved query or a semantic metric, so the AI wrote the SQL.' });
+        // On a "Not in this data" answer the AI looked and wrote no SQL; step 3 says "Not used" (V2, listing retake F9).
+        const declined = str(aiRefusal?.code) === 'exploration_declined' && executedTier !== 'exploratory';
+        push({ id: 'governed', kind: 'semantic', title: 'Certified saved queries and semantic layer', outcome: 'skipped', reason: declined ? 'The question is not about a certified saved query or a semantic metric, so the AI looked for it in the tables.' : 'The question is not about a certified saved query or a semantic metric, so the AI wrote the SQL.' });
       }
       // A question that named a retired block was answered from its replacement.
       const retiredNotes = story
@@ -425,7 +429,6 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
     }
 
     // 3. AI-written SQL.
-    const aiRefusal = [...refusals].reverse().find((refusal) => refusal.tier === 'exploratory');
     if (aiLaneActivity || aiRefusal?.code === 'exploration_not_opted_in' && ending !== 'answered') {
       const code = str(aiRefusal?.code);
       const outcome: RunStepOutcome = executedTier === 'exploratory' ? 'done'
