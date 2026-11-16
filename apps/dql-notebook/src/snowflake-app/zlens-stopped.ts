@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { isBackgroundNow, lastPersonActivity, onPersonActive } from '../api/server-auth';
 
 /**
  * The ZLens app for Snowflake stopped: by itself after its quiet spell, or because it was stopped
@@ -9,7 +10,9 @@ import { useSyncExternalStore } from 'react';
  *
  * The server says so with a `stopping` event on the page's event streams (it sends one only inside
  * Snowflake). In the app for Snowflake the page also takes ZLens as stopped when its event streams fail
- * to reconnect a few times in a row (followServerEvents).
+ * to reconnect a few times in a row (followServerEvents), or when Snowflake answers a request with its own
+ * "service is not running" (watchForStoppedService). Because the event can be lost (the ingress ends every
+ * connection after about 90 s), a page nobody touched for QUIET_AFTER_MS also sends nothing by itself.
  */
 export type ZLensStoppedReason = 'idle' | 'stopped' | 'lost';
 
@@ -18,6 +21,8 @@ export interface ZLensStopped {
   reason: ZLensStoppedReason;
   /** For `idle`: the quiet spell, in minutes. */
   idleMinutes?: number;
+  /** The person came back to a quiet page and ZLens had stopped: the page starts it at once, without asking. */
+  startNow?: boolean;
 }
 
 let stopped: ZLensStopped | null = null;
@@ -114,6 +119,65 @@ export function snowflakeSaysNotRunning(status: number, body: string): boolean {
 let unwatchedFetch: typeof fetch | undefined;
 
 /**
+ * The page goes quiet this long after the person last touched it (app for Snowflake only). The Snowflake ingress
+ * ends every connection after about 90 s, and Snowflake starts a stopped app on ANY request: a page that opened its
+ * event streams again, or polled, after ZLens stopped woke it (V4 release check: once a minute after the idle stop,
+ * and 3 s after stop_app()). A quiet page sends nothing by itself. The person's next touch resumes it: the page first
+ * asks whether ZLens still runs, then sends what waited (or, if ZLens stopped, starts it and opens it when ready).
+ */
+export const QUIET_AFTER_MS = 2 * 60_000;
+
+interface Waiting {
+  input: RequestInfo | URL;
+  init?: RequestInit;
+  resolve: (response: Response) => void;
+  reject: (error: unknown) => void;
+}
+
+const waiting: Waiting[] = [];
+let resuming = false;
+let stopActivityWatch: (() => void) | undefined;
+
+/** Whether the page is quiet now: in the app for Snowflake, no touch from the person for QUIET_AFTER_MS. */
+export function isPageQuiet(now = Date.now()): boolean {
+  return unwatchedFetch !== undefined && now - lastPersonActivity() > QUIET_AFTER_MS;
+}
+
+/** A request the person waits on although they do not touch the page: a long Ask or App plan they started. */
+function waitedOnByPerson(input: RequestInfo | URL): boolean {
+  try {
+    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    return new URL(raw, typeof location === 'undefined' ? 'http://zlens.invalid/' : location.href).pathname.startsWith('/api/long-requests/');
+  } catch {
+    return false;
+  }
+}
+
+/** The person touched a quiet page: ask whether ZLens still runs, then let everything that waited go. */
+async function resumeQuietPage(send: typeof fetch): Promise<void> {
+  if (resuming || stopped || waiting.length === 0) return;
+  resuming = true;
+  try {
+    let notRunning = false;
+    try {
+      const response = await send('/api/health', { cache: 'no-store', credentials: 'same-origin', redirect: 'manual' });
+      notRunning = response.status === 503 && snowflakeSaysNotRunning(response.status, await response.clone().text().catch(() => ''));
+    } catch {
+      // Unreachable for now: what waited goes and fails, or succeeds, as it would have.
+    }
+    if (notRunning) {
+      // ZLens stopped while the page was quiet. That check has already started it again, and the person is back,
+      // so the page starts it and opens it when it is ready. Nothing that waited is sent.
+      markZLensStopped({ reason: 'idle', startNow: true });
+      return;
+    }
+    for (const item of waiting.splice(0)) send(item.input, item.init).then(item.resolve, item.reject);
+  } finally {
+    resuming = false;
+  }
+}
+
+/**
  * In the app for Snowflake: a request that Snowflake answers with "service is not running" means ZLens stopped
  * without this page hearing `stopping` (a dropped event stream; V4 release check). That request has started it
  * again, so the page now takes ZLens as stopped and sends nothing more: it stops by itself after its quiet spell,
@@ -123,11 +187,27 @@ export function watchForStoppedService(): void {
   if (unwatchedFetch || typeof globalThis.fetch !== 'function') return;
   const send = globalThis.fetch;
   unwatchedFetch = send;
+  stopActivityWatch = onPersonActive(() => { void resumeQuietPage(send); });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (!stopped && reachesZLens(input) && isPageQuiet() && !waitedOnByPerson(input)) {
+      // Quiet page: the request waits, unsent, until the person is back (or its caller gives up).
+      const signal = init?.signal ?? (typeof Request !== 'undefined' && input instanceof Request ? input.signal : undefined);
+      return new Promise<Response>((resolve, reject) => {
+        if (signal?.aborted) { reject(aborted(signal)); return; }
+        const item: Waiting = { input, init, resolve, reject };
+        waiting.push(item);
+        signal?.addEventListener('abort', () => {
+          const index = waiting.indexOf(item);
+          if (index >= 0) waiting.splice(index, 1);
+          reject(aborted(signal));
+        }, { once: true });
+      });
+    }
     const response = await send(input, init);
     if (response.status === 503 && !stopped && reachesZLens(input)) {
       try {
-        if (snowflakeSaysNotRunning(response.status, await response.clone().text())) markZLensStopped({ reason: 'stopped' });
+        // A request the person just made has started ZLens again: the page starts it and opens it when ready.
+        if (snowflakeSaysNotRunning(response.status, await response.clone().text())) markZLensStopped(isBackgroundNow() ? { reason: 'stopped' } : { reason: 'stopped', startNow: true });
       } catch {
         // An answer that cannot be read says nothing about ZLens stopping.
       }
@@ -185,5 +265,9 @@ export function resetZLensStoppedForTests(): void {
   pageFetch = undefined;
   if (unwatchedFetch) globalThis.fetch = unwatchedFetch;
   unwatchedFetch = undefined;
+  stopActivityWatch?.();
+  stopActivityWatch = undefined;
+  waiting.splice(0);
+  resuming = false;
   for (const listener of listeners) listener();
 }

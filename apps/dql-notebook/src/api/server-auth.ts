@@ -54,9 +54,29 @@ const serverToken = initializeServerToken();
  */
 export const BACKGROUND_AFTER_MS = 30_000;
 let lastActivityAt = Date.now();
+const activityListeners = new Set<() => void>();
+
+/** The person touched the page (a click, key, scroll, touch or pointer move): their requests count as theirs again. */
+export function notePersonActive(at = Date.now()): void {
+  lastActivityAt = at;
+  for (const listener of [...activityListeners]) listener();
+}
+
+/** When the person last touched the page. */
+export function lastPersonActivity(): number {
+  return lastActivityAt;
+}
+
+/** Called each time the person touches the page; returns the function that stops it. */
+export function onPersonActive(listener: () => void): () => void {
+  activityListeners.add(listener);
+  return () => { activityListeners.delete(listener); };
+}
+
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-  const touched = () => { lastActivityAt = Date.now(); };
-  for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+  const touched = () => notePersonActive();
+  // A pointer moving over the page is the person coming back too (the app for Snowflake resumes on it).
+  for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart']) {
     window.addEventListener(type, touched, { capture: true, passive: true });
   }
 }
@@ -172,11 +192,6 @@ export interface ServerEventFrame {
 }
 
 /**
- * Read a same-origin SSE stream through fetch so LAN sessions can use the same
- * bearer header as every other API call. Native EventSource has no header API.
- * `onOpen` is called once the server has accepted the stream.
- */
-/**
  * One read of an event stream, or an error once it carried nothing (not even the server's keep-alive line) for
  * `quietMs`: a connection a proxy dropped without closing it looks open forever, and the page would miss what the
  * server says next (V4 release check: a dropped stream missed `stopping`).
@@ -197,6 +212,11 @@ async function readOrQuiet(reader: ReadableStreamDefaultReader<Uint8Array>, quie
   }
 }
 
+/**
+ * Read a same-origin SSE stream through fetch so LAN sessions can use the same
+ * bearer header as every other API call. Native EventSource has no header API.
+ * `onOpen` is called once the server has accepted the stream; `quietMs` ends one that carries nothing that long.
+ */
 export async function streamServerEvents(
   path: string,
   onEvent: (frame: ServerEventFrame) => void,
