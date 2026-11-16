@@ -95,8 +95,15 @@ describe('"Not in this data" says what is missing in plain words (V2, listing re
     expect(plainDeclineReason('No column in the listed relations holds payroll/employee expense data (Ask looked through every table it can read, and no other table has a column for it)'))
       .toBe('None of the tables Ask can read has payroll or employee expense data');
     expect(plainDeclineReason('No column in the listed relations holds payroll/employee expense data.')).toBe('None of the tables Ask can read has payroll or employee expense data');
+    // How far Ask looked follows as a sentence of its own, never a parenthesis (V4 tester, the payroll answer).
     expect(plainDeclineReason('None of the provided tables contain player salaries (Ask looked through the tables it chose, and no other table has a column for it)'))
-      .toBe('None of the tables Ask searched has player salaries (Ask looked through the tables it chose, and no other table has a column for it)');
+      .toBe('None of the tables Ask searched has player salaries. Ask looked through the tables it chose, and no other table has a column for it');
+    expect(plainDeclineReason('None of the provided tables contain a payroll, salary or compensation column (Ask also looked in the tables that have a column named for it)'))
+      .toBe('None of the tables Ask searched has a payroll, salary or compensation column. Ask also checked every table for a column with a matching name, and none of those tables has it either');
+    expect(plainDeclineReason('The data ends in 2017, so there are no 2019 games (Ask also looked in the tables that have a column named for it)'))
+      .toBe('The data ends in 2017, so there are no 2019 games. Ask also checked every table for a column with a matching name, and none of those tables has it either');
+    expect(plainDeclineReason('Which season do you mean? (Ask looked through every table it can read, and no other table has a column for it)'))
+      .toBe('Which season do you mean? Ask looked through every table it can read, and no other table has a column for it');
     expect(plainDeclineReason('No column in any listed table captures player salary or payroll data')).toBe('None of the tables Ask can read has player salary or payroll data');
     // A sentence that reads plainly keeps its words; "relations" is said as tables.
     expect(plainDeclineReason('The data ends in 2017, so there are no 2019 games')).toBe('The data ends in 2017, so there are no 2019 games');

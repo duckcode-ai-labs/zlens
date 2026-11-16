@@ -465,9 +465,23 @@ export function endSentence(text: string): string {
   const trimmed = withoutTrailing(text.trim(), '.');
   return /[?!]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
-/** The words a reader knows: a certified block is a certified saved query (new-user test V12, Q13's reading). */
+/** A replacement that keeps a capital at the start of what it replaces ("A scalar" → "One number"). */
+const sameCase = (match: string, words: string) => (/^[A-Z]/.test(match) ? capitalized(words) : words);
+const SCALAR_NOUN = String.raw`(?:count|value|number|total|sum|result|figure|answer|amount)`;
+/**
+ * The words a reader knows: a certified block is a certified saved query (new-user test V12, Q13's reading); a
+ * scalar is one number, and the person who asked is "you", never "the user" (V4 tester: "a scalar count", "(a
+ * scalar)", "the certified saved query the user selected"). The interpreter writes the reading; the answer says it
+ * in these words, and the reading kept for the next question stays the model's own.
+ */
 export function readerWords(text: string): string {
-  return text.replace(/\bcertified blocks\b/gi, 'certified saved queries').replace(/\bcertified block\b/gi, 'certified saved query');
+  return text.replace(/\bcertified blocks\b/gi, 'certified saved queries').replace(/\bcertified block\b/gi, 'certified saved query')
+    // "a scalar count of games" is the count of games; "a scalar count", "(a scalar)" is one number.
+    .replace(/\ba scalar (count|total|sum|average) of\b/gi, (match, noun: string) => sameCase(match, `the ${noun.toLowerCase()} of`))
+    .replace(new RegExp(String.raw`\ba scalar ${SCALAR_NOUN}\b|\ba scalar\b(?![ -]\w)`, 'gi'), (match) => sameCase(match, 'one number'))
+    .replace(/\bscalars\b/gi, (match) => sameCase(match, 'single numbers'))
+    .replace(/\bscalar\b/gi, (match) => sameCase(match, 'single-number'))
+    .replace(/\bthe user (selected|chose|picked|named|asked|requested|specified)\b/gi, (match, verb: string) => sameCase(match, `you ${verb.toLowerCase()}`));
 }
 
 /** English words that end in "key" and name no key. */

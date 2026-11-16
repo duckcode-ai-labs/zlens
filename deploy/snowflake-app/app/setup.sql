@@ -36,9 +36,11 @@ ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_backup_stage
 -- idle_minutes: ZLens stops its own service after this many minutes with no one using it (projects
 -- are kept; opening it starts it again). The compute pool then suspends AUTO_SUSPEND_SECS later.
 -- Longer costs more: the pool's one CPU_X64_XS node bills about 0.06 credits an hour while it runs.
--- Shorter means more cold starts: about 2 to 3 minutes each, with the pool suspended or not (V13
--- test, 1.7 to 2.6 minutes). An upgrade applies a new value here; the pool's own settings are set
--- only when it is created.
+-- Shorter means more cold starts: each usually takes 2 to 3 minutes, with the pool suspended or not
+-- (V13 test, 1.7 to 2.6 minutes), and up to 15 minutes the first time after an install or update,
+-- likely while Snowflake fetches the new image (V4 test, 14 minutes after an update; a fresh install
+-- about 8). An upgrade applies a new value here; the pool's own settings are set only when it is
+-- created.
 CREATE OR REPLACE PROCEDURE core.ensure_zlens(resume BOOLEAN)
 RETURNS VARCHAR
 LANGUAGE SQL
@@ -97,7 +99,7 @@ AS
 $$
 BEGIN
   CALL core.ensure_zlens(TRUE);
-  RETURN 'ZLens is starting: about 2 to 3 minutes. CALL app_public.app_url() waits until it is ready, then gives its address.';
+  RETURN 'ZLens is starting: usually 2 to 3 minutes, and up to 15 minutes the first time after an install or update. CALL app_public.app_url() waits until it is ready, then gives its address.';
 END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.start_app() TO APPLICATION ROLE app_admin;
@@ -123,8 +125,9 @@ GRANT USAGE ON PROCEDURE app_public.stop_app() TO APPLICATION ROLE app_admin;
 -- ZLens is stopped or starting shows Snowflake's own "service is not yet running" page, and each
 -- reload of that page asks the person to sign in again. So when ZLens is stopped this starts it,
 -- and while it starts this waits until it is ready (SYSTEM$WAIT_FOR_SERVICES, at most 4 minutes; a
--- start takes about 2 to 3), then gives the address. Still not ready by then: it says so, with an
--- honest wait. An unknown state gives the address, as before.
+-- start usually takes 2 to 3, and up to 15 the first time after an install or update), then gives
+-- the address. Still not ready by then: it says so, with an honest wait. An unknown state gives the
+-- address, as before.
 CREATE OR REPLACE PROCEDURE app_public.app_url()
 RETURNS VARCHAR
 LANGUAGE SQL
@@ -191,7 +194,7 @@ BEGIN
     END IF;
   END FOR;
   IF (url = '') THEN
-    RETURN 'ZLens is starting, and Snowflake has not given it an address yet. A start takes about 2 to 3 minutes. Run CALL app_public.app_url() again in a minute: it waits until ZLens is ready, then gives the address.';
+    RETURN 'ZLens is starting, and Snowflake has not given it an address yet. A start usually takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update. Run CALL app_public.app_url() again in a minute: it waits until ZLens is ready, then gives the address.';
   END IF;
   IF (svc_status IN ('FAILED', 'INTERNAL_ERROR')) THEN
     RETURN 'ZLens did not start (Snowflake reports ' || svc_status || '). An admin can run CALL app_public.start_app() to try again. Its address: ' || url;
@@ -200,7 +203,7 @@ BEGIN
     RETURN 'ZLens has not started yet (Snowflake still reports it stopped). Run CALL app_public.app_url() again in a minute; if this comes back again, an admin can run CALL app_public.start_app(). Its address: ' || url;
   END IF;
   IF (svc_status = 'PENDING') THEN
-    RETURN 'ZLens is still starting. A start takes about 2 to 3 minutes, and longer right after an install or an upgrade. '
+    RETURN 'ZLens is still starting. A start usually takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update. '
       || 'Wait, then open the address once: ' || url || ' '
       || '(Opened before ZLens is ready, it shows the Snowflake page "service is not yet running", and each reload asks you to sign in again. '
       || 'Or run CALL app_public.app_url() again: it waits until ZLens is ready.)';
@@ -287,9 +290,10 @@ GRANT SELECT ON VIEW app_public.history TO APPLICATION ROLE app_admin;
 -- starts ZLens when it has stopped, waits until Snowflake reports it READY, and only then offers
 -- Open ZLens and its address, so no one lands on Snowflake's "service is not yet running" page. It
 -- reads no customer data and calls nothing outside Snowflake: only the two procedures below. It runs
--- on the app's own extra-small warehouse, which an open page keeps running (about 15 minutes after
--- its last use). Once ZLens is ready it checks again every minute for 10 minutes, then stops so the
--- warehouse can suspend, and every state says when it was checked. app_url() stays for SQL.
+-- on the app's own extra-small warehouse, or on the one a viewer picked when Snowsight asked for one
+-- (the ready page names it), which an open page keeps running (about 15 minutes after its last use).
+-- Once ZLens is ready it checks again every minute for 10 minutes, then stops so the warehouse can
+-- suspend, and every state says when it was checked. app_url() stays for SQL.
 
 -- The state the launcher shows: the service status, its address and the configured ZLens user.
 -- Starts nothing. READY means the service is RUNNING and its container reports READY (a service

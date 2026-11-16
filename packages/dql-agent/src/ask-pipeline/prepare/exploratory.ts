@@ -39,6 +39,18 @@ const NONE_HOLDS = new RegExp(String.raw`^(?:none of the|the) (?:${LISTED} )?${T
 const LOOKED = /\s*\((Ask looked through (every table it can read|the tables it chose), and no other table has a column for it|Ask also looked in the tables that have a column named for it)\)\s*$/;
 
 /**
+ * How far Ask looked, said to a reader as a sentence of its own after the reason, never as a parenthesis (V4
+ * tester: the payroll answer ended "… (Ask also looked in the tables that have a column named for it)").
+ */
+function lookedSentence(looked: string): string {
+  return looked.startsWith('Ask also')
+    ? 'Ask also checked every table for a column with a matching name, and none of those tables has it either'
+    : looked;
+}
+/** The reason, then how far Ask looked: two sentences ("… in 2015?" keeps its question mark). */
+const thenLooked = (reason: string, looked: string) => `${/[?!]$/.test(reason) ? reason : `${reason}.`} ${lookedSentence(looked)}`;
+
+/**
  * A DECLINE IN PLAIN WORDS. The drafter says why no SQL answers the question in its own terms: "No column in the
  * listed relations holds payroll/employee expense data" (V2, listing retake F9). A reader is told the same thing
  * in theirs: "None of the tables Ask can read has payroll or employee expense data". A sentence these patterns do
@@ -57,13 +69,13 @@ export function plainDeclineReason(message: string): string {
   if (missing && !/\b(?:but|because|since|although|however)\b/i.test(missing)) {
     const sentence = `None of ${which} has ${said(missing)}`;
     // "Every table it can read" is what the sentence already says.
-    return looked && !everyTable ? `${sentence} (${looked[1]})` : sentence;
+    return looked && !everyTable ? thenLooked(sentence, looked[1]!) : sentence;
   }
   const plain = said(core)
     .replace(new RegExp(String.raw`\b(?:the |any of the )?${LISTED} (?:relations|tables|schemas?)\b`, 'gi'), which)
     .replace(/\brelations\b/gi, 'tables')
     .replace(/\brelation\b/gi, 'table');
-  return looked ? `${plain} (${looked[1]})` : plain;
+  return looked ? thenLooked(plain, looked[1]!) : plain;
 }
 
 export async function prepareExploratory(

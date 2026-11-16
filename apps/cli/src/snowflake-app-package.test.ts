@@ -96,13 +96,13 @@ describe('the app package for Snowflake', () => {
     expect(appUrl).toMatch(/SYSTEM\$WAIT_FOR_SERVICES[\s\S]*?EXCEPTION WHEN OTHER THEN[\s\S]*?services_after := [\s\S]*?SHOW ENDPOINTS IN SERVICE core\.zlens/);
     // Ready: the address alone. Still starting: says so, with an honest wait, and the address to open once.
     expect(appUrl).toMatch(/RETURN url;\s+END;\s*$/);
-    expect(appUrl).toContain("'ZLens is still starting. A start takes about 2 to 3 minutes");
+    expect(appUrl).toContain("'ZLens is still starting. A start usually takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update. '");
     expect(appUrl).toContain('Wait, then open the address once: ');
     expect(appUrl).not.toMatch(/5 to 15|about 2 minutes/);
     // It never stops or re-creates anything, and any user of the app may call it.
     expect(appUrl).not.toMatch(/SUSPEND;|CREATE |ensure_zlens/);
     expect(setup).toContain('GRANT USAGE ON PROCEDURE app_public.app_url() TO APPLICATION ROLE app_user;');
-    expect(procedure('start_app')).toContain('about 2 to 3 minutes');
+    expect(procedure('start_app')).toContain('usually 2 to 3 minutes, and up to 15 minutes the first time after an install or update');
   });
 
   it('V14: states one start time, about 2 to 3 minutes, in the setup script, the readme and Help', () => {
@@ -111,6 +111,24 @@ describe('the app package for Snowflake', () => {
       expect(text).not.toMatch(/5 to 15|five to fifteen/i);
       expect(text).toContain('2 to 3 minutes');
     }
+  });
+
+  it('V4: every start time in the app package says up to 15 minutes for the first start after an install or update', () => {
+    const page = read('launcher/launcher.py');
+    // A first start after an update took 13 min 56 s while the page said 2 to 3 minutes the whole time.
+    for (const text of [setup, readme, page]) {
+      const promises = text.split(/(?<=[.;:])\s+/).filter((sentence) => /2 to 3\b/.test(sentence));
+      expect(promises.length).toBeGreaterThan(0);
+      for (const sentence of promises) expect(sentence.replace(/\s+/g, ' ')).toMatch(/usually (?:takes )?2 to 3\b.*up to 15\b.*(?:the )?first (?:time|start) after an install or update/);
+      expect(text).not.toMatch(/about 2 to 3|longer right after an install/);
+    }
+    for (const name of ['start_app', 'app_url']) expect(procedure(name)).toContain('up to 15 minutes the first time after an install or update');
+    // Past 5 minutes, the blue box no longer promises 2 to 3 minutes; it says the first start can take up to 15.
+    expect(page).toMatch(/elif elapsed > SLOW_START_SECONDS:\n(?:\s+#[^\n]*\n)*\s+st\.info\("Starting ZLens\. The first start after an install or update can take up to 15 minutes\."\)\nelse:\n\s+st\.info\("Starting ZLens\. This usually takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update\."\)/);
+    const slow = page.slice(page.indexOf('elif elapsed > SLOW_START_SECONDS:'), page.indexOf('else:', page.indexOf('elif elapsed > SLOW_START_SECONDS:')));
+    expect(slow).not.toContain('2 to 3');
+    // A start is still checked past the 15 minutes before the page gives up.
+    expect(Number(/^STOP_WAITING_SECONDS = (\d+)$/m.exec(page)?.[1])).toBeGreaterThan(15 * 60);
   });
 
   it('V2: Launch app opens the launcher page, which starts ZLens and offers its address only once it is ready', () => {
@@ -144,7 +162,7 @@ describe('the app package for Snowflake', () => {
   it('V2: the launcher page calls only the app\'s own procedures, and pins a Streamlit with link_button', () => {
     const page = read('launcher/launcher.py');
     const calls = [...page.matchAll(/session\.sql\("([^"]+)"\)/g)].map((match) => match[1]);
-    expect(calls).toEqual(['CALL app_public.launcher_status()', 'SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()', 'CALL app_public.launcher_start()']);
+    expect(calls).toEqual(['CALL app_public.launcher_status()', 'SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP(), CURRENT_WAREHOUSE()', 'CALL app_public.launcher_start()']);
     expect(page).not.toMatch(/requests|urllib|http\.client|socket|components\.html/);
     expect(page).toContain('st.link_button("Open ZLens", status["url"]');
     // The address is offered only once READY, with a copy of it in case the browser blocks the tab.
@@ -198,7 +216,7 @@ describe('the app package for Snowflake', () => {
   it('V3: every state of the launcher says when it was checked, with the time zone', () => {
     const page = read('launcher/launcher.py');
     // The time comes from Snowflake (the session's time zone), in the same query as the app's name.
-    expect(page).toContain('session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()")');
+    expect(page).toContain('session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP(), CURRENT_WAREHOUSE()")');
     expect(page).toMatch(/def clock\(moment, later_seconds=0\):[\s\S]*?moment\.tzname\(\)[\s\S]*?return f"\{moment:%H:%M\} \{zone\}"/);
     expect(page).toContain('st.success(f"ZLens is ready. Checked at {checked}.")');
     for (const start of ['if status["error"]:', 'if name in ("FAILED", "INTERNAL_ERROR"):']) {
@@ -254,6 +272,31 @@ describe('the app package for Snowflake', () => {
     expect(firstOpen).toMatch(/A browser that blocks pop-ups blocks Open ZLens too: copy the address\s+from the page instead\./);
     // "service is not yet running" is explained in one place only.
     expect(readme.match(/service is not yet running/g)).toHaveLength(1);
+  });
+
+  it('V4: the readme says what to do when Snowsight greys the page out, and that its cached lines can linger', () => {
+    const firstOpen = readme.slice(readme.indexOf('## The first open'), readme.indexOf('## What ZLens does first'));
+    expect(firstOpen).toMatch(/\*\*If the page looks greyed out\*\* with a \*\*Start\*\* button at the top, Snowsight has put it to\s+sleep: press \*\*Start\*\*, then \*\*Check again\*\*\./);
+    expect(firstOpen).toMatch(/faded lines from the\s+copy can stay under it for up to a minute\./);
+  });
+
+  it('V4: the ready page names the warehouse it really runs on, in plain words when Snowflake does not say', () => {
+    const page = read('launcher/launcher.py');
+    // Snowsight runs the page on the warehouse the person picked, which need not be the app's <app>_WH.
+    expect(page).toMatch(/def read_context\(\):[\s\S]*?CURRENT_WAREHOUSE\(\)"\)\.collect\(\)\[0\]\n\s+return str\(row\[0\] or ""\), row\[1\], str\(row\[2\] or ""\)\n\s+except Exception:[^\n]*\n\s+return "", None, ""/);
+    expect(page).toContain('app, moment, page_warehouse = read_context()');
+    const ready = branch(page, 'if name == "READY" and status["url"]:');
+    expect(ready).toContain('keeps = f"this page\'s warehouse, {page_warehouse}, running" if page_warehouse else "this page\'s warehouse running"');
+    expect(ready).toContain('f"while it stays open it keeps {keeps}. "');
+    // The ready page no longer names the app's own warehouse as the one it keeps running.
+    expect(ready).not.toContain('{warehouse}');
+    expect(readme).toMatch(/reads the\s+app's name, the time and the name of the warehouse it runs on; it reads none of your data\./);
+  });
+
+  it('V4: the cost section says an open ZLens tab does not keep ZLens running', () => {
+    const minutes = /idle_minutes VARCHAR DEFAULT '(\d+)'/.exec(setup)?.[1];
+    const cost = readme.slice(readme.indexOf('### What it costs to run'), readme.indexOf('## Privileges'));
+    expect(cost).toContain(`An open ZLens tab does not keep it running: ZLens stops after ${minutes} minutes with no one using it.`);
   });
 
   it('V2: the readme and Help send people to Launch app, with app_url() as the SQL route', () => {
