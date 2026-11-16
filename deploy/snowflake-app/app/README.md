@@ -97,7 +97,7 @@ After you add tables or schemas, run those grant lines again for them, then in Z
 
 ## AI: Claude through Snowflake Cortex
 
-- **Model.** ZLens asks Anthropic's **Claude Sonnet 5** (Cortex model `claude-sonnet-5`) through
+- **Model.** ZLens asks Anthropic's **Claude Sonnet 5.5** (Cortex model `claude-sonnet-5-5`) through
   Snowflake Cortex, inside Snowflake. **Settings » AI provider** shows the model in use; its advanced
   fields can name another Claude model that Cortex offers in your account.
 - **How it reaches Cortex.** Through the Cortex REST API, signed in with the app's own Snowflake token.
@@ -237,7 +237,7 @@ app** opens, runs on that same warehouse and calls only the app's own procedures
   Nothing is sent to the app's provider.
 - **Your data.** ZLens reads table and column descriptions and runs read-only queries, as the app, on only
   the database you granted, with its own warehouse. Every query carries a `QUERY_TAG` and shows in your `QUERY_HISTORY`.
-- **AI.** Questions go to Claude (`claude-sonnet-5`) through Snowflake Cortex, inside Snowflake. A prompt
+- **AI.** Questions go to Claude (`claude-sonnet-5-5`) through Snowflake Cortex, inside Snowflake. A prompt
   holds the question, table and column names, metric definitions, and sometimes rows of a query result.
   Cortex may process it in another Snowflake region if your account allows cross-region inference. The
   app's provider never receives prompts or replies, and trains nothing on them.

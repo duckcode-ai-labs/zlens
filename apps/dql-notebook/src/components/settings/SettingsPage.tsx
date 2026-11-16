@@ -1188,7 +1188,7 @@ function ProviderSettingsForm({
 }
 
 /** Cortex's default model (the server's CORTEX_DEFAULT_MODEL); Cortex names Claude models `claude-<family>-<version>`. */
-const CORTEX_MODEL_PLACEHOLDER = 'claude-sonnet-5';
+const CORTEX_MODEL_PLACEHOLDER = 'claude-sonnet-5-5';
 
 /**
  * Snowflake Cortex has no key: it shows the Snowflake connection it signs in with (or why it cannot), lets a person

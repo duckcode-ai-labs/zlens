@@ -295,6 +295,18 @@ export function getActiveProvider(projectRoot: string): ProviderSettingsId | und
   return active && modelProviderAllowed(active) ? active : undefined;
 }
 
+/**
+ * A Cortex model name ZLens can use: an Anthropic Claude model as Cortex names it (`claude-<family>-<version>`,
+ * e.g. claude-sonnet-5-5). Other Cortex models are not offered: the Cortex provider sends Claude's Messages request,
+ * answers are tested with Claude, and the Marketplace listing names Claude models only.
+ */
+/** A setting the person can fix (the route answers 400 with its message). */
+export class ProviderSettingsInputError extends Error {}
+
+export function isCortexClaudeModel(model: string): boolean {
+  return /^claude-[a-z0-9][a-z0-9.-]*$/i.test(model.trim());
+}
+
 export function saveProviderSettings(projectRoot: string, input: ProviderSettingsInput): RedactedProviderSettings[] {
   if (!modelProviderAllowed(input.id)) throw new Error(`The ${input.id} model provider is not available on this install (ZLENS_MODEL_PROVIDERS).`);
   const state = readStoredProviderState(projectRoot);
@@ -321,6 +333,10 @@ export function saveProviderSettings(projectRoot: string, input: ProviderSetting
       : {}),
     updatedAt: new Date().toISOString(),
   };
+  // Cortex: ZLens sends Claude's Messages request, and its listing names Claude models only.
+  if (signsInWithConnection && next.model && !isCortexClaudeModel(next.model)) {
+    throw new ProviderSettingsInputError(`ZLens asks Claude through Snowflake Cortex. Name a Claude model that Cortex offers in your account, such as claude-sonnet-5-5 (not "${next.model}").`);
+  }
   // Cortex has no key or base URL of its own; neither is kept.
   if (signsInWithConnection) {
     delete next.apiKey;

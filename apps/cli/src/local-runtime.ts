@@ -763,6 +763,7 @@ import {
   modelProviderAllowed,
   allowedModelProviders,
   listProviderSettings,
+  ProviderSettingsInputError,
   saveProviderSettings,
   type ProviderSettingsId,
   type RedactedProviderSettings,
@@ -20710,7 +20711,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         syncDeadlineScaleToActiveProvider();
         res.end(serializeJSON({ ok: true, providers }));
       } catch (error) {
-        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.writeHead(error instanceof ProviderSettingsInputError ? 400 : 500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
       }
       return;
@@ -53191,7 +53192,7 @@ function collectSettingsEnvStatus(): SettingsEnvGroup[] {
         v('GEMINI_MODEL', 'Gemini model', 'Optional Gemini model override.'),
         v('OLLAMA_BASE_URL', 'Ollama base URL', 'Local Ollama HTTP endpoint. Docker defaults to http://ollama:11434.'),
         v('OLLAMA_MODEL', 'Ollama model', 'Optional local model name such as llama3.1.'),
-        v('ZLENS_CORTEX_MODEL', 'Snowflake Cortex model', 'Optional Cortex model such as claude-sonnet-5 (the default). Cortex signs in with the project\'s Snowflake connection.'),
+        v('ZLENS_CORTEX_MODEL', 'Snowflake Cortex model', 'Optional Cortex model such as claude-sonnet-5-5 (the default). Cortex signs in with the project\'s Snowflake connection.'),
       ],
     },
     {

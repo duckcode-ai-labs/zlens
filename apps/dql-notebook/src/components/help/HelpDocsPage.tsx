@@ -379,7 +379,7 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
       body: (
         <>
           <p style={para}>Two things are set outside ZLens, on the app's <strong>Configurations</strong> tab in Snowsight (<strong>Apps</strong>, then this app): the one person who uses ZLens, and an optional stage for backups that outlive the app.</p>
-          <p style={para}>AI runs on Anthropic's Claude through Snowflake Cortex, inside Snowflake: model <span style={inlineCode}>claude-sonnet-5</span> unless you name another in <strong>Settings » AI provider</strong>. Ask needs the app to hold the <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> database role; <strong>Test</strong> on that page says whether Claude answers.</p>
+          <p style={para}>AI runs on Anthropic's Claude through Snowflake Cortex, inside Snowflake: model <span style={inlineCode}>claude-sonnet-5-5</span> (Claude Sonnet 5.5) unless you name another in <strong>Settings » AI provider</strong>. Ask needs the app to hold the <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> database role; <strong>Test</strong> on that page says whether Claude answers.</p>
         </>
       ),
     },
