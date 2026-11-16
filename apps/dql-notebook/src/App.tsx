@@ -11,6 +11,7 @@ import { themes } from './themes/notebook-theme';
 import { api } from './api/client';
 import { useHotReload } from './hooks/useHotReload';
 import { OperationsProvider } from './operations/OperationsProvider';
+import { ZLensStoppedNotice } from './snowflake-app/ZLensStoppedNotice';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -113,6 +114,7 @@ function AppInner() {
       <TooltipProvider delayDuration={200} skipDelayDuration={400}>
         {readOnlyLink ? <ViewerShell /> : <AppShell />}
         <ServerAccessGate />
+        <ZLensStoppedNotice />
       </TooltipProvider>
     </ThemeProvider>
   );

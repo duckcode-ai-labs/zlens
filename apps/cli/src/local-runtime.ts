@@ -70,8 +70,8 @@ import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason, N
 import { ZLENS_FAVICON_SVG } from './brand-page.js';
 import { SNOWFLAKE_USER_HEADER, sameOriginAsHost, snowflakeIngressFromEnv, snowflakeIngressRefusal, snowflakeIngressRefusalPage, snowflakeSignedInUser, withSnowflakeUser, type SnowflakeIngress } from './snowflake-ingress.js';
 import { keepSseStreamAlive } from './sse-keep-alive.js';
-import { LONG_REQUEST_PATH, answerLongRequest, handleLongRequestPoll } from './long-request.js';
-import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions } from './snowflake-app-settings.js';
+import { LONG_REQUEST_PATH, answerLongRequest, handleLongRequestPoll, longRequestsRunning } from './long-request.js';
+import { IdleSuspender, SnowflakeAppSettings, chooseDatabase, countsAsUse, idleSuspendFromEnv, snowflakeAppSettingsFromEnv, snowflakeAppSetupPage, stoppingEventFrame, tellPagesOnStopSignal, type SnowflakeAppQuery, type SnowflakeAppSettingsOptions, type ZLensStoppingNotice } from './snowflake-app-settings.js';
 import { SnowflakeAppBackups } from './snowflake-app-backups.js';
 import { HistoryService } from './history/history-service.js';
 import { HISTORY_ROUTE_PREFIX, handleHistoryRequest } from './history/history-routes.js';
@@ -1308,6 +1308,11 @@ export interface LocalServerOptions {
   snowflakeAppSettings?: SnowflakeAppSettingsOptions;
   /** Tests: how the app's settings are read (defaults to the project's connection). */
   snowflakeAppQuery?: SnowflakeAppQuery;
+  /**
+   * Tests: the idle stop of the app for Snowflake in place of ZLENS_SNOWFLAKE_IDLE_SUSPEND_MINUTES and
+   * ZLENS_SNOWFLAKE_SERVICE (only with the Snowflake sign-in on), with its clock and a handle on it.
+   */
+  snowflakeIdleSuspend?: { minutes: number; service: string; now?: () => number; capture?: (idle: IdleSuspender) => void };
   /**
    * Receives the underlying HTTP server once created, so short-lived callers
    * (e.g. `zlens agent ask` starting an ephemeral runtime) can `close()` it and
@@ -5610,15 +5615,23 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   };
   // Snowflake will not auto-suspend a service with a public endpoint, but wakes a stopped one when it is opened:
   // the app stops itself after a quiet spell.
-  const idleSuspend = snowflakeIngress ? idleSuspendFromEnv() : undefined;
+  // Open pages are told first (the `stopping` event on their event streams), so none of them starts it again by itself.
+  const idleSuspend = snowflakeIngress ? (opts.snowflakeIdleSuspend ?? idleSuspendFromEnv()) : undefined;
   const idleSuspender = idleSuspend
     ? new IdleSuspender(idleSuspend.minutes * 60_000, async () => {
-      if (!connection) throw new Error('No Snowflake connection');
       console.log(`[zlens] No one has used ZLens for ${idleSuspend.minutes} minutes: stopping. Opening it again starts it.`);
-      await executor.executeQuery(`ALTER SERVICE ${idleSuspend.service} SUSPEND`, [], {}, connection);
-    })
+      tellPagesStopping({ reason: 'idle', idleMinutes: idleSuspend.minutes });
+      try {
+        await snowflakeAppQuery(`ALTER SERVICE ${idleSuspend.service} SUSPEND`);
+      } catch (error) {
+        // Still running: a page opened from now on is not told it stopped.
+        zlensStopping = undefined;
+        throw error;
+      }
+    }, opts.snowflakeIdleSuspend?.now)
     : undefined;
-  idleSuspender?.start();
+  /** Set once the open pages have been told ZLens is stopping; a stream opened after that is told at once. */
+  let zlensStopping: ZLensStoppingNotice | undefined;
   // Backups (approved design B1–B6): a daily snapshot of the volume and, when the admin named a stage, an export
   // of the project to it, taken as ZLens stops for the day; after 30 hours of running, taken anyway.
   let snowflakeBackupRunning = false;
@@ -13330,6 +13343,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
   // SSE clients for /api/watch hot-reload
   const sseClients = new Set<ServerResponse>();
+  /**
+   * The app for Snowflake is stopping: every open page is told on its event streams, which then end. A page
+   * told this stops asking (any request would wake the stopped service) and offers to start ZLens again.
+   */
+  const tellPagesStopping = (notice: ZLensStoppingNotice) => {
+    zlensStopping ??= notice;
+    const frame = stoppingEventFrame(zlensStopping);
+    for (const client of [...operationSseClients.keys(), ...sseClients]) {
+      // Ending flushes the frame now: on SIGTERM the process exits right after.
+      try { client.end(frame); } catch { /* connection already closed */ }
+    }
+    operationSseClients.clear();
+    sseClients.clear();
+  };
   const projectWatchers: Array<ReturnType<typeof watch>> = [];
   let runtimeClosing = false;
   let watcherWarningEmitted = false;
@@ -15495,7 +15522,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const requestUrl = req.url || '/';
     const url = new URL(requestUrl, 'http://127.0.0.1');
     const path = url.pathname || '/';
-    if (idleSuspender && path !== '/api/health') res.on('close', idleSuspender.touch());
+    // Only someone's requests count as use: not the probe, a page's event streams, or what a page asks for by itself.
+    if (idleSuspender && countsAsUse(req.method, path, req.headers)) res.on('close', idleSuspender.touch());
     void (async () => {
 
     // Exact-origin CORS. An origin on the explicit allowlist is always accepted
@@ -15756,6 +15784,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         'X-Accel-Buffering': 'no',
       });
       res.write(': connected\n\n');
+      if (zlensStopping) {
+        res.end(stoppingEventFrame(zlensStopping));
+        return;
+      }
       const viewer = operationReader();
       operationSseClients.set(res as unknown as ServerResponse, viewer);
       for (const operation of operationCoordinator.list(20, viewer === undefined ? {} : { ownerId: viewer }).reverse()) {
@@ -26733,6 +26765,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         'X-Accel-Buffering': 'no',
       });
       res.write(': connected\n\n');
+      if (zlensStopping) {
+        res.end(stoppingEventFrame(zlensStopping));
+        return;
+      }
         sseClients.add(res as unknown as ServerResponse);
         req.on('close', () => { sseClients.delete(res as unknown as ServerResponse); });
       return;
@@ -33883,8 +33919,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     });
   }));
 
+  // The app for Snowflake: stop after the quiet spell, and on SIGTERM (stop_app(), or Snowflake suspending the
+  // service) tell the open pages before the process ends.
+  // Work someone started keeps ZLens up while it runs, even when their page only polls for it in the background.
+  idleSuspender?.holdWhile(() => longRequestsRunning() > 0
+    || activeAgentRunControllers.size > 0
+    || snowflakeBackupRunning
+    || snowflakeAppSetup.state === 'running'
+    || meaningDraftJob?.running === true);
+  idleSuspender?.start();
+  if (idleSuspender) opts.snowflakeIdleSuspend?.capture?.(idleSuspender);
+  const forgetStopSignal = snowflakeIngress ? tellPagesOnStopSignal(() => tellPagesStopping({ reason: 'stopped' })) : undefined;
+
   server.once('close', () => {
     runtimeClosing = true;
+    idleSuspender?.stop();
+    forgetStopSignal?.();
     if (snowflakeIngress) ownersFromSignInOnly(false);
     snowflakeHistory?.stop();
     unregisterServerHooks(scope.id);

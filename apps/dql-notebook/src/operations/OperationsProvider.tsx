@@ -5,7 +5,9 @@ import {
   type LocalOperation,
 } from '../api/client';
 import { useNotebookStore } from '../store/NotebookStore';
-import { isViewerLink, streamServerEvents } from '../api/server-auth';
+import { isViewerLink } from '../api/server-auth';
+import { followServerEvents } from '../api/follow-server-events';
+import { useZLensStopped } from '../snowflake-app/zlens-stopped';
 import {
   blockCertificationOperationsForReconciliation,
   isTerminalOperation,
@@ -40,6 +42,8 @@ export function OperationsProvider({ children }: { children: React.ReactNode }) 
   const trackedOperationIds = useRef(new Set<string>());
   const dispatch = useNotebookStore((state) => state.dispatch);
   const readOnlyLink = isViewerLink();
+  // The app for Snowflake stopped: no more polls (any request would start it again).
+  const stopped = useZLensStopped() !== null;
   const query = useQuery({
     queryKey: OPERATIONS_QUERY_KEY,
     queryFn: async () => {
@@ -51,39 +55,24 @@ export function OperationsProvider({ children }: { children: React.ReactNode }) 
     refetchOnWindowFocus: false,
     // Polling is a recovery path if the authenticated event stream is dropped.
     // A read-only link has no operations to follow.
-    enabled: !readOnlyLink,
-    refetchInterval: readOnlyLink ? false : 1_500,
+    enabled: !readOnlyLink && !stopped,
+    refetchInterval: operationsPollMs(readOnlyLink, stopped),
   });
   const operations = query.data ?? [];
 
   useEffect(() => {
     if (readOnlyLink) return undefined;
-    let alive = true;
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let controller: AbortController | undefined;
-    const connect = () => {
-      controller = new AbortController();
-      void streamServerEvents('/api/operations/events', (frame) => {
-        if (frame.event !== 'operation') return;
-        try {
-          const operation = JSON.parse(frame.data) as LocalOperation;
-          queryClient.setQueryData<LocalOperation[]>(OPERATIONS_QUERY_KEY, (current = []) => (
-            mergeOperation(current, operation)
-          ));
-        } catch {
-          // A malformed progress frame must not interrupt later updates.
-        }
-      }, controller.signal).catch(() => {
-        if (!alive || controller?.signal.aborted) return;
-        reconnectTimer = setTimeout(connect, 5_000);
-      });
-    };
-    connect();
-    return () => {
-      alive = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      controller?.abort();
-    };
+    return followServerEvents('/api/operations/events', (frame) => {
+      if (frame.event !== 'operation') return;
+      try {
+        const operation = JSON.parse(frame.data) as LocalOperation;
+        queryClient.setQueryData<LocalOperation[]>(OPERATIONS_QUERY_KEY, (current = []) => (
+          mergeOperation(current, operation)
+        ));
+      } catch {
+        // A malformed progress frame must not interrupt later updates.
+      }
+    });
   }, [queryClient]);
 
   useEffect(() => {
@@ -94,6 +83,7 @@ export function OperationsProvider({ children }: { children: React.ReactNode }) 
   }, [operations]);
 
   useEffect(() => {
+    if (stopped) return undefined;
     let alive = true;
     let recovering = false;
     const recoverTrackedOperations = async () => {
@@ -120,7 +110,7 @@ export function OperationsProvider({ children }: { children: React.ReactNode }) 
       alive = false;
       window.clearInterval(timer);
     };
-  }, [queryClient]);
+  }, [queryClient, stopped]);
 
   useEffect(() => {
     for (const operation of blockCertificationOperationsForReconciliation(
@@ -183,6 +173,11 @@ export function OperationsProvider({ children }: { children: React.ReactNode }) 
   }), [operations, query.isLoading, queryClient]);
 
   return <OperationsContext.Provider value={value}>{children}</OperationsContext.Provider>;
+}
+
+/** How often the operations list is polled: never for a read-only link, or once the app for Snowflake stopped. */
+export function operationsPollMs(readOnlyLink: boolean, stopped: boolean): number | false {
+  return readOnlyLink || stopped ? false : 1_500;
 }
 
 export function useOperations(): OperationsContextValue {
