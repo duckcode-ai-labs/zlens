@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runAskPipeline } from './pipeline.js';
-import { composeAnsweredText } from './outcomes.js';
+import { composeAnsweredText, readerWords } from './outcomes.js';
 import { clauseQuestion, questionBack } from './resolve-intent.js';
 import type { AnalyticalIntentV1 } from './intent.js';
 import { withoutEnds, withoutLeading, withoutTrailing } from '../text-ends.js';
@@ -177,6 +177,21 @@ describe('the answer reads as one answer sentence, the reading, and one source l
       'Source: SQL written by AI from the LOCAL_PLAYER_GAME_FACTS table, because no certified saved query or metric answers this; review it before relying on the numbers.',
     ].join('\n\n'));
     expect(text).not.toMatch(/2544|201939|\?\.|certified block/);
+    // The reading in plain words: one number, never a scalar; "you", never "the user" (V4 tester).
+    expect(readerWords('Total games the Warriors won in 2016 (a scalar count)')).toBe('Total games the Warriors won in 2016 (one number)');
+    expect(readerWords('Total points LeBron James scored in 2016 (a scalar)')).toBe('Total points LeBron James scored in 2016 (one number)');
+    expect(readerWords('A scalar count of games the Celtics played in 2008')).toBe('The count of games the Celtics played in 2008');
+    expect(readerWords('Games played in 2016, a scalar count.')).toBe('Games played in 2016, one number.');
+    expect(readerWords('Read as a scalar question')).toBe('Read as a single-number question');
+    expect(readerWords('Answered by the certified block the user selected')).toBe('Answered by the certified saved query you selected');
+    expect(readerWords('The user picked total points')).toBe('You picked total points');
+    // A column named scalar_value keeps its name.
+    expect(readerWords('Sum of scalar_value by month')).toBe('Sum of scalar_value by month');
+    const certified = composeAnsweredText(intent('Wins of the Warriors in 2016 from the certified block the user selected, a scalar count'), {
+      columns: ['WINS'], rows: [{ WINS: 67 }], rowCount: 1, executionTimeMs: 1,
+    }, vocabulary, 'certified');
+    expect(certified).toContain('I read this as: Wins of the Warriors in 2016 from the certified saved query you selected, one number.');
+    expect(certified).not.toMatch(/scalar|the user/i);
   });
 
   it('reads one row as words: a name, then each figure by its column name in words', () => {

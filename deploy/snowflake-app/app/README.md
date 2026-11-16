@@ -51,9 +51,10 @@ Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app.
 ## The first open: what to expect
 
 - **Press Launch app.** It opens a small ZLens page inside Snowsight. If ZLens has stopped (it stops
-  itself after 60 idle minutes), the page starts it and shows the time so far: a start takes
-  about 2 to 3 minutes. Once Snowflake reports ZLens ready, the page shows **Open ZLens** and ZLens's
-  address. It never offers the address before then.
+  itself after 60 idle minutes), the page starts it and shows the time so far: a start usually
+  takes 2 to 3 minutes, and up to 20 minutes the first time after an install or update. Once
+  Snowflake reports ZLens ready, the page shows **Open ZLens** and ZLens's address. It never offers
+  the address before then.
 - **If Snowsight asks you to select a warehouse** before the page opens, pick `ZLENS_APP_WH` (your
   app's name followed by `_WH`), the app's own warehouse: the page runs on it. Snowflake may ask this
   before it opens a Streamlit page that runs on a warehouse, as this one does, for example when your
@@ -63,15 +64,18 @@ Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app.
   zone). Once ZLens is ready it checks again every minute for 10 minutes, so a ZLens that stops or
   restarts shows as it is, and a stopped one is started again. Then it stops checking, so its
   warehouse can suspend; **Check again** checks once more.
+- **If the page looks greyed out** with a **Start** button at the top, Snowsight has put it to
+  sleep: press **Start**, then **Check again**.
 - **Reopening the page** from the app can first show Snowsight's cached copy of it for a few
-  seconds, with the time of that copy's last check. The live page follows.
+  seconds, with the time of that copy's last check. The live page follows, and faded lines from the
+  copy can stay under it for up to a minute.
 - **Snowflake asks you to sign in again.** Open ZLens opens ZLens's own address in a new tab, and
   Snowflake signs you in there too. The sign-in page names it `SNOWSERVICES_INGRESS`. This is
   Snowflake's own sign-in. A browser that blocks pop-ups blocks Open ZLens too: copy the address
   from the page instead.
-- **Close the launcher tab** once ZLens is open. While it stays open it keeps the app's small
-  warehouse running: the page checks ZLens again for 10 minutes, and Snowflake keeps an open page's
-  warehouse running for about 15 minutes after its last use.
+- **Close the launcher tab** once ZLens is open. While it stays open it keeps the page's warehouse
+  running (the page names it): the page checks ZLens again for 10 minutes, and Snowflake keeps an
+  open page's warehouse running for about 15 minutes after its last use.
 - **Not set up yet, or someone else:** until step 1 is done the page shows the setup steps, and it
   tells anyone but the named user that ZLens serves someone else, before starting anything.
 - **The address on its own** (a bookmark, a link shared from Snowsight, or a sign-in that finishes
@@ -227,11 +231,14 @@ The app is free. Snowflake bills your account for what it uses:
 - its compute pool: one `CPU_X64_XS` node while ZLens runs (Snowflake's rate is about 0.06 credits an
   hour), and nothing once it has stopped and the pool has suspended;
 - its warehouse: extra-small, and it suspends after 60 seconds with no queries. The launcher page
-  runs on it too: an open launcher keeps it running while it checks (up to 10 minutes once ZLens is
-  ready) and for about 15 minutes after that, so close the launcher tab once ZLens is open;
+  runs on it too (or on the warehouse you picked, if Snowsight asked for one): an open launcher
+  keeps that warehouse running while it checks (up to 10 minutes once ZLens is ready) and for about
+  15 minutes after that, so close the launcher tab once ZLens is open;
 - Cortex: the questions asked, and search by meaning;
 - storage: the app's 10Gi block volume, the daily snapshots ZLens keeps of it (the newest 7), and
   any backups you copy to your own stage, all billed as Snowflake storage.
+
+An open ZLens tab does not keep it running: ZLens stops after 60 minutes with no one using it.
 
 ## Privileges
 
@@ -239,9 +246,9 @@ The app asks for three account privileges, each shown on its **Permissions** tab
 ENDPOINT` (its own address), `CREATE COMPUTE POOL` (one small pool) and `CREATE WAREHOUSE` (its own
 extra-small warehouse), plus the `SNOWFLAKE.CORTEX_USER` database role for Claude. It creates no
 listings, shares or external access integrations. Its one Streamlit page, the launcher that **Launch
-app** opens, runs on that same warehouse and calls only the app's own procedures
-`app_public.launcher_status()` and `app_public.launcher_start()`, and reads the app's name and the
-time; it reads none of your data.
+app** opens, runs on that same warehouse (or the one Snowsight asked you to pick) and calls only the
+app's own procedures `app_public.launcher_status()` and `app_public.launcher_start()`, and reads the
+app's name, the time and the name of the warehouse it runs on; it reads none of your data.
 
 ## What ZLens reaches, sends, stores and logs
 

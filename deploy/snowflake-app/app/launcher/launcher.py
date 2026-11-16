@@ -1,9 +1,11 @@
 """ZLens launcher: the page Snowsight's Launch app opens.
 
-ZLens stops itself after 60 idle minutes, and a start takes about 2 to 3 minutes. Opening its
-address while it is stopped or starting shows Snowflake's raw "service is not yet running" page,
-and each reload asks for sign-in again. This page starts ZLens when it has stopped, waits until
-Snowflake reports it READY, and only then offers Open ZLens and its address.
+ZLens stops itself after 60 idle minutes. A start usually takes 2 to 3 minutes, and up to 20
+minutes the first time after an install or update (likely Snowflake fetching the new image; in
+our tests, first starts after an update took 14 and 15 minutes). Opening its address while it is stopped or
+starting shows Snowflake's raw "service is not yet running" page, and each reload asks for sign-in
+again. This page starts ZLens when it has stopped, waits until Snowflake reports it READY, and only
+then offers Open ZLens and its address.
 
 A page left open goes stale: Snowsight puts it to sleep, and reopening it can first show Snowsight's
 cached copy. So every state says when it was checked (in the Snowflake session's time zone, with the
@@ -12,7 +14,8 @@ stops or restarts shows as it is (a stopped one is started again). Then it stops
 warehouse can suspend, and offers Check again. A start that never finishes stops being checked too.
 
 It reads no customer data and calls nothing outside Snowflake: only the app's own procedures
-app_public.launcher_status() and app_public.launcher_start(), and the app's name and the time.
+app_public.launcher_status() and app_public.launcher_start(), and the app's name, the time and the
+warehouse this page runs on.
 """
 
 import datetime
@@ -26,8 +29,8 @@ POLL_SECONDS = 5
 TYPICAL_START_SECONDS = 180
 SLOW_START_SECONDS = 300
 RESEND_START_SECONDS = 30
-# A start that has not finished after 20 minutes is no longer checked by itself.
-STOP_WAITING_SECONDS = 1200
+# A start that has not finished after 30 minutes is no longer checked by itself.
+STOP_WAITING_SECONDS = 1800
 # Once ZLens is ready: check again every minute, for 10 minutes, then stop.
 RECHECK_SECONDS = 60
 RECHECK_FOR_SECONDS = 600
@@ -63,12 +66,17 @@ def read_status():
 
 
 def read_context():
-    """The app's name and the time of this check, in the Snowflake session's time zone (one query)."""
+    """The app's name, the time of this check (in the Snowflake session's time zone) and the
+    warehouse this page runs on, in one query.
+
+    The warehouse is the session's own: Snowsight runs the page on the one the person picked when it
+    asked for one, which need not be the app's <app>_WH. Empty when Snowflake does not say.
+    """
     try:
-        row = session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()").collect()[0]
-        return str(row[0] or ""), row[1]
+        row = session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP(), CURRENT_WAREHOUSE()").collect()[0]
+        return str(row[0] or ""), row[1], str(row[2] or "")
     except Exception:  # noqa: BLE001 - the page still works; the time then comes from this runtime
-        return "", None
+        return "", None, ""
 
 
 def start():
@@ -126,7 +134,7 @@ def show_title():
 state = st.session_state
 status = read_status()
 name = status["status"]
-app, moment = read_context()
+app, moment, page_warehouse = read_context()
 app = app or "<this app>"
 warehouse = f"{app}_WH"
 checked = clock(moment)
@@ -196,9 +204,12 @@ if name == "READY" and status["url"]:
         "If your browser blocks it, copy the address:"
     )
     st.code(status["url"], language=None)
+    # The warehouse the page really runs on, not the one it was created with (V4 tester: the page
+    # named the app's warehouse while Snowsight ran it on the one the person picked).
+    keeps = f"this page's warehouse, {page_warehouse}, running" if page_warehouse else "this page's warehouse running"
     st.caption(
         f"ZLens serves {status['zlens_user']}. You can close this tab once ZLens is open: "
-        f"while it stays open it keeps the app's warehouse, {warehouse}, running. "
+        f"while it stays open it keeps {keeps}. "
         "ZLens stops by itself after 60 idle minutes; Launch app starts it again."
     )
     left = RECHECK_FOR_SECONDS - (now - state["ready_since"])
@@ -231,13 +242,17 @@ if name == "SUSPENDED" and now - state.get("start_sent_at", 0) > RESEND_START_SE
 elapsed = now - state["started_at"]
 if name == "SUSPENDING":
     st.info("ZLens is stopping. This page starts it again as soon as it has stopped.")
+elif elapsed > SLOW_START_SECONDS:
+    # Past the usual time, the page no longer promises it (V4 tester: the usual time stayed on
+    # screen through a 14-minute start).
+    st.info("Starting ZLens. The first start after an install or update can take up to 20 minutes.")
 else:
-    st.info("Starting ZLens, about 2 to 3 minutes.")
+    st.info("Starting ZLens. This usually takes 2 to 3 minutes, and up to 20 minutes the first time after an install or update.")
 st.progress(min(elapsed / TYPICAL_START_SECONDS, 0.95))
 st.caption(f"{minutes(elapsed)} so far. Your projects are kept. Checked at {checked}.")
 if elapsed > STOP_WAITING_SECONDS:
     st.warning(
-        "ZLens has not started after 20 minutes, so this page has stopped checking. "
+        "ZLens has not started after 30 minutes, so this page has stopped checking. "
         "An admin can run CALL app_public.start_app() to try again."
     )
     if st.button("Check again"):
