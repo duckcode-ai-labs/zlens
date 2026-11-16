@@ -38,6 +38,11 @@ export interface MatchRecord {
   scope: string;
   rows: CompareOutcome['comparison']['rows'];
   values: { compared: number; equal: number };
+  /**
+   * The column of the first value that differs, as the result names it ("row 2016, WINS"). Only the column: a
+   * row's key is a value, and a record is tracked in git. Records made before V2 have none.
+   */
+  firstDifferingColumn?: string;
   precision: string;
   tolerance: string;
   verdict: Verdict;
@@ -144,11 +149,13 @@ export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, 
   };
   if (outcome.target.kind === 'query') {
     const { compared, equal } = outcome.comparison.values;
+    const firstDifferingColumn = outcome.comparison.differences[0]?.column;
     return [write('query', outcome.target.name, {
       ...shared,
       querySha256: outcome.querySha256.query!,
       ...(Object.keys(outcome.target.parameters).length ? { parameterNames: Object.keys(outcome.target.parameters) } : {}),
       values: { compared, equal },
+      ...(firstDifferingColumn ? { firstDifferingColumn } : {}),
       precision: Array.from(new Set(outcome.comparison.numbers.map((number) => number.precision))).join('; ') || 'nothing compared',
       verdict: outcome.comparison.verdict,
     })];
@@ -161,6 +168,7 @@ export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, 
     querySha256: outcome.querySha256[number.name]!,
     asked,
     values: { compared: number.compared, equal: number.equal },
+    ...(outcome.comparison.differences.some((item) => item.column === number.column) ? { firstDifferingColumn: number.column } : {}),
     precision: number.precision,
     verdict: number.verdict,
   }));
@@ -195,12 +203,49 @@ export function matchWords(record: MatchRecord): string {
   const verdict = record.verdict === 'matches' ? 'Matches' : record.verdict === 'differs' ? 'Differs from' : 'Not proven against';
   const leftOut = Object.entries(record.mapping ?? {}).filter(([, meaning]) => meaning === 'left out, as asked').map(([column]) => column);
   const waived = record.filters?.waived.length ?? 0;
+  const counted = countWords(record);
   const limits = [
+    ...(counted.rows ? [counted.rows] : []),
     ...(record.scope === 'all rows' ? [] : [`only ${record.scope}`]),
     ...(leftOut.length ? [`left out: ${leftOut.join(', ')}`] : []),
     ...(waived ? [`${waived} filter${waived === 1 ? '' : 's'} waived`] : []),
   ];
-  return `${verdict} ${record.report}${tool}, ${comparedDay(record.comparedAt)}: ${record.values.equal} of ${record.values.compared} values at ${record.precision}${limits.map((limit) => `, ${limit}`).join('')}`;
+  return `${verdict} ${record.report}${tool}, ${comparedDay(record.comparedAt)}: ${counted.values} at ${record.precision}${limits.map((limit) => `, ${limit}`).join('')}`;
+}
+
+/**
+ * What a comparison found, counted the way its result says it (ReportComparePanel's verdict line): a Differs
+ * counts the values that differ and names the first one's column, a Not proven the values that are equal, and
+ * rows not found are said apart. V2 retest: the result said "Differs: 1 of 5 values (row 2016, WINS)" and the
+ * record, for the same comparison, "4 of 5 values", counting the equal ones.
+ */
+function countWords(record: MatchRecord): { values: string; rows?: string } {
+  const { compared, equal } = record.values ?? { compared: 0, equal: 0 };
+  const of = (count: number) => `${count} of ${compared} ${compared === 1 ? 'value' : 'values'}`;
+  if (record.verdict === 'matches') return { values: of(equal) };
+  const rows = record.rows;
+  if (record.verdict === 'not-proven' || !rows) return { values: `${of(equal)} equal` };
+  const found = `${rows.inBoth} of ${rows.inFile} ${rows.inFile === 1 ? 'row' : 'rows'} found${rows.onlyInZLens ? `, ${rows.onlyInZLens} more in ZLens` : ''}`;
+  const differing = Math.max(0, compared - equal);
+  if (differing === 0) {
+    const agree = compared === 0 ? '' : compared === 1 ? '; the value in them matches' : `; all ${compared} values in them match`;
+    return { values: `${found}${agree}` };
+  }
+  const where = record.firstDifferingColumn ? ` (${differing === 1 ? '' : 'first '}in ${record.firstDifferingColumn})` : '';
+  const rowsDiffer = rows.inBoth < rows.inFile || rows.onlyInZLens > 0;
+  return { values: `${of(differing)} ${differing === 1 ? 'differs' : 'differ'}${where}`, ...(rowsDiffer ? { rows: found } : {}) };
+}
+
+/**
+ * Whether a receipt line is about this record's comparison: its verdict, its report and its day, on this server's
+ * calendar or UTC ("Differs from Sales by Region (Tableau), 2026-11-11: …").
+ */
+export function receiptLineNames(line: string, record: MatchRecord): boolean {
+  const verdict = record.verdict === 'matches' ? 'Matches' : record.verdict === 'differs' ? 'Differs from' : 'Not proven against';
+  const start = `${verdict} ${record.report}${toolWords(record)}`;
+  if (!line.startsWith(`${start}, `) && !line.startsWith(`${start} · `)) return false;
+  const day = /, (\d{4}-\d{2}-\d{2})(?=[:)])/.exec(line.slice(start.length))?.[1];
+  return day === comparedDay(record.comparedAt) || day === String(record.comparedAt).slice(0, 10);
 }
 
 // ── Per-person detail ───────────────────────────────────────────────────────

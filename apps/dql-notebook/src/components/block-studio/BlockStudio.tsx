@@ -3340,13 +3340,20 @@ export function importSourceUploadNote(names: string[]): string | null {
   return `${exports.join(', ')} ${exports.length === 1 ? 'looks' : 'look'} like a report's export, not SQL, so ${exports.length === 1 ? 'it was' : 'they were'} left out. To check a saved query against it, open the saved query and use Compare with the old report.`;
 }
 
-/** The receipt's ids and exact record, kept under Technical details (D6). */
+/** Technical details of a receipt whose certifier is a placeholder ("local"): nobody was named then. */
+export const CERTIFIER_NOT_RECORDED = 'Who certified it was not recorded';
+
+/**
+ * The receipt's ids and exact record, kept under Technical details (D6). The name is the certifier's. A receipt
+ * made where ZLens could not tell who was certifying holds a placeholder ("local"; the app for Snowflake before
+ * V13, which now records the Snowflake user who signed in): it says so, and never shows the placeholder.
+ */
 export function certificationReceiptTechnical(receipt: NonNullable<BlockStudioMetadata['certification']>): string {
   const when = Number.isNaN(Date.parse(receipt.certifiedAt)) ? receipt.certifiedAt : new Date(receipt.certifiedAt).toLocaleString();
   const via = CERTIFICATION_SURFACE_LABELS[receipt.via] ?? receipt.via;
+  const recorded = certifierDisplayName(receipt.certifiedBy) ? receipt.certifiedBy : certifierDisplayName(undefined, receipt.certifiedByName);
   return [
-    // A placeholder such as "local" names nobody: say so rather than show it.
-    certifierDisplayName(receipt.certifiedBy) ? `Recorded as ${receipt.certifiedBy}` : 'No name recorded',
+    recorded ? `Recorded as ${recorded}` : CERTIFIER_NOT_RECORDED,
     when,
     `via ${via}`,
     `${receipt.rules === 'enterprise' ? 'enterprise' : 'standard'} certification rules`,
@@ -3397,7 +3404,7 @@ export function BlockDetailView({
   const certified = (metadata?.reviewStatus ?? '').toLowerCase() === 'certified';
   const receiptLines = reportMatchReceipt(metadata?.certification);
   // The old report check: the box below and, for a certified query, a comparison made since it was certified.
-  const reportCheck = useQueryReportMatch(metadata?.name && blockPath ? metadata.name : undefined);
+  const reportCheck = useQueryReportMatch(metadata?.name && blockPath ? metadata.name : undefined, certified ? blockPath : undefined);
   const reportView = certificationReportView(metadata?.certification, reportCheck.status);
   const comparedSince = certified ? reportView.since : null;
   const proposed = certified && blockDisplayStatus('certified', metadata, proposes) === 'proposed';

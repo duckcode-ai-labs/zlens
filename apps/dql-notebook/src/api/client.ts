@@ -6673,9 +6673,9 @@ export const api = {
       return request('/api/report-match/record', { method: 'POST', body: JSON.stringify({ id, via: 'screen' }) });
     },
 
-    /** A saved query's last comparison with an old report, if it has one. */
-    async getQueryReportMatch(name: string): Promise<ReportQueryMatch> {
-      return request(`/api/report-match/query?name=${encodeURIComponent(name)}`);
+    /** A saved query's last comparison with an old report, if it has one; with its file, what its receipt names. */
+    async getQueryReportMatch(name: string, path?: string): Promise<ReportQueryMatch> {
+      return request(`/api/report-match/query?name=${encodeURIComponent(name)}${path ? `&path=${encodeURIComponent(path)}` : ''}`);
     },
 
     async discardMetricDrafts(names: string[]): Promise<{ discarded: string[] }> {
