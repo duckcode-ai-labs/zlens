@@ -1,3 +1,5 @@
+import { readableColumnLabel, readablePhrase } from '../utils/column-label';
+
 /**
  * V14: words that still read like the laptop install or a dbt project (file paths, "local SQLite",
  * "dbt truth", "Local path"), said for the ZLens app for Snowflake. Every helper returns the
@@ -84,7 +86,7 @@ export function importStartDetail(snowflakeApp: boolean): string {
 /** Under the saved query builder's SQL box. */
 export function sqlConvertHint(snowflakeApp: boolean): { before: string; after: string } {
   return snowflakeApp
-    ? { before: 'Detects ', after: ' and checks each table against the tables ZLens reads. Open the DQL Source editor for the full script.' }
+    ? { before: 'Detects ', after: ' and checks each table against the tables ZLens reads. Open the Source editor for the full script.' }
     : { before: 'Detects ', after: ' and grounds tables against dbt. Open the DQL Source editor for the full script.' };
 }
 
@@ -179,4 +181,51 @@ export function modelingEmptyWords(snowflakeApp: boolean): { yamlDetail: string;
         yamlDetail: 'Discover DQL modeling or dbt YAML from this project, a safe local path, an upload, or pasted content. Relationships declared in dbt tests come across as draft edges.',
         manualDetail: 'Pick a single dbt model and describe what one of its rows means. Connect it to others afterwards.',
       };
+}
+
+// ── V4: the words the V3 retest still found ─────────────────────────────────
+
+/** An AI answer's draft name, in Ask and Notebook AI: its file as a tooltip on the laptop, none in the app for Snowflake. */
+export function draftNameTooltip(path: string, snowflakeApp: boolean): string | undefined {
+  return snowflakeApp ? undefined : path;
+}
+
+/** The saved query editor's source view: "DQL Source" on the laptop, "Source" in the app for Snowflake. */
+export function sourceEditorWords(snowflakeApp: boolean): { tab: string; section: string; open: string } {
+  return snowflakeApp
+    ? { tab: 'Source', section: 'Source', open: 'Open in Source' }
+    : { tab: 'DQL Source', section: 'DQL source', open: 'Open in DQL Source' };
+}
+
+/** The semantic layer ZLens keeps itself: "DQL semantic layer" on the laptop, "Semantic layer" in the app for Snowflake. */
+export function semanticLayerName(snowflakeApp: boolean): string {
+  return snowflakeApp ? 'Semantic layer' : 'DQL semantic layer';
+}
+
+/** What a notebook is for, on the welcome screen. */
+export function notebookWriteWords(snowflakeApp: boolean): string {
+  return snowflakeApp ? 'write SQL' : 'write SQL/DQL';
+}
+
+/** Describe with AI: the button under a need no data covers yet. */
+export function generateGapLabel(snowflakeApp: boolean): string {
+  return snowflakeApp ? 'Generate a draft' : 'Generate draft DQL';
+}
+
+/** A column offered in a chart's axis picker: its name in words in the app for Snowflake (the value stays the column). */
+export function axisOptionLabel(column: string, snowflakeApp: boolean): string {
+  return snowflakeApp ? readableColumnLabel(column) : column;
+}
+
+/**
+ * An Ask clarification choice as a person reads it. In the app for Snowflake a choice of meaning names its columns
+ * in words ("TOTAL POINTS" reads "Total points", "game_count by SEASON" reads "Game count by season"); a choice of
+ * member is a value from the data and is shown as it is. What is sent back is the choice's id, never these words.
+ */
+export function clarificationChoiceWords(
+  option: { label: string; description?: string; kind?: string },
+  snowflakeApp: boolean,
+): { label: string; description?: string } {
+  if (!snowflakeApp || option.kind === 'member') return { label: option.label, ...(option.description ? { description: option.description } : {}) };
+  return { label: readablePhrase(option.label), ...(option.description ? { description: readablePhrase(option.description) } : {}) };
 }

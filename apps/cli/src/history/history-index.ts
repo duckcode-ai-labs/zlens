@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { FileChange, HistoryAuthor, HistoryAction, HistoryRestoredFrom, HistoryStore, StoredCommit } from './history-store.js';
 import { APP_STUDIO_DRAFT_FILE, HistoryItemMapper, domainNameFrom, humanizeName, readableFileLabel, type BlockLookups, type HistoryItemKind, type HistoryItemRef } from './tracked-files.js';
 import { isCertifiedVersion, readSavedQueryFields, receiptSummary, type SavedQueryFields } from './saved-query-fields.js';
-import { appDraftShape, appEditWords, parseAppDraftHistoryText, publishedAppShape, type AppVersionShape } from './app-drafts.js';
+import { appDraftShape, appEditWords, appTilesAdded, parseAppDraftHistoryText, publishedAppShape, type AppVersionShape } from './app-drafts.js';
 
 /**
  * THE ITEM VERSION INDEX (V15): for each item, the commits that changed it, numbered v1, v2, … .
@@ -33,6 +33,8 @@ export interface IndexedChange {
   companion?: string;
   /** One line about it: the Ask question, the old report, what changed. Never row values. */
   detail?: string;
+  /** An App: the tiles this version added (page id/tile id), so the next save can say App Studio placed them. */
+  tilesAdded?: string[];
 }
 
 export interface IndexedCommit {
@@ -66,6 +68,25 @@ export interface ItemVersion {
 }
 
 const INDEX_FILE = 'zlens-index.json';
+/** How soon after a tile is added App Studio's save that places it comes (one request after the other). */
+const TILE_PLACED_WITHIN_MS = 30_000;
+
+/**
+ * The tiles an App's version had just added, when the next save follows it at once by the same person: App Studio
+ * adds a tile, then puts it in the first free space in a second save. That is placing the new tile, not the person
+ * moving one.
+ */
+export function tilesJustAdded(
+  commit: Pick<StoredCommit, 'author' | 'at'>,
+  previous: Pick<IndexedChange, 'tilesAdded'> | undefined,
+  previousCommit: Pick<IndexedCommit, 'author' | 'at'> | undefined,
+): ReadonlySet<string> | undefined {
+  const added = previous?.tilesAdded;
+  if (!added?.length || !previousCommit) return undefined;
+  if (previousCommit.author.kind !== commit.author.kind || previousCommit.author.name !== commit.author.name) return undefined;
+  const gap = Date.parse(commit.at) - Date.parse(previousCommit.at);
+  return Number.isFinite(gap) && gap >= 0 && gap <= TILE_PLACED_WITHIN_MS ? new Set(added) : undefined;
+}
 const MAX_DETAIL = 240;
 
 const clip = (value: string) => (value.length > MAX_DETAIL ? `${value.slice(0, MAX_DETAIL - 1)}…` : value);
@@ -211,11 +232,12 @@ export class HistoryIndex {
       const from = renamedFrom.get(item.ref.key);
       const history = this.byItem.get(from ?? item.ref.key) ?? [];
       const previous = history.length ? this.changeAt(history[history.length - 1]!) : undefined;
+      const previousCommit = history.length ? this.commits[history[history.length - 1]!.commit] : undefined;
       const version = (previous?.version ?? 0) + 1;
       const filesTouched = from
         ? [...item.files, ...(pending.find((other) => other.ref.key === from)?.files ?? [])].sort()
         : item.files;
-      const described = await this.describe(commit, item.ref, { existed: item.existed || Boolean(from), exists: item.exists, from, previous, before, after, beforeLookups, afterLookups });
+      const described = await this.describe(commit, item.ref, { existed: item.existed || Boolean(from), exists: item.exists, from, previous, previousCommit, before, after, beforeLookups, afterLookups });
       changes.push({
         item: item.ref.key,
         kind: item.ref.kind,
@@ -228,6 +250,7 @@ export class HistoryIndex {
         ...(described.source ? { source: described.source } : {}),
         ...(described.companion ? { companion: described.companion } : {}),
         ...(described.detail ? { detail: clip(described.detail) } : {}),
+        ...(described.tilesAdded?.length ? { tilesAdded: described.tilesAdded } : {}),
       });
     }
     changes.sort((a, b) => a.item.localeCompare(b.item));
@@ -262,12 +285,14 @@ export class HistoryIndex {
       exists: boolean;
       from?: string;
       previous?: IndexedChange;
+      /** The commit of the item's version before this one. */
+      previousCommit?: IndexedCommit;
       before: Map<string, string>;
       after: Map<string, string>;
       beforeLookups: BlockLookups;
       afterLookups: BlockLookups;
     },
-  ): Promise<{ name: string; change: HistoryChangeKind; certified: boolean; detail?: string; source?: string; companion?: string }> {
+  ): Promise<{ name: string; change: HistoryChangeKind; certified: boolean; detail?: string; source?: string; companion?: string; tilesAdded?: string[] }> {
     const fallbackName = (key: string) => key.split('/').pop()!.replace(/\.(dql|dqlnb|ya?ml|json|md|sql)$/i, '');
     if (ref.kind === 'saved_query') {
       // A version's source: the draft edit beside a certified saved query when there is one, else the file itself.
@@ -374,8 +399,8 @@ export class HistoryIndex {
   private async describeApp(
     commit: StoredCommit,
     ref: HistoryItemRef,
-    state: { existed: boolean; exists: boolean; from?: string; previous?: IndexedChange; before: Map<string, string>; after: Map<string, string> },
-  ): Promise<{ name: string; change: HistoryChangeKind; certified: false; detail?: string }> {
+    state: { existed: boolean; exists: boolean; from?: string; previous?: IndexedChange; previousCommit?: IndexedCommit; before: Map<string, string>; after: Map<string, string> },
+  ): Promise<{ name: string; change: HistoryChangeKind; certified: false; detail?: string; tilesAdded?: string[] }> {
     const now = state.exists ? await this.appShape(ref.key, state.after) : null;
     const old = state.existed ? await this.appShape(state.from ?? ref.key, state.before) : null;
     const nameOf = (shape: { draft: AppVersionShape | null; published: AppVersionShape | null } | null) => shape?.draft?.name || shape?.published?.name;
@@ -386,7 +411,8 @@ export class HistoryIndex {
     if (kind === 'removed') {
       detail = removedWords(commit);
     } else if (kind === 'restored') {
-      detail = this.restoredWords(commit, ref, state);
+      // Undo of a delete brings the App back from ZLens's trash (V4 tester: it read "<user> created <App>").
+      detail = this.restoredWords(commit, ref, state) ?? (commit.restoredFrom ? undefined : 'Brought back from the trash');
     } else if (kind === 'created') {
       if (commit.action === 'trash') detail = 'As it was when it went to the trash';
       else if (commit.action === 'found' && now?.draft && !now.published) detail = 'In App Studio, not published yet. First kept when ZLens started';
@@ -407,7 +433,7 @@ export class HistoryIndex {
         const before = old.draft ?? old.published;
         const after = now.draft ?? now.published;
         const oldName = nameOf(old);
-        const words = appEditWords(before, after);
+        const words = appEditWords(before, after, { justAdded: this.tilesJustAdded(commit, state) });
         if (oldName && oldName !== name) {
           kind = 'renamed';
           detail = [`Was "${oldName}"`, words].filter(Boolean).join('. ');
@@ -417,7 +443,13 @@ export class HistoryIndex {
         if (now.draft && now.published) detail = `${detail}. Not published yet`;
       }
     }
-    return { name, change: kind, certified: false, ...(detail ? { detail } : {}) };
+    // Only an App that was there before adds tiles to it (a new App's first tiles are the App itself).
+    const tilesAdded = old && now ? appTilesAdded(old.draft ?? old.published, now.draft ?? now.published) : [];
+    return { name, change: kind, certified: false, ...(detail ? { detail } : {}), ...(tilesAdded.length ? { tilesAdded } : {}) };
+  }
+
+  private tilesJustAdded(commit: StoredCommit, state: { previous?: IndexedChange; previousCommit?: IndexedCommit }): ReadonlySet<string> | undefined {
+    return tilesJustAdded(commit, state.previous, state.previousCommit);
   }
 
   /** An App's draft and published shapes in one version (from the files at that commit). */

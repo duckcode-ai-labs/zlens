@@ -3,6 +3,8 @@ import type { QueryResult, CellChartConfig } from '../../store/types';
 import type { Theme, ThemeMode } from '../../themes/notebook-theme';
 import { ChartOutput, CHART_TYPE_OPTIONS, isMeasureColumn } from './ChartOutput';
 import { TableOutput } from './TableOutput';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { axisOptionLabel } from '../../snowflake-app/snowflake-app-words';
 
 const CHART_X_DATE_RE = /date|time|day|month|year|week|quarter|period|_at$|^at$/i;
 const TECHNICAL_IDENTIFIER_RE = /(?:^|_)(?:id|uuid|key|code)$/i;
@@ -198,6 +200,8 @@ export function ResultView({
   // User overrides from the chart-type picker / settings gear (type / X / Y / palette …).
   const [override, setOverride] = useState<CellChartConfig | undefined>();
   const [showTechnicalFields, setShowTechnicalFields] = useState(false);
+  // The axis pickers name columns in words in the app for Snowflake (V4 tester: "PLAYER_NAME", "TOTAL_POINTS").
+  const snowflakeApp = useSnowflakeApp();
   const base = useMemo<CellChartConfig>(() => ({ ...(chartConfig ?? {}), ...(override ?? {}) }), [chartConfig, override]);
   const { config: effectiveChart, chartable } = deriveResultChartConfig(result, base);
   const numericColumns = useMemo(() => numericResultColumns(result), [result]);
@@ -254,7 +258,7 @@ export function ResultView({
                 onChange={(event) => setOverride((prev) => ({ ...(prev ?? {}), x: event.target.value, decisionSource: 'user', rationale: 'Axis selected manually.' }))}
                 style={{ fontFamily: t.font, fontSize: 11, color: t.textSecondary, background: t.cellBg, border: `1px solid ${t.headerBorder}`, borderRadius: 5, padding: '1px 3px', cursor: 'pointer', maxWidth: 120 }}
               >
-                {result.columns.map((column) => <option key={column} value={column}>{column}</option>)}
+                {result.columns.map((column) => <option key={column} value={column}>{axisOptionLabel(column, snowflakeApp)}</option>)}
               </select>
             </label>
             {numericColumns.length > 0 ? (
@@ -266,7 +270,7 @@ export function ResultView({
                   onChange={(event) => setOverride((prev) => ({ ...(prev ?? {}), y: event.target.value, decisionSource: 'user', rationale: 'Axis selected manually.' }))}
                   style={{ fontFamily: t.font, fontSize: 11, color: t.textSecondary, background: t.cellBg, border: `1px solid ${t.headerBorder}`, borderRadius: 5, padding: '1px 3px', cursor: 'pointer', maxWidth: 120 }}
                 >
-                  {numericColumns.map((column) => <option key={column} value={column}>{column}</option>)}
+                  {numericColumns.map((column) => <option key={column} value={column}>{axisOptionLabel(column, snowflakeApp)}</option>)}
                 </select>
               </label>
             ) : null}
@@ -279,7 +283,7 @@ export function ResultView({
                   onChange={(event) => setOverride((prev) => ({ ...(prev ?? {}), color: event.target.value, decisionSource: 'user', rationale: 'Sankey target selected manually.' }))}
                   style={{ fontFamily: t.font, fontSize: 11, color: t.textSecondary, background: t.cellBg, border: `1px solid ${t.headerBorder}`, borderRadius: 5, padding: '1px 3px', cursor: 'pointer', maxWidth: 120 }}
                 >
-                  {result.columns.filter((column) => !numericColumns.includes(column) && column !== effectiveChart.x).map((column) => <option key={column} value={column}>{column}</option>)}
+                  {result.columns.filter((column) => !numericColumns.includes(column) && column !== effectiveChart.x).map((column) => <option key={column} value={column}>{axisOptionLabel(column, snowflakeApp)}</option>)}
                 </select>
               </label>
             ) : null}

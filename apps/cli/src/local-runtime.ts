@@ -757,6 +757,7 @@ import {
 import { planSemanticDatasetTileQuery } from './datasets/semantic-tile-query.js';
 import { planSemanticTileConversion } from './datasets/semantic-tile-conversion.js';
 import {
+  cortexModelRefusal,
   getActiveProvider,
   getEffectiveProviderConfig,
   isProviderSettingsId,
@@ -53419,6 +53420,10 @@ async function testCortexProviderConfig(
   label: string,
   details: string,
 ): Promise<{ ok: boolean; message: string }> {
+  // A model that is not Claude is refused as Save refuses it, before Cortex is called (V4 tester: "llama3.1-70b"
+  // answered through Cortex SQL, then Save refused it out of sight and the field came back blank).
+  const refusal = cortexModelRefusal(config.model);
+  if (refusal) return { ok: false, message: refusal };
   const signIn = cortexSignIn(projectRoot, config.connection);
   // The reason is already one sentence that names Cortex.
   if (signIn.problem) return { ok: false, message: signIn.problem };

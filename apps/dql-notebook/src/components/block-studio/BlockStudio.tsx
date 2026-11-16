@@ -73,8 +73,8 @@ import { themes } from '../../themes/notebook-theme';
 import type { Theme, ThemeMode } from '../../themes/notebook-theme';
 import { ReportComparePanel, verdictTone } from './ReportComparePanel';
 import { CertificationReportLines, certificationReportView, DiffersSinceCertifiedBadge, reportMatchReceipt, SavedQueryReportCheck, useQueryReportMatch } from './SavedQueryReportCheck';
-import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { editedSavedQueryTags, importAddSqlStep, importContextHint, importEmptyMessage, importHelpLine, importSourceModes, importStartDetail, savedQueryFolderWords, savedQueryTagsShown, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
+import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { editedSavedQueryTags, importAddSqlStep, importContextHint, importEmptyMessage, importHelpLine, importSourceModes, importStartDetail, savedQueryFolderWords, savedQueryTagsShown, semanticLayerName, sourceEditorWords, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
 import { SQLCellEditor } from '../cells/SQLCellEditor';
 import { ChartOutput, CHART_TYPE_OPTIONS, resolveChartType } from '../output/ChartOutput';
 import { MiniLineageGraph } from '../lineage/MiniLineageGraph';
@@ -1660,6 +1660,7 @@ export function BlockStudio() {
                 dbtModels: state.blockStudioDbtStatus?.counts.models,
                 warehouseTables: Math.max(databaseStats.tables, state.schemaTables.length),
                 metrics: state.semanticLayer.metrics.length,
+                snowflakeApp,
               })}
             footerStatus={state.semanticLayer.loading ? 'loading' : 'ready'}
           />
@@ -1728,7 +1729,7 @@ export function BlockStudio() {
           {hasActiveDraft && workspaceMode === 'manual' && editorMode !== 'detail' && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, padding: 2, border: `1px solid ${t.headerBorder}`, borderRadius: 7, background: t.appBg, marginLeft: 6, flexShrink: 0 }}>
               <button type="button" onClick={() => setEditorMode('visual')} style={editorModeButtonStyle(t, editorMode === 'visual')}>Visual Builder</button>
-              <button type="button" onClick={() => setEditorMode('source')} style={editorModeButtonStyle(t, editorMode === 'source')}>DQL Source</button>
+              <button type="button" onClick={() => setEditorMode('source')} style={editorModeButtonStyle(t, editorMode === 'source')}>{sourceEditorWords(snowflakeApp).tab}</button>
             </div>
           )}
           {hasActiveDraft && (
@@ -2858,7 +2859,7 @@ export function BlockStudioStartPage({
       <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
         {snowflakeApp ? null : <ReadinessChip Icon={Database} label={projectLabel ? `${projectLabel} dbt` : 'dbt context'} value={sourceSummary} tone={dbtReady ? 'success' : 'neutral'} t={t} />}
         <ReadinessChip Icon={Database} label="Database" value={`${databaseStats.tables.toLocaleString()} ${databaseStats.tables === 1 ? 'table' : 'tables'}`} tone={databaseStats.tables > 0 ? 'success' : 'neutral'} t={t} />
-        <ReadinessChip Icon={Blocks} label="DQL semantic layer" value={`${semanticObjectCount} objects`} tone={semanticObjectCount > 0 ? 'success' : 'neutral'} t={t} />
+        <ReadinessChip Icon={Blocks} label={semanticLayerName(snowflakeApp)} value={`${semanticObjectCount} objects`} tone={semanticObjectCount > 0 ? 'success' : 'neutral'} t={t} />
       </section>
     </div>
   );
@@ -3340,6 +3341,17 @@ export function importSourceUploadNote(names: string[]): string | null {
   return `${exports.join(', ')} ${exports.length === 1 ? 'looks' : 'look'} like a report's export, not SQL, so ${exports.length === 1 ? 'it was' : 'they were'} left out. To check a saved query against it, open the saved query and use Compare with the old report.`;
 }
 
+/**
+ * When a receipt was certified, on the viewer's clock, in the form the receipt's other lines use ("2026-11-11
+ * 22:44:27"), not the browser's own ("11/11/2026, 10:44:27 PM": V4 tester).
+ */
+export function receiptMoment(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const two = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`;
+}
+
 /** Technical details of a receipt whose certifier is a placeholder ("local"): nobody was named then. */
 export const CERTIFIER_NOT_RECORDED = 'Who certified it was not recorded';
 
@@ -3349,7 +3361,7 @@ export const CERTIFIER_NOT_RECORDED = 'Who certified it was not recorded';
  * V13, which now records the Snowflake user who signed in): it says so, and never shows the placeholder.
  */
 export function certificationReceiptTechnical(receipt: NonNullable<BlockStudioMetadata['certification']>): string {
-  const when = Number.isNaN(Date.parse(receipt.certifiedAt)) ? receipt.certifiedAt : new Date(receipt.certifiedAt).toLocaleString();
+  const when = receiptMoment(receipt.certifiedAt);
   const via = CERTIFICATION_SURFACE_LABELS[receipt.via] ?? receipt.via;
   const recorded = certifierDisplayName(receipt.certifiedBy) ? receipt.certifiedBy : certifierDisplayName(undefined, receipt.certifiedByName);
   return [
@@ -3548,9 +3560,9 @@ export function BlockDetailView({
         {/* DQL source */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ ...sectionLabel, marginBottom: 0 }}>DQL source</span>
+            <span style={{ ...sectionLabel, marginBottom: 0 }}>{sourceEditorWords(snowflakeApp).section}</span>
             <button type="button" onClick={onOpenSource} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'none', color: t.accent, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: t.font, padding: 0 }}>
-              Open in DQL Source <ChevronRight size={11} strokeWidth={2} />
+              {sourceEditorWords(snowflakeApp).open} <ChevronRight size={11} strokeWidth={2} />
             </button>
           </div>
           <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{source.trim() || 'Open the builder to author this saved query.'}</pre>
@@ -4232,7 +4244,7 @@ export function SqlBlockVisualBuilder({
       </PanelBox>
       <PanelBox title="Business outputs" hint="What consumers see when this saved query answers a question." t={t}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-          {outputs.length > 0 ? outputs.map((output) => <span key={output} style={selectionChipStyle(t, true)}>{businessLabel(output)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>Add aliases in DQL Source to expose business-friendly output names.</span>}
+          {outputs.length > 0 ? outputs.map((output) => <span key={output} style={selectionChipStyle(t, true)}>{businessLabel(output)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>Add aliases in {sourceEditorWords(snowflakeApp).tab} to expose business-friendly output names.</span>}
         </div>
       </PanelBox>
       <VisualParameterEditor source={source} kind="custom" onChange={onChange} t={t} />
@@ -6585,7 +6597,7 @@ function BlockStudioParameterPanel({
   running: boolean;
   t: Theme;
 }) {
-  if (parameters.length === 0) return <EmptyPanel message="This saved query has no runtime parameters. Add typed params in DQL Source when scope should be configurable." />;
+  if (parameters.length === 0) return <EmptyPanel message={`This saved query has no runtime parameters. Add typed params in ${sourceEditorWords(isSnowflakeApp()).tab} when scope should be configurable.`} />;
   return (
     <div style={{ padding: 14, display: 'grid', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

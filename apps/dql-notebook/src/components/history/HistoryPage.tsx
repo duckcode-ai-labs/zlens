@@ -7,7 +7,7 @@ import { CompareVersions } from './CompareVersions';
 import { ItemHistory, button, linkButton, muted, smallButton } from './ItemHistory';
 import { openHistory, openHistoryItem } from './history-navigation';
 import { setHistoryRoute, useHistoryRoute, type HistoryRoute } from './history-route';
-import { actionLabel, authorLabel, groupByDay, historySql, initials, itemLabel, kindLabel, kindsLabel, restorableVersion, restoredNotice, timeLabel } from './history-words';
+import { actionLabel, authorLabel, groupByDay, groupRestoreLabel, historySql, initials, itemLabel, kindLabel, kindsLabel, restorableVersion, restoredNotice, timeLabel } from './history-words';
 
 /**
  * History (V15, the ZLens app for Snowflake; left bar, Govern): every change to saved queries, Apps and notebooks
@@ -307,7 +307,7 @@ export function ChangeLine({
           </button>
         ) : null}
         {entry.canRestore && !single && restorable.length ? (
-          <button type="button" onClick={onExpand} aria-expanded={expanded} style={smallButton(t)}><RotateCcw size={12} aria-hidden="true" /> Restore</button>
+          <button type="button" onClick={onExpand} aria-expanded={expanded} style={smallButton(t)}><RotateCcw size={12} aria-hidden="true" /> {groupRestoreLabel(entry, expanded)}</button>
         ) : null}
       </div>
     </div>

@@ -58,7 +58,8 @@ import { ReaderPreviewParts } from './ReaderPreviewParts';
 import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
 import { NO_UNPUBLISHED_CHANGES, TILE_ADDED_FOLLOW_UP_FAILED, UNPUBLISHED_CHANGES, deleteDraftWords, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords, studioErrorWords } from './app-studio-words';
-import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { generateGapLabel } from '../../snowflake-app/snowflake-app-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -4845,6 +4846,8 @@ export function AiPlanReview({
   onAnswerClarification: (questionId: string, answerId: string) => void;
   onGenerateGap: (requirementId: string) => void;
 }): JSX.Element {
+  // Read, not subscribed: this review is also rendered by calling it (tests flatten it), where no hook may run.
+  const snowflakeApp = isSnowflakeApp();
   const unresolved = appStudioUnresolvedClarifications(proposal);
   const uncoveredRequirements = appStudioUncoveredRequirements(proposal);
   const selectedSources = summary.sources.filter((source) => selectedSourceIds.has(source.id));
@@ -4901,7 +4904,7 @@ export function AiPlanReview({
         </div>
       </section>
 
-      {showPlanNotes && uncoveredRequirements.length ? <section className="studio-ai-questions" aria-label="Not covered yet"><header><strong>Not covered yet</strong><small>{uncoveredRequirements.length} {voice === 'keywords' ? (uncoveredRequirements.length === 1 ? 'note' : 'notes') : (uncoveredRequirements.length === 1 ? 'gap' : 'gaps')}</small></header>{voice === 'keywords' ? <p>No suggested source matched these. They are notes, not publish blockers.</p> : null}{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy}>Generate draft DQL</button></div>)}</section> : null}
+      {showPlanNotes && uncoveredRequirements.length ? <section className="studio-ai-questions" aria-label="Not covered yet"><header><strong>Not covered yet</strong><small>{uncoveredRequirements.length} {voice === 'keywords' ? (uncoveredRequirements.length === 1 ? 'note' : 'notes') : (uncoveredRequirements.length === 1 ? 'gap' : 'gaps')}</small></header>{voice === 'keywords' ? <p>No suggested source matched these. They are notes, not publish blockers.</p> : null}{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy}>{generateGapLabel(snowflakeApp)}</button></div>)}</section> : null}
       {showPlanNotes && unresolved.length ? <section className="studio-ai-questions"><header><strong>AI needs one more decision</strong><small>{unresolved.length} required</small></header>{unresolved.map((item) => <fieldset key={item.id}><legend>{item.question}</legend>{item.choices.map((choice) => <button key={choice.id} type="button" onClick={() => onAnswerClarification(item.id, choice.id)} disabled={busy}><strong>{choice.label}</strong>{choice.description ? <small>{choice.description}</small> : null}</button>)}</fieldset>)}<button type="button" onClick={onRevise} disabled={busy}>{busy ? 'Updating…' : 'Re-run proposal'}</button></section> : null}
     </div>
 

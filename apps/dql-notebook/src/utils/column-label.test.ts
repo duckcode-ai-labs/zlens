@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { readableColumnLabel } from './column-label';
+import { readableColumnLabel, readablePhrase } from './column-label';
 import { TableOutput } from '../components/output/TableOutput';
 
 // V12: the Ask grid showed "PLAYOFF_POINTS_2016" and "COUNT(DISTINCT PLAYER_ID)" as headers.
@@ -24,5 +24,23 @@ describe('result column names in words', () => {
     expect(ask).toContain('title="PLAYOFF_POINTS_2016"');
     const notebook = renderToStaticMarkup(createElement(TableOutput, { result, themeMode: 'light' }));
     expect(notebook).toContain('>PLAYOFF_POINTS_2016<');
+  });
+});
+
+// V4 tester: Ask's clarification choices read "TOTAL POINTS", "SEASON 2003–2022" and "game_count by SEASON".
+describe('column names inside a short phrase, in words', () => {
+  it('reads the column names and keeps every other word, number and dash', () => {
+    expect(readablePhrase('TOTAL POINTS')).toBe('Total points');
+    expect(readablePhrase('SEASON 2003–2022')).toBe('Season 2003–2022');
+    expect(readablePhrase('game_count by SEASON')).toBe('Game count by season');
+    expect(readablePhrase('TOTAL_POINTS')).toBe('Total points');
+    expect(readablePhrase('PLAYER_ID')).toBe('Player ID');
+    expect(readablePhrase('sum of TOTAL_POINTS')).toBe('sum of total points');
+  });
+
+  it('leaves words, names and short capitals as written', () => {
+    for (const text of ['Total points', 'Points for NBA teams', 'Los Angeles Lakers', 'GDP growth', 'Q4 2016', '']) {
+      expect(readablePhrase(text)).toBe(text);
+    }
   });
 });

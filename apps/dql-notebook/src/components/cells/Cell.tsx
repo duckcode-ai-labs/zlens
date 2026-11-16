@@ -69,7 +69,7 @@ import { NotebookDqlParameterEditor } from '../parameters/NotebookDqlParameterEd
 import { canBackgroundRepairNotebookCell, notebookRepairErrorMessage } from '../../utils/notebook-background-repair';
 import { DQL_CELL_EXAMPLE, dqlCellHoldsPlainSql, queryCellKindLabel } from '../../utils/dql-cell-content';
 import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { queryTargetWords } from '../../snowflake-app/snowflake-app-words';
+import { axisOptionLabel, queryTargetWords } from '../../snowflake-app/snowflake-app-words';
 import { BLOCK_BINDING_WORDS, boundQueryName } from './block-binding-words';
 
 interface CellProps {
@@ -3449,6 +3449,7 @@ function ChartConfigPanel({
   onChange: (cfg: Partial<import('../../store/types').CellChartConfig>) => void;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const selectStyle = {
     background: t.inputBg,
     border: `1px solid ${t.inputBorder}`,
@@ -3489,7 +3490,7 @@ function ChartConfigPanel({
         <span style={labelStyle}>X axis</span>
         <select style={selectStyle} value={chartConfig?.x ?? ''} onChange={(e) => onChange({ x: e.target.value || undefined })}>
           <option value="">Auto</option>
-          {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+          {columns.map((c) => <option key={c} value={c}>{axisOptionLabel(c, snowflakeApp)}</option>)}
         </select>
       </div>
       {/* Y axis */}
@@ -3497,7 +3498,7 @@ function ChartConfigPanel({
         <span style={labelStyle}>Y axis</span>
         <select style={selectStyle} value={chartConfig?.y ?? ''} onChange={(e) => onChange({ y: e.target.value || undefined })}>
           <option value="">Auto</option>
-          {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+          {columns.map((c) => <option key={c} value={c}>{axisOptionLabel(c, snowflakeApp)}</option>)}
         </select>
       </div>
       {/* Color */}
@@ -3505,7 +3506,7 @@ function ChartConfigPanel({
         <span style={labelStyle}>Color</span>
         <select style={selectStyle} value={chartConfig?.color ?? ''} onChange={(e) => onChange({ color: e.target.value || undefined })}>
           <option value="">None</option>
-          {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+          {columns.map((c) => <option key={c} value={c}>{axisOptionLabel(c, snowflakeApp)}</option>)}
         </select>
       </div>
       {/* Title */}

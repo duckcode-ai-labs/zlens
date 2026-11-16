@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmbeddingSettings } from './EmbeddingSettings';
-import { CORTEX_HELP, CORTEX_HELP_SNOWFLAKE_APP, aiTurnedOff, brandsAllowed, cortexSignInLine, providerAllowed } from './provider-choices';
+import { CORTEX_HELP, CORTEX_HELP_SNOWFLAKE_APP, aiTurnedOff, brandsAllowed, cortexSignInLine, modelInUseLine, providerAllowed, testThenSave } from './provider-choices';
 import { CommaListInput } from '../common/CommaListInput';
 import { Sparkles } from 'lucide-react';
 import {
@@ -884,7 +884,7 @@ function brandForProviderId(id: ProviderSettingsId | undefined): string {
   return brand?.key ?? 'claude';
 }
 
-function ProviderSettingsForm({
+export function ProviderSettingsForm({
   providers,
   cliStatus,
   t,
@@ -963,32 +963,29 @@ function ProviderSettingsForm({
     return null;
   };
 
-  const testDraft = async (): Promise<boolean> => {
+  /** Tests what the form holds, without showing it: the caller says the outcome. */
+  const runDraftTest = async (): Promise<{ ok: boolean; message: string }> => {
     const invalid = validationError();
-    if (invalid) {
-      setDraftTest({ state: 'done', ok: false, message: invalid });
-      return false;
-    }
-    setDraftTest({ state: 'testing' });
-    const result = await api.testProviderSettings(providerId, {
+    if (invalid) return { ok: false, message: invalid };
+    return api.testProviderSettings(providerId, {
       apiKey: apiKey || undefined,
       baseUrl: baseUrl || undefined,
       model: model || undefined,
       ...(effectiveMode === 'snowflake' && connection.trim() ? { connection: connection.trim() } : {}),
     });
+  };
+
+  const testDraft = async (): Promise<void> => {
+    setDraftTest({ state: 'testing' });
+    const result = await runDraftTest();
     setDraftTest({ state: 'done', ok: result.ok, message: result.message });
-    return result.ok;
   };
 
   const makeActive = async () => {
     setBusy(true);
+    setDraftTest({ state: 'testing' });
     try {
-      const testPassed = await testDraft();
-      if (!testPassed) {
-        onStatus('Test failed. Your existing provider configuration was not changed.');
-        return;
-      }
-      const result = await api.saveProviderSettings({
+      const outcome = await testThenSave(runDraftTest, () => api.saveProviderSettings({
         id: providerId,
         enabled: true,
         apiKey: apiKey || undefined,
@@ -996,13 +993,23 @@ function ProviderSettingsForm({
         model,
         reasoningEffort,
         ...(effectiveMode === 'snowflake' ? { connection } : {}),
-      });
-      onSaved(result.providers);
-      const saved = result.providers.find((entry) => entry.id === providerId);
+      }));
+      // One line for both steps: the test's success shows only once the save went through too.
+      setDraftTest({ state: 'done', ok: outcome.ok, message: outcome.message });
+      if (!outcome.ok) {
+        onStatus(outcome.failed === 'test'
+          ? 'Test failed. Your existing provider configuration was not changed.'
+          : `Not saved: ${outcome.message} Your existing provider configuration was not changed.`);
+        return;
+      }
+      onSaved(outcome.saved.providers);
+      const saved = outcome.saved.providers.find((entry) => entry.id === providerId);
       if (saved) onProviderConfigured?.(saved);
       onStatus(`${brand.label} passed its test and is now the active provider.`);
     } catch (error) {
-      onStatus(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setDraftTest({ state: 'done', ok: false, message });
+      onStatus(message);
     } finally {
       setBusy(false);
     }
@@ -1190,6 +1197,12 @@ function ProviderSettingsForm({
 /** Cortex's default model (the server's CORTEX_DEFAULT_MODEL); Cortex names Claude models `claude-<family>-<version>`. */
 const CORTEX_MODEL_PLACEHOLDER = 'claude-sonnet-5-5';
 
+/** Under a Model field: the model the saved settings ask ("In use: claude-sonnet-5-5 (the default)"). */
+export function ModelInUse({ provider, t }: { provider?: Pick<ProviderSettings, 'model' | 'defaultModel'>; t: Theme }) {
+  const line = modelInUseLine(provider);
+  return line ? <span data-testid="provider-model-in-use" style={{ fontSize: 11, color: t.textMuted }}>{line}</span> : null;
+}
+
 /**
  * Snowflake Cortex has no key: it shows the Snowflake connection it signs in with (or why it cannot), lets a person
  * name another project connection, and says where Claude runs and what may reach it.
@@ -1272,6 +1285,7 @@ function ProviderAdvancedFields({
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={fieldLabel}>{providerId === 'custom-openai' ? 'Model (required)' : 'Model (optional)'}</span>
         <input value={model} onChange={(event) => setModel(event.target.value)} placeholder={provider?.model || (providerId === 'cortex' ? CORTEX_MODEL_PLACEHOLDER : 'Provider default')} style={input} />
+        {providerId === 'cortex' ? <ModelInUse provider={provider} t={t} /> : null}
       </label>
       {provider?.supportsReasoningEffort && (mode === 'api' || mode === 'snowflake') ? (
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1339,7 +1353,10 @@ function ProviderCard({
       onSaved(result.providers);
       onStatus(`${provider.label} settings saved.`);
     } catch (error) {
-      onStatus(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      // A refused save replaces an earlier test's success: the card never says it works when nothing was saved.
+      setTestResult({ ok: false, message });
+      onStatus(message);
     } finally {
       setBusy(false);
     }
@@ -1439,6 +1456,7 @@ function ProviderCard({
             style={inputStyle(t)}
           />
         )}
+        {signsInWithConnection ? <ModelInUse provider={provider} t={t} /> : null}
         {showReasoning && (
           <div style={{ display: 'grid', gap: 4 }}>
             <label style={{ fontSize: 11, color: t.textSecondary, fontWeight: 600 }}>Reasoning effort</label>

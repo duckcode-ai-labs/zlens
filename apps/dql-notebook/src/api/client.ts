@@ -4125,6 +4125,8 @@ export interface ProviderSettings {
   connection?: string;
   /** Snowflake Cortex: the Snowflake connection it signs in with, its sign-in method, or why it cannot sign in. */
   connectionSignIn?: { connection?: string; method?: string; problem?: string };
+  /** Snowflake Cortex: the model it asks when none is named (the server's CORTEX_DEFAULT_MODEL). */
+  defaultModel?: string;
 }
 
 /** Subscription providers that support browser OAuth sign-in. */

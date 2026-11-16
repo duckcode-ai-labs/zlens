@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  cortexModelRefusal,
   getEffectiveProviderConfig,
   isCortexClaudeModel,
   listProviderSettings,
@@ -140,5 +141,16 @@ describe('Snowflake Cortex models (the listing names Claude models only)', () =>
       expect(() => saveProviderSettings(root, { id: 'cortex', model })).toThrow(/Claude model that Cortex offers/);
     }
     expect(getEffectiveProviderConfig(root, 'cortex').model).toBe('claude-sonnet-5');
+  });
+
+  it('says why in one sentence, the same for Save and the test, and names the default model in use', () => {
+    expect(cortexModelRefusal(undefined)).toBeUndefined();
+    expect(cortexModelRefusal('  ')).toBeUndefined();
+    expect(cortexModelRefusal('claude-sonnet-5-5')).toBeUndefined();
+    expect(cortexModelRefusal(' llama3.1-70b ')).toBe('ZLens asks Claude through Snowflake Cortex. Name a Claude model that Cortex offers in your account, such as claude-sonnet-5-5 (not "llama3.1-70b").');
+    expect(() => saveProviderSettings(root, { id: 'cortex', model: 'llama3.1-70b' })).toThrow(cortexModelRefusal('llama3.1-70b')!);
+    expect(listProviderSettings(root).find((p) => p.id === 'cortex')).toMatchObject({ defaultModel: 'claude-sonnet-5-5' });
+    // Other providers carry no default of ZLens's own.
+    expect(listProviderSettings(root).find((p) => p.id === 'anthropic')?.defaultModel).toBeUndefined();
   });
 });

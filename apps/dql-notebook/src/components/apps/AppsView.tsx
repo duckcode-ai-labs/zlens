@@ -1298,7 +1298,7 @@ function AppLibrarySurface({
   const hostUi = useHostUi();
   const canAuthor = hostAllows(hostUi, 'app.author');
   const reader = hostReader(hostUi);
-  const words = appLibraryWords(reader);
+  const words = appLibraryWords(reader, useSnowflakeApp());
   return (
     <main className="dql-apps-wrap">
       <div id="app-studio-launcher" hidden={!launchExpanded || !canAuthor}>

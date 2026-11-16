@@ -47,3 +47,24 @@ export function readableColumnLabel(name: string): string {
   const parts = words(raw.split('.').pop() ?? raw);
   return parts.length ? sentence(parts) : raw;
 }
+
+/** A column name inside a phrase: one with an underscore ("game_count"), or a word in capitals of four letters or more ("SEASON"). */
+const COLUMN_IN_PHRASE = /\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b|\b[A-Z]{4,}\b/g;
+
+/**
+ * A short phrase that names columns as SQL spells them, in words: "TOTAL POINTS" reads "Total points", "SEASON
+ * 2003–2022" reads "Season 2003–2022", "game_count by SEASON" reads "Game count by season". Other words, numbers and
+ * punctuation stay as written, and a short word in capitals (ID, NBA, USD) stays as it is.
+ */
+export function readablePhrase(text: string): string {
+  let firstChanged = false;
+  const out = text.replace(COLUMN_IN_PHRASE, (token, offset: number) => {
+    const parts = words(token);
+    if (!parts.length) return token;
+    if (!text.slice(0, offset).trim()) firstChanged = true;
+    return parts.map((word) => (ACRONYMS.has(word) ? word.toUpperCase() : word)).join(' ');
+  });
+  if (!firstChanged) return out;
+  const lead = out.search(/\S/);
+  return lead < 0 ? out : out.slice(0, lead) + out.charAt(lead).toUpperCase() + out.slice(lead + 1);
+}

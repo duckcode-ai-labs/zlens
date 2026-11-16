@@ -167,6 +167,18 @@ export function formatBytes(bytes: number): string {
   return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+/**
+ * The button on a line that stands for several items (V4 tester: "ZLens found in the trash: 13 Apps" had a Restore
+ * that did not say what it did). It restores nothing itself: it lists the items, each with its own Restore.
+ */
+export function groupRestoreLabel(entry: Pick<HistoryFeedEntry, 'kind' | 'items'>, expanded: boolean): string {
+  if (expanded) return 'Hide the list';
+  const what = new Set(entry.items.map((item) => item.kind)).size > 1
+    ? 'items'
+    : entry.kind === 'app' ? kindLabel(entry.kind, 2) : kindLabel(entry.kind, 2).toLowerCase();
+  return `Choose ${what} to restore`;
+}
+
 /** The version a Restore button on a line brings back: the one before a removal, else the line's own. */
 export function restorableVersion(entry: Pick<HistoryFeedEntry, 'change' | 'version'>): number | undefined {
   if (entry.version === undefined) return undefined;
