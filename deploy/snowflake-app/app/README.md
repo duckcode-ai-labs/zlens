@@ -52,7 +52,7 @@ Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app.
 
 - **Press Launch app.** It opens a small ZLens page inside Snowsight. If ZLens has stopped (it stops
   itself after 60 idle minutes), the page starts it and shows the time so far: a start usually
-  takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update. Once
+  takes 2 to 3 minutes, and up to 20 minutes the first time after an install or update. Once
   Snowflake reports ZLens ready, the page shows **Open ZLens** and ZLens's address. It never offers
   the address before then.
 - **If Snowsight asks you to select a warehouse** before the page opens, pick `ZLENS_APP_WH` (your

@@ -96,13 +96,13 @@ describe('the app package for Snowflake', () => {
     expect(appUrl).toMatch(/SYSTEM\$WAIT_FOR_SERVICES[\s\S]*?EXCEPTION WHEN OTHER THEN[\s\S]*?services_after := [\s\S]*?SHOW ENDPOINTS IN SERVICE core\.zlens/);
     // Ready: the address alone. Still starting: says so, with an honest wait, and the address to open once.
     expect(appUrl).toMatch(/RETURN url;\s+END;\s*$/);
-    expect(appUrl).toContain("'ZLens is still starting. A start usually takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update. '");
+    expect(appUrl).toContain("'ZLens is still starting. A start usually takes 2 to 3 minutes, and up to 20 minutes the first time after an install or update. '");
     expect(appUrl).toContain('Wait, then open the address once: ');
     expect(appUrl).not.toMatch(/5 to 15|about 2 minutes/);
     // It never stops or re-creates anything, and any user of the app may call it.
     expect(appUrl).not.toMatch(/SUSPEND;|CREATE |ensure_zlens/);
     expect(setup).toContain('GRANT USAGE ON PROCEDURE app_public.app_url() TO APPLICATION ROLE app_user;');
-    expect(procedure('start_app')).toContain('usually 2 to 3 minutes, and up to 15 minutes the first time after an install or update');
+    expect(procedure('start_app')).toContain('usually 2 to 3 minutes, and up to 20 minutes the first time after an install or update');
   });
 
   it('V14: states one start time, about 2 to 3 minutes, in the setup script, the readme and Help', () => {
@@ -113,22 +113,22 @@ describe('the app package for Snowflake', () => {
     }
   });
 
-  it('V4: every start time in the app package says up to 15 minutes for the first start after an install or update', () => {
+  it('V4: every start time in the app package says up to 20 minutes for the first start after an install or update', () => {
     const page = read('launcher/launcher.py');
     // A first start after an update took 13 min 56 s while the page said 2 to 3 minutes the whole time.
     for (const text of [setup, readme, page]) {
       const promises = text.split(/(?<=[.;:])\s+/).filter((sentence) => /2 to 3\b/.test(sentence));
       expect(promises.length).toBeGreaterThan(0);
-      for (const sentence of promises) expect(sentence.replace(/\s+/g, ' ')).toMatch(/usually (?:takes )?2 to 3\b.*up to 15\b.*(?:the )?first (?:time|start) after an install or update/);
+      for (const sentence of promises) expect(sentence.replace(/\s+/g, ' ')).toMatch(/usually (?:takes )?2 to 3\b.*up to 20\b.*(?:the )?first (?:time|start) after an install or update/);
       expect(text).not.toMatch(/about 2 to 3|longer right after an install/);
     }
-    for (const name of ['start_app', 'app_url']) expect(procedure(name)).toContain('up to 15 minutes the first time after an install or update');
-    // Past 5 minutes, the blue box no longer promises 2 to 3 minutes; it says the first start can take up to 15.
-    expect(page).toMatch(/elif elapsed > SLOW_START_SECONDS:\n(?:\s+#[^\n]*\n)*\s+st\.info\("Starting ZLens\. The first start after an install or update can take up to 15 minutes\."\)\nelse:\n\s+st\.info\("Starting ZLens\. This usually takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update\."\)/);
+    for (const name of ['start_app', 'app_url']) expect(procedure(name)).toContain('up to 20 minutes the first time after an install or update');
+    // Past 5 minutes, the blue box no longer promises 2 to 3 minutes; it says the first start can take up to 20.
+    expect(page).toMatch(/elif elapsed > SLOW_START_SECONDS:\n(?:\s+#[^\n]*\n)*\s+st\.info\("Starting ZLens\. The first start after an install or update can take up to 20 minutes\."\)\nelse:\n\s+st\.info\("Starting ZLens\. This usually takes 2 to 3 minutes, and up to 20 minutes the first time after an install or update\."\)/);
     const slow = page.slice(page.indexOf('elif elapsed > SLOW_START_SECONDS:'), page.indexOf('else:', page.indexOf('elif elapsed > SLOW_START_SECONDS:')));
     expect(slow).not.toContain('2 to 3');
-    // A start is still checked past the 15 minutes before the page gives up.
-    expect(Number(/^STOP_WAITING_SECONDS = (\d+)$/m.exec(page)?.[1])).toBeGreaterThan(15 * 60);
+    // A start is still checked past the 20 minutes before the page gives up.
+    expect(Number(/^STOP_WAITING_SECONDS = (\d+)$/m.exec(page)?.[1])).toBeGreaterThan(20 * 60);
   });
 
   it('V2: Launch app opens the launcher page, which starts ZLens and offers its address only once it is ready', () => {

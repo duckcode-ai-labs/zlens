@@ -1,8 +1,8 @@
 """ZLens launcher: the page Snowsight's Launch app opens.
 
-ZLens stops itself after 60 idle minutes. A start usually takes 2 to 3 minutes, and up to 15
-minutes the first time after an install or update (likely Snowflake fetching the new image; the V4
-test's first start after an update took 14 minutes). Opening its address while it is stopped or
+ZLens stops itself after 60 idle minutes. A start usually takes 2 to 3 minutes, and up to 20
+minutes the first time after an install or update (likely Snowflake fetching the new image; in
+our tests, first starts after an update took 14 and 15 minutes). Opening its address while it is stopped or
 starting shows Snowflake's raw "service is not yet running" page, and each reload asks for sign-in
 again. This page starts ZLens when it has stopped, waits until Snowflake reports it READY, and only
 then offers Open ZLens and its address.
@@ -29,8 +29,8 @@ POLL_SECONDS = 5
 TYPICAL_START_SECONDS = 180
 SLOW_START_SECONDS = 300
 RESEND_START_SECONDS = 30
-# A start that has not finished after 20 minutes is no longer checked by itself.
-STOP_WAITING_SECONDS = 1200
+# A start that has not finished after 30 minutes is no longer checked by itself.
+STOP_WAITING_SECONDS = 1800
 # Once ZLens is ready: check again every minute, for 10 minutes, then stop.
 RECHECK_SECONDS = 60
 RECHECK_FOR_SECONDS = 600
@@ -245,14 +245,14 @@ if name == "SUSPENDING":
 elif elapsed > SLOW_START_SECONDS:
     # Past the usual time, the page no longer promises it (V4 tester: the usual time stayed on
     # screen through a 14-minute start).
-    st.info("Starting ZLens. The first start after an install or update can take up to 15 minutes.")
+    st.info("Starting ZLens. The first start after an install or update can take up to 20 minutes.")
 else:
-    st.info("Starting ZLens. This usually takes 2 to 3 minutes, and up to 15 minutes the first time after an install or update.")
+    st.info("Starting ZLens. This usually takes 2 to 3 minutes, and up to 20 minutes the first time after an install or update.")
 st.progress(min(elapsed / TYPICAL_START_SECONDS, 0.95))
 st.caption(f"{minutes(elapsed)} so far. Your projects are kept. Checked at {checked}.")
 if elapsed > STOP_WAITING_SECONDS:
     st.warning(
-        "ZLens has not started after 20 minutes, so this page has stopped checking. "
+        "ZLens has not started after 30 minutes, so this page has stopped checking. "
         "An admin can run CALL app_public.start_app() to try again."
     )
     if st.button("Check again"):
