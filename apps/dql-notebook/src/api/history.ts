@@ -22,6 +22,8 @@ export interface HistoryFeedItem {
   certified: boolean;
   removed: boolean;
   isCurrentVersion: boolean;
+  /** In a line that stands for several items found in the trash: why and when this one went there. */
+  detail?: string;
 }
 
 export type HistoryAction = 'start' | 'found' | 'upgrade' | 'setup' | 'save' | 'certify' | 'clear-drafts' | 'delete' | 'ask' | 'restore' | 'trash';
@@ -104,12 +106,20 @@ export interface HistoryFieldChange {
   changed: boolean;
 }
 
+/** One change to an App between two versions, in plain words ("Tile added: "Wins by season""). */
+export interface HistoryAppChange {
+  kind: 'name' | 'description' | 'page' | 'tile' | 'text' | 'layout' | 'filters' | 'data' | 'settings';
+  text: string;
+}
+
 export interface HistoryCompare {
   item: HistoryItem['item'];
   from: HistoryVersionCard;
   to: HistoryVersionCard;
   sql?: { lines: HistoryDiffLine[]; changed: number };
   fields?: HistoryFieldChange[];
+  /** An App: what changed, in plain words, in reading order. */
+  app?: { changes: HistoryAppChange[] };
   files: Array<{ path: string; status: 'added' | 'removed' | 'changed' | 'same'; lines: HistoryDiffLine[]; changed: number }>;
 }
 

@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { ArrowLeft, Play, RotateCcw } from 'lucide-react';
-import { historyApi, type HistoryCompare, type HistoryDiffLine, type HistoryItem, type HistoryRestoreResult, type HistoryRunCompare, type HistoryVersionCard } from '../../api/history';
+import { historyApi, type HistoryAppChange, type HistoryCompare, type HistoryDiffLine, type HistoryItem, type HistoryRestoreResult, type HistoryRunCompare, type HistoryVersionCard } from '../../api/history';
 import type { Theme } from '../../themes/notebook-theme';
 import { StatePill, button, muted } from './ItemHistory';
 import { authorLabel, whenLabel } from './history-words';
 
 /**
  * Compare two versions (V15): who and when for each, the SQL line by line, the saved query's fields, every file
- * of an App or notebook, and, on request, both versions run now on the app's warehouse with their rows side by
- * side. From here the older version can be restored (as the next version, a draft) or the newer one certified.
+ * of a notebook, and, on request, both versions run now on the app's warehouse with their rows side by side. An App
+ * is compared in words (V3): its name, pages, tiles, text, layout and data; its files are under Technical details.
+ * From here the older version can be restored (as the next version, a draft) or the newer one certified.
  */
 export interface CompareVersionsProps {
   path: string;
@@ -115,6 +116,7 @@ export function CompareView({
   onBack: () => void;
 }): JSX.Element {
   const savedQuery = compare.item.kind === 'saved_query';
+  const app = compare.item.kind === 'app' ? compare.app ?? { changes: [] } : null;
   const current = item?.item.currentVersion ?? compare.item.currentVersion;
   const fromRow = item?.versions.find((row) => row.version === from);
   const canRestore = Boolean(fromRow?.canRestore);
@@ -124,9 +126,9 @@ export function CompareView({
   const changedFiles = compare.files.filter((file) => file.status !== 'same');
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, fontFamily: t.font, color: t.textPrimary }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, maxWidth: '100%', fontFamily: t.font, color: t.textPrimary }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '12px 20px' }}>
-        <div style={{ flex: '1 1 380px', minWidth: 0 }}>
+        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 650, letterSpacing: '-0.01em' }}>Compare v{from} and v{to}</h1>
           <p style={muted(t, { margin: '6px 0 0', fontSize: 13 })}>
             {compare.from.state === 'certified' && compare.to.state === 'draft'
@@ -134,7 +136,7 @@ export function CompareView({
               : `What changed in ${compare.item.name} between these two versions.`}
           </p>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <div data-compare-actions style={{ display: 'flex', flexWrap: 'wrap', gap: 8, minWidth: 0 }}>
           {canRestore ? (
             <button type="button" onClick={onRestore} disabled={restoring} style={button(t, !restoring)}>
               <RotateCcw size={13} aria-hidden="true" /> {restoring ? 'Restoring…' : `Restore v${from} as v${current + 1}`}
@@ -159,7 +161,8 @@ export function CompareView({
         {changedFields.map((field) => <Chip key={field.field} t={t} text={`${field.label} changed`} />)}
         {run ? <Chip t={t} text={`Result · ${resultWords(run)}`} /> : null}
         {sameFields.length ? <Chip t={t} quiet text={`${listWords(sameFields.map((field) => field.label))} unchanged`} /> : null}
-        {!savedQuery ? <Chip t={t} text={`${changedFiles.length} file${changedFiles.length === 1 ? '' : 's'} changed`} /> : null}
+        {app ? <Chip t={t} text={app.changes.length ? `${app.changes.length} change${app.changes.length === 1 ? '' : 's'}` : 'No change to the pages, tiles or data'} /> : null}
+        {!savedQuery && !app ? <Chip t={t} text={`${changedFiles.length} file${changedFiles.length === 1 ? '' : 's'} changed`} /> : null}
       </div>
 
       {savedQuery && compare.sql ? (
@@ -204,7 +207,21 @@ export function CompareView({
         ) : null}
       </div>
 
-      {!savedQuery ? compare.files.filter((file) => file.status !== 'same').map((file) => (
+      {app ? <Section title="What changed" t={t}><AppChangeList changes={app.changes} from={from} to={to} t={t} /></Section> : null}
+
+      {app && changedFiles.length ? (
+        <details data-technical-details style={{ minWidth: 0, border: `1px solid ${t.cellBorder}`, borderRadius: 12, background: t.cellBg }}>
+          <summary style={{ cursor: 'pointer', padding: '11px 14px', fontSize: 13, fontWeight: 600, color: t.textSecondary }}>Technical details</summary>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 12, padding: '0 14px 14px' }}>
+            <p style={muted(t, { margin: 0 })}>The App's files as History keeps them, line by line.</p>
+            {changedFiles.map((file) => (
+              <Section key={file.path} title={`${file.path} · ${file.status}`} t={t}><DiffLines lines={file.lines} t={t} /></Section>
+            ))}
+          </div>
+        </details>
+      ) : null}
+
+      {!savedQuery && !app ? changedFiles.map((file) => (
         <Section key={file.path} title={`${file.path} · ${file.status}`} t={t}><DiffLines lines={file.lines} t={t} /></Section>
       )) : null}
 
@@ -235,10 +252,34 @@ function VersionCardView({ card, savedQuery, t }: { card: HistoryVersionCard; sa
   );
 }
 
+/** An App's changes between two versions, one per line, added in green and removed in red. */
+export function AppChangeList({ changes, from, to, t }: { changes: HistoryAppChange[]; from: number; to: number; t: Theme }): JSX.Element {
+  if (!changes.length) {
+    return <p style={muted(t, { padding: '12px 14px', margin: 0 })}>v{from} and v{to} have the same name, pages, tiles and data.</p>;
+  }
+  return (
+    <ul style={{ margin: 0, padding: '6px 0', listStyle: 'none' }}>
+      {changes.map((change, index) => {
+        const tone = /^(Tile|Page|Data|Description) added\b/.test(change.text) ? addedTone(t) : /^(Tile|Page|Data|Description) removed\b/.test(change.text) ? removedTone(t) : {};
+        return (
+          <li key={index} data-app-change={change.kind} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 14px', fontSize: 13.5, lineHeight: 1.5, overflowWrap: 'anywhere', ...tone }}>
+            <span aria-hidden="true" style={{ flex: 'none', width: 70, fontSize: 11, fontWeight: 650, letterSpacing: '0.04em', textTransform: 'uppercase', color: t.textSecondary }}>{APP_CHANGE_KIND[change.kind]}</span>
+            <span style={{ minWidth: 0 }}>{change.text}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const APP_CHANGE_KIND: Record<HistoryAppChange['kind'], string> = {
+  name: 'Name', description: 'About', page: 'Page', tile: 'Tile', text: 'Text', layout: 'Layout', filters: 'Filters', data: 'Data', settings: 'Settings',
+};
+
 function Section({ title, t, children, style }: { title: string; t: Theme; children: React.ReactNode; style?: CSSProperties }): JSX.Element {
   return (
-    <section aria-label={title} style={{ minWidth: 0, border: `1px solid ${t.cellBorder}`, borderRadius: 12, background: t.cellBg, overflow: 'hidden', ...style }}>
-      <h2 style={{ margin: 0, padding: '11px 14px', fontSize: 13.5, fontWeight: 650, borderBottom: `1px solid ${t.cellBorder}` }}>{title}</h2>
+    <section aria-label={title} style={{ minWidth: 0, maxWidth: '100%', border: `1px solid ${t.cellBorder}`, borderRadius: 12, background: t.cellBg, overflow: 'hidden', ...style }}>
+      <h2 style={{ margin: 0, padding: '11px 14px', fontSize: 13.5, fontWeight: 650, borderBottom: `1px solid ${t.cellBorder}`, overflowWrap: 'anywhere' }}>{title}</h2>
       {children}
     </section>
   );
@@ -251,7 +292,7 @@ function Chip({ text, t, quiet }: { text: string; t: Theme; quiet?: boolean }): 
 export function DiffLines({ lines, t }: { lines: HistoryDiffLine[]; t: Theme }): JSX.Element {
   if (!lines.length) return <p style={muted(t, { padding: '10px 14px', margin: 0 })}>Empty in both versions.</p>;
   return (
-    <div style={{ overflowX: 'auto' }}>
+    <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
       <div style={{ minWidth: 560, padding: '6px 0', fontFamily: t.fontMono, fontSize: 12.5, lineHeight: 1.75 }}>
         {lines.map((line, index) => (
           <div key={index} data-diff={line.kind} style={{ display: 'flex', ...(line.kind === 'removed' ? removedTone(t) : line.kind === 'added' ? addedTone(t) : {}) }}>

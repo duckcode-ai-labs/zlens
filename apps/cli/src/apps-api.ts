@@ -105,7 +105,8 @@ import { answerLongRequest } from './long-request.js';
 import { readEnv } from '@zlens/core';
 import { appDraftHistoryText, parseAppDraftHistoryText } from './history/app-drafts.js';
 import { APP_STUDIO_DRAFT_FILE, appStudioDraftPath } from './history/tracked-files.js';
-import type { HistoryAppSource, HistoryTrashedApp } from './history/history-service.js';
+import type { HistoryAppDrafts, HistoryAppSource, HistoryTrashedApp } from './history/history-service.js';
+import { historyAppIds } from './history/known-app-ids.js';
 
 interface Ctx {
   req: IncomingMessage;
@@ -894,12 +895,15 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         sendJson(res, 404, { ok: false, error: 'App Build Draft not found.' });
         return true;
       }
-      const body = await readJson<{ expectedRevision?: number; proposalHash?: string }>(req);
+      const body = await readJson<{ expectedRevision?: number; proposalHash?: string; discard?: boolean }>(req);
       if (body.expectedRevision !== current.revision || body.proposalHash !== current.proposalHash) {
         sendJson(res, 409, { ok: false, error: 'APP_BUILD_REVISION_CONFLICT: refresh before deleting this local draft.' });
         return true;
       }
-      sendJson(res, 200, deleteStoredAppBuildDraft(projectRoot, current));
+      // Leaving a Describe with AI plan nobody built (V3): it goes, with no trip to the trash and no line in History.
+      // Anything built or changed in it is never discarded: it goes to the trash like any Delete.
+      const discarded = body.discard === true ? discardUnkeptAppBuildDraft(projectRoot, current) : null;
+      sendJson(res, 200, discarded ?? deleteStoredAppBuildDraft(projectRoot, current));
     } catch (err) {
       sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
     }
@@ -5163,10 +5167,11 @@ export async function openAppAiBuildInStudio(
   try {
     const goal = session.prompt || proposal.buildFrame.goal;
     // A new App: never another App's or draft's name or id (V11).
-    const identity = uniqueNewAppIdentity(
+    const taken = takenAppIdentities(projectRoot);
+    const identity = appIdNewToHistory(projectRoot, uniqueNewAppIdentity(
       (cleanString(input.appName) || cleanString(plan.name) || appNameFromGoal(goal)).slice(0, 120),
-      takenAppIdentities(projectRoot),
-    );
+      taken,
+    ), taken);
     draft = createAppBuildHandoffDraft({
       goal,
       name: identity.name,
@@ -7982,13 +7987,16 @@ export function createStoredAppBuildDraft(
   if (taken && requestedAppId && new Set(Array.from(taken.appIds, (appId) => appId.toLowerCase())).has(requestedAppId.toLowerCase())) {
     throw new Error(`App already exists: ${requestedAppId} is another App's id, or a draft's. Open that App to change it, or choose another id.`);
   }
+  if (taken && requestedAppId && historyAppIds(projectRoot).some((appId) => appId.toLowerCase() === requestedAppId.toLowerCase())) {
+    throw new Error(`${requestedAppId} is the id of an App kept in History. Restore that App from History, or choose another id.`);
+  }
   // A new App never takes another App's (or another new App's) name or id: its draft would hide that App's own
   // draft and could not be published (V11). It is "… (2)" instead.
   const { name, appId } = base
     ? { name: requestedName, appId: base.app.id }
     : requestedAppId
       ? { name: requestedName, appId: requestedAppId }
-      : uniqueNewAppIdentity(requestedName, taken!);
+      : appIdNewToHistory(projectRoot, uniqueNewAppIdentity(requestedName, taken!), taken!);
   const id = newAppBuildDraftId();
   const blankPage = createBlankAppBuildPage({
     name,
@@ -8460,6 +8468,57 @@ export function loadStoredAppBuildDraft(projectRoot: string, id: string): AppBui
  * The names and ids a new App must not repeat: the project's Apps, and the drafts nobody has published yet
  * (a published draft's App is in the first list). `exceptDraftId` leaves one draft out.
  */
+/**
+ * A new App's id that History does not know either (V3). History keeps Apps that are gone, so an id can be free in
+ * the project and still be a removed App's in History: a new App that took it went on as that App's next version
+ * (V15 retest: two Apps shared one History item). The name stays as the author gave it; only the id moves on
+ * (`sales-overview-2`). `own` is the App being restored from History, which keeps its own id.
+ */
+export function appIdNewToHistory(
+  projectRoot: string,
+  identity: { name: string; appId: string },
+  taken: { appIds: Iterable<string> },
+  own?: string,
+): { name: string; appId: string } {
+  const known = new Set(historyAppIds(projectRoot).map((id) => id.toLowerCase()));
+  if (own) known.delete(own.toLowerCase());
+  if (!known.has(identity.appId.toLowerCase())) return identity;
+  const used = new Set([...known, ...Array.from(taken.appIds, (id) => id.toLowerCase())]);
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${identity.appId}-${n}`;
+    if (!used.has(candidate.toLowerCase())) return { ...identity, appId: candidate };
+  }
+  return { ...identity, appId: `${identity.appId}-${Date.now().toString(36)}` };
+}
+
+/**
+ * A Describe with AI draft nobody has built or changed yet (V3): a plan, not an App. Its template intro at most, on
+ * one page, and no saved edit of its pages, tiles or name (see isEmptyNewAppShell). History keeps no version of it,
+ * and leaving it discards it without a trip to the trash. Applying the plan, any edit or a rename makes it an App,
+ * kept from then on under its name (the plan's title, once the plan is applied).
+ */
+export function isUnkeptAppDraft(draft: AppBuildDraft, editCount: number): boolean {
+  return draft.authoringMode === 'ai' && isEmptyNewAppShell(draft, editCount);
+}
+
+/**
+ * Discards a Describe with AI draft nobody built or changed (isUnkeptAppDraft): removed from the store with its
+ * local files, no trash entry. Null, and nothing done, when the draft holds anything: then it is deleted to the
+ * trash as any draft is.
+ */
+export function discardUnkeptAppBuildDraft(projectRoot: string, draft: AppBuildDraft): { ok: true; id: string; recoveryId: null; discarded: true } | null {
+  const storage = openAppStorage(projectRoot);
+  try {
+    const stored = storage.getAppBuildDraft(draft.id);
+    if (!stored || !isUnkeptAppDraft(stored, appDraftContentEditCount(storage.listAppBuildOperations(stored.id)))) return null;
+    storage.deleteAppBuildDraft(stored.id);
+  } finally {
+    storage.close();
+  }
+  if (/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(draft.id)) rmSync(join(projectRoot, '.dql', 'local', 'app-builds', draft.id), { recursive: true, force: true });
+  return { ok: true, id: draft.id, recoveryId: null, discarded: true };
+}
+
 export function takenAppIdentities(projectRoot: string, exceptDraftId?: string): { appIds: string[]; names: string[] } {
   const project = projectAppIdentities(projectRoot);
   const appIds = Array.from(project.appIds);
@@ -9937,9 +9996,14 @@ export function appHistorySource(projectRoot: string): HistoryAppSource {
 
 const HISTORY_APP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
-/** Each App's live App Studio draft, as History keeps it: `apps/<id>/studio-draft.json` → its text. */
-export function appStudioDraftsForHistory(projectRoot: string): Map<string, string> {
-  const files = new Map<string, string>();
+/**
+ * Each App's live App Studio draft, as History keeps it: `apps/<id>/studio-draft.json` → its text. A Describe with
+ * AI plan nobody built or changed yet (isUnkeptAppDraft) is not an App: it is listed in `unkept` instead, so it
+ * makes no line in History, and leaving it makes none either (V3).
+ */
+export function appStudioDraftsForHistory(projectRoot: string): HistoryAppDrafts {
+  const unkept = new Set<string>();
+  const files: HistoryAppDrafts = Object.assign(new Map<string, string>(), { unkept });
   const dbPath = defaultLocalAppsDbPath(projectRoot);
   if (!existsSync(dbPath)) return files;
   // Every draft in the project, whoever's: History is the project's.
@@ -9949,7 +10013,13 @@ export function appStudioDraftsForHistory(projectRoot: string): Map<string, stri
     for (const draft of storage.listAppBuildDrafts()) {
       if (draft.state === 'project_published' || typeof draft.appId !== 'string' || !HISTORY_APP_ID.test(draft.appId)) continue;
       const path = appStudioDraftPath(draft.appId);
-      if (!files.has(path)) files.set(path, appDraftHistoryText(draft));
+      if (files.has(path) || unkept.has(path)) continue;
+      // Its saved edits are read only for a draft that looks like a plan.
+      if (isUnkeptAppDraft(draft, 0) && isUnkeptAppDraft(draft, appDraftContentEditCount(storage.listAppBuildOperations(draft.id)))) {
+        unkept.add(path);
+        continue;
+      }
+      files.set(path, appDraftHistoryText(draft));
     }
   } finally {
     storage.close();
@@ -9987,6 +10057,8 @@ export function trashedAppsForHistory(projectRoot: string): HistoryTrashedApp[] 
     const draft = recovery?.kind === 'app_build_draft' ? recovery.draft as AppBuildDraft | undefined : undefined;
     if (!draft || typeof draft.appId !== 'string' || draft.state === 'project_published' || typeof recovery?.deletedAt !== 'string') continue;
     const operations = Array.isArray(recovery.operations) ? recovery.operations as Array<{ operations: AppBuildDraftOperation[] }> : [];
+    // A Describe with AI plan nobody built or changed was never an App: History keeps no line of it (V3).
+    if (isUnkeptAppDraft(draft, appDraftContentEditCount(operations))) continue;
     const emptyCopy = numberedCopyBase(draft.name ?? '') !== undefined && isEmptyNewAppShell(draft, appDraftContentEditCount(operations));
     found.push({
       id: `app-drafts/${entry}`,
@@ -10123,9 +10195,11 @@ export async function restoreAppHistoryVersion(
   if (input.asNew) {
     // A removed App: a new draft of a new App, under its old name and id when no App or draft has them now.
     const preferredId = HISTORY_APP_ID.test(wantedId) ? wantedId : input.appId;
-    const identity = uniqueNewAppIdentity(content.name, takenAppIdentities(projectRoot), preferredId);
+    const taken = takenAppIdentities(projectRoot);
+    const identity = appIdNewToHistory(projectRoot, uniqueNewAppIdentity(content.name, taken, preferredId), taken, input.appId);
     const draft = createAppBuildDraft({ id: newAppBuildDraftId(), ...content, name: identity.name, appId: identity.appId });
-    writeStoredAppBuildDraft(projectRoot, draft);
+    // A restore is a save the person made: the App is kept, whatever it holds (V3, isUnkeptAppDraft).
+    writeStoredAppBuildDraft(projectRoot, draft, { operations: [{ type: 'set_name', name: draft.name }] });
     return { appId: draft.appId, draftId: draft.id, name: draft.name };
   }
   // An App that is there: the App History names (its id), whatever id its old draft had.
@@ -10140,16 +10214,17 @@ export async function restoreAppHistoryVersion(
       const made = createAppBuildDraft({ id: live.id, appId: live.appId, ...(live.baseApp ? { baseApp: live.baseApp } : {}), ...content, now: live.createdAt });
       const moved = { ...made, revision: live.revision + 1, updatedAt: new Date().toISOString() };
       const next: AppBuildDraft = { ...moved, proposalHash: appBuildDraftHash({ ...moved, proposalHash: undefined }) };
-      storage.saveAppBuildDraft(next, { expectedRevision: live.revision });
+      storage.saveAppBuildDraft(next, { expectedRevision: live.revision, operations: [{ type: 'set_name', name: next.name }] });
       return { appId: next.appId, draftId: next.id, name: next.name };
     }
   } finally {
     storage.close();
   }
   const base = loadAppById(projectRoot, appId);
+  const taken = base ? null : takenAppIdentities(projectRoot);
   const identity = base
     ? { name: content.name, appId: base.app.id }
-    : uniqueNewAppIdentity(content.name, takenAppIdentities(projectRoot), appId);
+    : appIdNewToHistory(projectRoot, uniqueNewAppIdentity(content.name, taken!, appId), taken!, input.appId);
   const draft = createAppBuildDraft({
     id: newAppBuildDraftId(),
     ...content,
@@ -10157,7 +10232,7 @@ export async function restoreAppHistoryVersion(
     appId: identity.appId,
     ...(base ? { baseApp: { appId: base.app.id, fingerprint: fingerprintAppDirectory(base.appDir) } } : {}),
   });
-  writeStoredAppBuildDraft(projectRoot, draft);
+  writeStoredAppBuildDraft(projectRoot, draft, { operations: [{ type: 'set_name', name: draft.name }] });
   return { appId: draft.appId, draftId: draft.id, name: draft.name };
 }
 

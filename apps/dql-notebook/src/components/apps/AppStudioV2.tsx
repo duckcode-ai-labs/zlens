@@ -57,7 +57,8 @@ import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
 import { ReaderPreviewParts } from './ReaderPreviewParts';
 import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
-import { NO_UNPUBLISHED_CHANGES, TILE_ADDED_FOLLOW_UP_FAILED, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords, studioErrorWords } from './app-studio-words';
+import { NO_UNPUBLISHED_CHANGES, TILE_ADDED_FOLLOW_UP_FAILED, UNPUBLISHED_CHANGES, deleteDraftWords, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords, studioErrorWords } from './app-studio-words';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -107,6 +108,7 @@ import { CertifyJoinDialog } from './builder/CertifyJoinDialog';
 import { certifyWords, type CertifyWords } from './builder/certify-words';
 import { useHostUi } from '../../host/host-ui';
 import { appStudioAiDataResume, isEmptyAiDraft } from './app-studio-handoff';
+import { addTileStep } from './add-tile-step';
 import {
   FIELD_TILES_OFF_MESSAGE,
   appDataItems,
@@ -582,6 +584,8 @@ export function AppStudioV2({
 }: AppStudioV2Props): JSX.Element {
   const [draft, setDraft] = useState<AppStudioBuildDraft | null>(null);
   const dispatchNotebook = useDispatch();
+  /** History keeps every App's versions (the app for Snowflake): Delete draft can say it comes back from there. */
+  const historyKept = useSnowflakeApp();
   /** The App's domain, stored on its first page when the draft is created; `general` means every domain. */
   const draftDomain = appDraftDomain(draft);
   const [mode] = useState<'ai' | 'manual'>(initialMode === 'quick' ? 'manual' : initialMode);
@@ -1296,15 +1300,16 @@ export function AppStudioV2({
   // Back hands the library the draft as it is now: a new App is listed at once (round 3).
   /**
    * Leaving App Studio. A Describe with AI draft this visit made that still holds nothing (its plan failed or was
-   * never applied) is removed on the way out, to the trash: an empty App is not left in the list, where its
-   * Continue would plan it again (V12: eight such Apps with one name).
+   * never applied) is discarded on the way out: an empty App is not left in the list, where its Continue would plan
+   * it again (V12: eight such Apps with one name). It was a plan, not an App, so it leaves no trash entry and no line
+   * in History (V3); the server discards only a draft nobody built or changed, and deletes anything else to the trash.
    */
   const goBack = () => {
     const current = latestDraftRef.current;
     if (current && createdAiDraftIdRef.current === current.id && isEmptyAiDraft(current)) {
       createdAiDraftIdRef.current = null;
       aiPlanSequenceRef.current += 1;
-      void api.deleteAppBuild(current.id, current.revision, current.proposalHash)
+      void api.deleteAppBuild(current.id, current.revision, current.proposalHash, { discard: true })
         .catch(() => undefined)
         .finally(() => onBack(null));
       return;
@@ -2856,7 +2861,8 @@ export function AppStudioV2({
     setError(null);
     try {
       const deleted = await api.deleteAppBuild(draft.id, draft.revision, draft.proposalHash);
-      onDraftDeleted({ appName: draft.name, recoveryId: deleted.recoveryId });
+      if (deleted.recoveryId) onDraftDeleted({ appName: draft.name, recoveryId: deleted.recoveryId });
+      else onBack(null);
     } catch (cause) {
       setDeleteConfirmOpen(false);
       setError(messageOf(cause));
@@ -3932,6 +3938,7 @@ export function AppStudioV2({
       ? { kind: 'tile', title: tileTarget.title || humanize(tileTarget.i), query: tileTarget.query! }
       : { kind: 'none' };
   const emptyDraft = (item: AppBlockRecommendation): DraftTileState => ({ sourceKey: item.id, query: EMPTY_TILE_QUERY, encoding: { version: 1, columns: [], rows: [] }, view: 'kpi', viewChosen: false, title: '' });
+  /** "+ Add tile": always something a person can see (V3: on saved queries without fields it did nothing). */
   const openAddTile = () => {
     setStudioView('edit');
     setSelectedTileId(null);
@@ -3939,12 +3946,32 @@ export function AppStudioV2({
     setSettingsOpen(false);
     setPanel('sources');
     setPanelOpen(true);
-    if (fieldsAvailable && activeDatasetItem) {
-      setDraftTile((current) => current ?? emptyDraft(activeDatasetItem));
-    } else if (!appData.length) {
+    const step = addTileStep({
+      appData,
+      fieldsSource: activeDatasetItem,
+      chosen: chosenAppData,
+      datasetTilesEnabled,
+      fieldsReadFailed: (item) => savedQueryFieldReads[item.sourceId ?? item.id]?.state === 'failed',
+    });
+    const focus = (selector: string) => window.setTimeout(() => document.querySelector<HTMLElement>(selector)?.focus(), 0);
+    if (step.kind === 'build') {
+      setDraftTile((current) => current ?? emptyDraft(step.source));
+      focus('#studio-field-search');
+    } else if (step.kind === 'add-data') {
       setAddDataOpen(true);
+    } else if (step.kind === 'choose-data') {
+      // The list of this App's data opens: pick one, then click its fields.
+      setDataPickerRequest((count) => count + 1);
+      setSavedMessage('New tile: choose its data, then click its fields');
+    } else {
+      // The saved query is chosen: its columns are read as fields, or it is offered as a Table, Chart or KPI.
+      chooseDataset(step.source);
+      // True whatever the read finds: its fields to click, or its whole result as a Table, Chart or KPI.
+      setSavedMessage(step.kind === 'read-fields'
+        ? `New tile from ${humanize(step.source.name)}: pick its fields, or add it as a Table, Chart or KPI`
+        : `New tile: add ${humanize(step.source.name)} as a Table, Chart or KPI`);
+      if (step.kind === 'add-as-is') focus('.saved-query-panel .source-view-options button');
     }
-    window.setTimeout(() => document.getElementById('studio-field-search')?.focus(), 0);
   };
   /** A field click builds the new tile, or edits the selected Dataset tile. */
   const pickField = (field: DatasetField) => {
@@ -4502,7 +4529,7 @@ export function AppStudioV2({
         onCompare={(from, to) => { setHistoryOpen(false); openHistory(dispatchNotebook, { page: 'compare', path: appHistoryPath(draft.appId), from, to, back: 'item' }); }}
         onRestored={() => { void reloadLatestDraft(); }}
       /> : null}
-      {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this draft?</h2><p><strong>{draft.name}</strong> will leave the App list. Its pages, tiles, and local history move to a recovery bundle so you can Undo.</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
+      {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this draft?</h2><p><strong>{draft.name}</strong> {deleteDraftWords({ history: historyKept, builtApp: !appStudioAiDataResume(draft) })}</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
     </div>
   );
 }

@@ -227,7 +227,14 @@ describe('App Studio AI plan review (AGT-025, UI-022)', () => {
         providerInvocation: 'succeeded',
         providerId: 'claude-code',
       },
-    })).toBe('AI planner response · claude-code');
+    })).toBe('Planned with Claude');
+    // V3: never the provider's setting id.
+    expect(appStudioPlannerProvenanceLabel({
+      plannerProvenance: { version: 1, mode: 'ai', providerInvocation: 'succeeded', providerId: 'cortex' },
+    })).toBe('Planned with Snowflake Cortex');
+    expect(appStudioPlannerProvenanceLabel({
+      plannerProvenance: { version: 1, mode: 'ai', providerInvocation: 'succeeded', providerId: 'custom-openai' },
+    })).toBe('Planned with AI');
     expect(appStudioPlannerProvenanceLabel({
       plannerProvenance: {
         version: 1,

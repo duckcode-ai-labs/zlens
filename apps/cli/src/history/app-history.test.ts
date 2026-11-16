@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
   createStoredAppBuildDraft,
   deleteAppPackage,
   deleteStoredAppBuildDraft,
+  discardUnkeptAppBuildDraft,
   loadStoredAppBuildDraft,
   markStoredAppBuildDraftPreflighted,
   publishStoredAppBuildDraft,
@@ -15,8 +16,9 @@ import {
   restoreAppHistoryVersion,
   writeStoredAppBuildDraft,
 } from '../apps-api.js';
-import { appDraftHistoryText, appPagesKey } from './app-drafts.js';
+import { appChanges, appDraftHistoryText, appDraftShape, appPagesKey, publishedAppShape } from './app-drafts.js';
 import { HistoryService, type HistoryAppSource } from './history-service.js';
+import { historyAppIds } from './known-app-ids.js';
 import { readableFileLabel } from './tracked-files.js';
 
 /**
@@ -98,7 +100,7 @@ describe('every App save is a version', () => {
     expect(item.item).toMatchObject({ key, kind: 'app', name: 'Sales 2026', removed: false, currentVersion: 6 });
     expect(item.versions.map((row) => [row.version, row.change, row.detail, row.by.name, row.state])).toEqual([
       [6, 'renamed', 'Was "Sales overview"', 'JSMITH', 'saved'],
-      [5, 'edited', 'Tiles or layout changed', 'JSMITH', 'saved'],
+      [5, 'edited', 'Tile "Orders" renamed to "Orders by week". Text changed in "Orders"', 'JSMITH', 'saved'],
       [4, 'edited', 'Added 1 tile', 'JSMITH', 'saved'],
       [3, 'edited', 'Added 1 tile', 'JSMITH', 'saved'],
       [2, 'edited', 'Added 1 tile', 'JSMITH', 'saved'],
@@ -170,8 +172,13 @@ describe('every App save is a version', () => {
     editDraft = edit(root, editDraft, [{ type: 'update_tile', pageId: editDraft.pages[0]!.id, tileId: 't1', patch: { title: 'Revenue by month', text: { markdown: 'Revenue by month' } } }]);
     const changed = await after(history, 'PATCH', `/api/app-builds/${editDraft.id}`);
     expect(changed).toHaveLength(1);
-    expect(changed[0]).toMatchObject({ author: { name: 'JSMITH', kind: 'person' }, changes: [expect.objectContaining({ item: key, version: 2, change: 'edited', detail: 'Tiles or layout changed. Not published yet' })] });
+    expect(changed[0]).toMatchObject({ author: { name: 'JSMITH', kind: 'person' }, changes: [expect.objectContaining({ item: key, version: 2, change: 'edited', detail: 'Tile "Revenue" renamed to "Revenue by month". Text changed in "Revenue". Not published yet' })] });
     expect(history.item(key).versions.map((row) => row.version)).toEqual([2, 1]);
+    // The published App and its draft compare by what people see: no data "added" because the draft names it otherwise.
+    expect((await history.compare(key, 1, 2)).app!.changes).toEqual([
+      { kind: 'tile', text: 'Tile "Revenue" renamed to "Revenue by month"' },
+      { kind: 'text', text: 'Text changed in "Revenue"' },
+    ]);
 
     // Opened for edit and left without a change, then discarded: nothing either.
     const other = createStoredAppBuildDraft(root, { name: 'Margins', authoringMode: 'manual', template: 'blank' });
@@ -255,31 +262,40 @@ describe('removed Apps stay in History and come back as drafts', () => {
 });
 
 describe('the trash, before History kept Apps', () => {
-  /** What an earlier version did: a draft deleted, and the upgrade's empty "(3)" copy moved to the trash. */
-  function trashBeforeHistory(root: string): { kept: AppBuildDraft; shell: AppBuildDraft; live: AppBuildDraft } {
+  /**
+   * What an earlier version did: a draft deleted, the upgrade's empty "(3)" copy moved to the trash, and a Describe
+   * with AI plan left before it was built (V12 deleted such plans to the trash).
+   */
+  function trashBeforeHistory(root: string): { kept: AppBuildDraft; shell: AppBuildDraft; live: AppBuildDraft; plan: AppBuildDraft } {
     const kept = createStoredAppBuildDraft(root, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
     const withTile = edit(root, kept, [{ type: 'add_tile', pageId: kept.pages[0]!.id, tile: tile('t1', 'Revenue') }]);
     deleteStoredAppBuildDraft(root, withTile);
     // The copy V12 made of "Sales overview": the template's intro only, never edited.
     const live = createStoredAppBuildDraft(root, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
-    const shell = createStoredAppBuildDraft(root, { name: 'Sales overview (3)', authoringMode: 'ai', template: 'operational_dashboard', goal: 'Sales by month' });
+    const shell = createStoredAppBuildDraft(root, { name: 'Sales overview (3)', authoringMode: 'manual', template: 'operational_dashboard', goal: 'Sales by month' });
     expect(removeEmptyAppCopies(root)).toEqual(['Sales overview (3)']);
     expect(loadStoredAppBuildDraft(root, live.id)).not.toBeNull();
-    return { kept: withTile, shell, live };
+    const plan = createStoredAppBuildDraft(root, { authoringMode: 'ai', template: 'operational_dashboard', goal: 'Team wins by season' });
+    deleteStoredAppBuildDraft(root, plan);
+    return { kept: withTile, shell, live, plan };
   }
 
-  it('lists Apps found in the trash as removed, once, by ZLens, and restores each as a draft', async () => {
+  it('lists Apps found in the trash as one line that opens, by ZLens, and restores each as a draft', async () => {
     const root = project();
-    const { kept, shell, live } = trashBeforeHistory(root);
+    const { kept, shell, live, plan } = trashBeforeHistory(root);
     await new Promise((done) => setTimeout(done, 5));
     const history = await open(root);
+    // One line for everything found in the trash (V3: 13 lines filled the top of History), each with its reason.
     const removed = history.feed().entries.filter((entry) => entry.change === 'removed');
-    expect(removed.map((entry) => [entry.action, entry.by.name, entry.items[0]!.name, entry.canRestore])).toEqual([
-      ['trash', 'ZLens', 'Sales overview (3)', true],
-      ['trash', 'ZLens', 'Sales overview', true],
-    ]);
-    expect(removed[0]!.detail).toMatch(/^An empty copy of another App, moved to the trash on \d{4}-\d{2}-\d{2}\. It can be restored from History$/);
-    expect(removed[1]!.detail).toMatch(/^Deleted on \d{4}-\d{2}-\d{2}, before History kept App drafts\. It can be restored from History$/);
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toMatchObject({ action: 'trash', by: { name: 'ZLens' }, count: 2, canRestore: true, canCompare: false, detail: 'Each can be restored from History' });
+    expect(removed[0]!.version).toBeUndefined();
+    const found = removed[0]!.items;
+    expect(found.map((item) => [item.name, item.removed, item.version])).toEqual([['Sales overview (3)', true, 2], ['Sales overview', true, 2]]);
+    expect(found[0]!.detail).toMatch(/^An empty copy of another App, moved to the trash on \d{4}-\d{2}-\d{2}\. It can be restored from History$/);
+    expect(found[1]!.detail).toMatch(/^Deleted on \d{4}-\d{2}-\d{2}, before History kept App drafts\. It can be restored from History$/);
+    // A Describe with AI plan nobody built was never an App: it is not found in the trash (V3).
+    expect(history.feed().entries.flatMap((entry) => entry.items).some((item) => item.key === `apps/${plan.appId}`)).toBe(false);
     // The kept content is not a line of its own.
     expect(history.feed().entries.filter((entry) => entry.action === 'trash' && entry.change !== 'removed')).toEqual([]);
 
@@ -288,7 +304,7 @@ describe('the trash, before History kept Apps', () => {
     expect(loadStoredAppBuildDraft(root, restoredShell.appDraft!.id)).toMatchObject({ name: 'Sales overview (3)', state: 'local_draft' });
     // The deleted App's id went to a newer App since: it is kept under a key of its own, and comes back as a new
     // draft under a free name. The newer App's own draft is not touched.
-    const deletedKey = removed[1]!.items[0]!.current;
+    const deletedKey = found[1]!.current;
     expect(deletedKey).toMatch(new RegExp(`^apps/${kept.appId}-removed-`));
     const liveBefore = loadStoredAppBuildDraft(root, live.id)!;
     const restoredKept = await history.restore({ item: deletedKey, version: 1, user: 'JSMITH' });
@@ -303,21 +319,21 @@ describe('the trash, before History kept Apps', () => {
 
     // A later start keeps nothing twice, and what went to the trash after History kept drafts it saw itself.
     const again = await open(root);
-    expect(again.feed().entries.filter((entry) => entry.action === 'trash')).toHaveLength(2);
+    expect(again.feed().entries.filter((entry) => entry.action === 'trash').flatMap((entry) => entry.items)).toHaveLength(2);
     const later = createStoredAppBuildDraft(root, { name: 'Later', authoringMode: 'manual', template: 'blank' });
     await after(again, 'POST', '/api/app-builds');
     deleteStoredAppBuildDraft(root, later);
     await after(again, 'DELETE', `/api/app-builds/${later.id}`);
     again.stop();
     const third = await open(root);
-    expect(third.feed().entries.filter((entry) => entry.action === 'trash')).toHaveLength(2);
+    expect(third.feed().entries.filter((entry) => entry.action === 'trash').flatMap((entry) => entry.items)).toHaveLength(2);
     expect(third.feed().entries.filter((entry) => entry.change === 'removed' && entry.items[0]!.name === 'Later').map((entry) => entry.action)).toEqual(['delete']);
   });
 
   it('lists the clean-up of an empty copy while History runs as ZLens\'s, never as the person\'s', async () => {
     const root = project();
     const live = createStoredAppBuildDraft(root, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
-    createStoredAppBuildDraft(root, { name: 'Sales overview (3)', authoringMode: 'ai', template: 'operational_dashboard', goal: 'Sales by month' });
+    createStoredAppBuildDraft(root, { name: 'Sales overview (3)', authoringMode: 'manual', template: 'operational_dashboard', goal: 'Sales by month' });
     const history = await open(root);
     expect(removeEmptyAppCopies(root)).toEqual(['Sales overview (3)']);
     // Listing the drafts (GET /api/app-builds) is where ZLens tidies them, and where History sees it.
@@ -351,6 +367,197 @@ describe('the trash, before History kept Apps', () => {
   });
 });
 
+describe('Describe with AI plans (V3): an App only once someone keeps it', () => {
+  /** "Generate editable App": a draft made from the description, before its plan is applied. */
+  const plan = (root: string, goal = 'How did the Warriors do in each season') => createStoredAppBuildDraft(root, { authoringMode: 'ai', template: 'operational_dashboard', goal });
+  const trashed = (root: string) => existsSync(join(root, '.dql/local/trash/app-drafts')) ? readdirSync(join(root, '.dql/local/trash/app-drafts')) : [];
+
+  it('keeps no line for a plan nobody built, and leaving it leaves no line and no trash', async () => {
+    const root = project();
+    const history = await open(root);
+    const draft = plan(root);
+    expect(await after(history, 'POST', '/api/app-builds')).toEqual([]);
+    expect(await history.sweep()).toEqual([]);
+    // Back to Apps discards it: no trash entry, and History has nothing to say about it.
+    expect(discardUnkeptAppBuildDraft(root, draft)).toMatchObject({ ok: true, discarded: true, recoveryId: null });
+    expect(loadStoredAppBuildDraft(root, draft.id)).toBeNull();
+    expect(trashed(root)).toEqual([]);
+    expect(await after(history, 'DELETE', `/api/app-builds/${draft.id}`)).toEqual([]);
+    expect(history.feed({ kind: 'app' }).entries).toEqual([]);
+    expect(history.item.bind(history, `apps/${draft.appId}`)).toThrow(/no versions/);
+  });
+
+  it('keeps the App from when its plan is applied, named by the plan', async () => {
+    const root = project();
+    const history = await open(root);
+    let draft = plan(root);
+    await after(history, 'POST', '/api/app-builds');
+    // Applying the plan renames the App and adds its tiles, in one save (apps-api plannedAppName).
+    draft = edit(root, draft, [
+      { type: 'set_name', name: 'Warriors wins by season' },
+      { type: 'add_tile', pageId: draft.pages[0]!.id, tile: { ...tile('wins', 'Wins by season'), y: 3 } },
+    ]);
+    const made = await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    expect(made[0]!.changes).toEqual([expect.objectContaining({ item: `apps/${draft.appId}`, name: 'Warriors wins by season', version: 1, change: 'created' })]);
+    // Kept from now on: leaving it never discards it, and Delete puts it in the trash, restorable from History.
+    expect(discardUnkeptAppBuildDraft(root, draft)).toBeNull();
+    expect(loadStoredAppBuildDraft(root, draft.id)).not.toBeNull();
+  });
+
+  it('counts a rename as keeping a plan, and discards nothing anyone changed', async () => {
+    const root = project();
+    const history = await open(root);
+    let draft = plan(root);
+    draft = edit(root, draft, [{ type: 'set_name', name: 'Season review' }]);
+    const made = await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    expect(made[0]!.changes[0]).toMatchObject({ name: 'Season review', change: 'created' });
+    expect(discardUnkeptAppBuildDraft(root, draft)).toBeNull();
+    // A manual App is the person's from the start.
+    createStoredAppBuildDraft(root, { name: 'By hand', authoringMode: 'manual', template: 'blank' });
+    expect((await after(history, 'POST', '/api/app-builds'))[0]!.changes[0]).toMatchObject({ name: 'By hand', change: 'created' });
+  });
+
+  it('never gives a new App the id of an App History knows, there or in its trash', async () => {
+    const root = project();
+    const history = await open(root);
+    let gone = createStoredAppBuildDraft(root, { name: 'Points per game', authoringMode: 'manual', template: 'blank' });
+    await after(history, 'POST', '/api/app-builds');
+    gone = edit(root, gone, [{ type: 'add_tile', pageId: gone.pages[0]!.id, tile: tile('t1', 'Points') }]);
+    await after(history, 'PATCH', `/api/app-builds/${gone.id}`);
+    deleteStoredAppBuildDraft(root, gone);
+    await after(history, 'DELETE', `/api/app-builds/${gone.id}`);
+    const key = `apps/${gone.appId}`;
+    expect(history.item(key).versions.map((row) => row.change)).toEqual(['removed', 'edited', 'created']);
+    expect(historyAppIds(root)).toContain(gone.appId);
+
+    // The same name again: the name is the person's, the id is a new one, and the removed App's History is its own.
+    const next = createStoredAppBuildDraft(root, { name: 'Points per game', authoringMode: 'manual', template: 'blank' });
+    expect(next.name).toBe('Points per game');
+    expect(next.appId).toBe(`${gone.appId}-2`);
+    await after(history, 'POST', '/api/app-builds');
+    expect(history.item(key).versions).toHaveLength(3);
+    expect(history.item(`apps/${next.appId}`).versions.map((row) => [row.version, row.change])).toEqual([[1, 'created']]);
+    // Asked for by id, an id History knows is refused.
+    expect(() => createStoredAppBuildDraft(root, { name: 'Other', appId: gone.appId, authoringMode: 'manual', template: 'blank' })).toThrow(/kept in History/);
+    // A plan made now takes a fresh id too, and the removed App still comes back, as a new draft beside the new one.
+    expect(plan(root, 'Points per game').appId).not.toBe(gone.appId);
+    const restored = await history.restore({ item: key, version: 2, user: 'JSMITH' });
+    expect(restored.message).toMatch(/^Restored v2 as a new draft, "Points per game \(\d\)"$/);
+    expect(new Set([gone.appId, next.appId]).has(restored.appDraft!.appId)).toBe(false);
+    expect(history.item(restored.item).versions[0]).toMatchObject({ change: 'restored', detail: 'Restored from v2 of "Points per game", as a draft' });
+
+    // Without History (open source), nothing is held back.
+    history.stop();
+    expect(historyAppIds(root)).toEqual([]);
+  });
+
+  it('keeps a plan History kept before V3 as it is, and still restores it after it is removed', async () => {
+    const root = project();
+    const draft = plan(root);
+    const key = `apps/${draft.appId}`;
+    const real = source(root);
+    // History before V3 kept every draft, plans too.
+    let before = true;
+    const history = await open(root, { apps: { ...real, drafts: () => (before ? new Map([[`${key}/studio-draft.json`, appDraftHistoryText(draft)]]) : real.drafts()) } });
+    expect(history.item(key).versions).toHaveLength(1);
+    before = false;
+    // Now a plan: not listed as removed while it is there.
+    expect(await after(history, 'PATCH', `/api/app-builds/${draft.id}`)).toEqual([]);
+    expect(history.item(key).item.removed).toBe(false);
+    // Deleted, it is removed like any App History keeps, and its version comes back as a draft.
+    deleteStoredAppBuildDraft(root, draft);
+    expect((await after(history, 'DELETE', `/api/app-builds/${draft.id}`))[0]!.changes[0]).toMatchObject({ item: key, change: 'removed' });
+    const restored = await history.restore({ item: key, version: 1, user: 'JSMITH' });
+    expect(loadStoredAppBuildDraft(root, restored.appDraft!.id)).toMatchObject({ authoringMode: 'ai', state: 'local_draft' });
+    expect(history.item(key).versions[0]).toMatchObject({ change: 'restored', current: true });
+  });
+});
+
+describe('App compare in words (V3)', () => {
+  const textTile = (id: string, title: string, markdown: string, y = 0) => ({ i: id, x: 0, y, w: 12, h: 2, title, text: { markdown }, viz: { type: 'text' as const } });
+  const winsTile = { i: 'wins', x: 0, y: 2, w: 6, h: 4, title: 'Wins by season', sourceId: 'app:block:nba:wins', block: { ref: 'blocks/nba/wins.dql' }, viz: { type: 'bar' as const } };
+  const winsSource = { id: 'app:block:nba:wins', kind: 'block' as const, sourceRef: 'blocks/nba/wins_by_season.dql', trustState: 'certified' as const, reviewStatus: 'not_required' as const };
+
+  it('says only a text tile\'s text changed, by the tile\'s title', async () => {
+    const root = project();
+    const history = await open(root);
+    let draft = createStoredAppBuildDraft(root, { name: 'Season review', authoringMode: 'manual', template: 'blank' });
+    await after(history, 'POST', '/api/app-builds');
+    const page = draft.pages[0]!.id;
+    draft = edit(root, draft, [{ type: 'add_tile', pageId: page, tile: textTile('intro', 'Intro', '## Intro\nHow the season went.') }]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    draft = edit(root, draft, [{ type: 'update_tile', pageId: page, tileId: 'intro', patch: { text: { markdown: '## Intro\nHow the 2016 season went.' } } }]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    expect(history.item(`apps/${draft.appId}`).versions[0]).toMatchObject({ version: 3, change: 'edited', detail: 'Text changed in "Intro"' });
+  });
+
+  it('lists what changed in plain words, never the App\'s files', async () => {
+    const root = project();
+    const history = await open(root);
+    let draft = createStoredAppBuildDraft(root, { name: 'Season review', authoringMode: 'manual', template: 'blank' });
+    await after(history, 'POST', '/api/app-builds');
+    const page = draft.pages[0]!.id;
+    draft = edit(root, draft, [
+      { type: 'add_tile', pageId: page, tile: textTile('intro', 'Intro', 'How the season went.') },
+      { type: 'add_tile', pageId: page, tile: textTile('notes', 'Notes', 'Notes.', 6) },
+    ]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    draft = edit(root, draft, [
+      { type: 'set_name', name: 'Warriors season review' },
+      { type: 'update_tile', pageId: page, tileId: 'intro', patch: { text: { markdown: 'How the 2016 season went.' }, w: 6 } },
+      { type: 'remove_tile', pageId: page, tileId: 'notes' },
+      { type: 'add_tile', pageId: page, tile: winsTile },
+      { type: 'upsert_source', source: winsSource },
+    ]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    const key = `apps/${draft.appId}`;
+    const compared = await history.compare(key, 1, 3);
+    expect(compared.app!.changes).toEqual([
+      { kind: 'name', text: 'Name changed from "Season review" to "Warriors season review"' },
+      { kind: 'tile', text: 'Tile added: "Intro"' },
+      { kind: 'tile', text: 'Tile added: "Wins by season"' },
+    ].concat([{ kind: 'data', text: 'Data added: Wins by season' }]));
+    const step = await history.compare(key, 2, 3);
+    expect(step.app!.changes).toEqual([
+      { kind: 'name', text: 'Name changed from "Season review" to "Warriors season review"' },
+      { kind: 'tile', text: 'Tile added: "Wins by season"' },
+      { kind: 'tile', text: 'Tile removed: "Notes"' },
+      { kind: 'text', text: 'Text changed in "Intro"' },
+      { kind: 'layout', text: 'Layout changed: 1 tile moved or resized' },
+      { kind: 'data', text: 'Data added: Wins by season' },
+    ]);
+    // Plain words: no file, path, id or fingerprint.
+    const said = step.app!.changes.map((change) => change.text).join(' ');
+    expect(said).not.toMatch(/studio-draft|\.dql|sha256|app:block|draftId/);
+    // The files stay, for Technical details.
+    expect(step.files.map((file) => [file.path, file.status])).toEqual([[`${key}/studio-draft.json`, 'changed']]);
+  });
+
+  it('compares a published App with its draft by what people see, and names pages', () => {
+    const page = (id: string, title: string, items: unknown[]) => JSON.stringify({ version: 1, id, metadata: { title }, layout: { kind: 'grid', cols: 12, rowHeight: 80, items } });
+    const app = (name: string) => JSON.stringify({ version: 1, id: 'season', name });
+    const before = publishedAppShape(app('Season'), [page('overview', 'Overview', [winsTile])]);
+    const after = publishedAppShape(app('Season'), [
+      page('overview', 'Summary', [{ ...winsTile, viz: { type: 'line' } }]),
+      page('detail', 'Detail', [textTile('n', 'Notes', 'Notes')]),
+    ]);
+    expect(appChanges(before, after)).toEqual([
+      { kind: 'page', text: 'Page added: "Detail" (1 tile)' },
+      { kind: 'page', text: 'Page "Overview" renamed to "Summary"' },
+      { kind: 'tile', text: '"Wins by season": chart changed on "Summary"' },
+    ]);
+    expect(appChanges(before, before)).toEqual([]);
+    // The same App opened for edit names its data by catalog id, not by path: no data change for that.
+    const draft = appDraftShape({
+      kind: 'zlens-app-studio-draft', format: 1, draftId: 'd1', appId: 'season', name: 'Season', authoringMode: 'manual', template: 'blank',
+      frame: { goal: 'Season', audience: 'stakeholders', metrics: [], dimensions: [], filters: [], desiredOutput: '', clarificationQuestions: [] },
+      requirements: [], coverage: [], reviewTasks: [], sources: [winsSource],
+      pages: [JSON.parse(page('overview', 'Overview', [{ ...winsTile, sourceRevision: 'sha256:abc' }]))],
+    });
+    expect(appChanges(before, draft)).toEqual([]);
+  });
+});
+
 describe('readable names and kinds', () => {
   it('names model, domain and semantic files for people, and starts with "History starts here" for mixed items', async () => {
     const root = project();
@@ -370,7 +577,8 @@ describe('readable names and kinds', () => {
       'domains/tpch/domain.dql': ['Domain: TPC-H', 'model'],
       'domains/tpch/modeling/areas/core.dql.yaml': ['Model: TPC-H core', 'model'],
       'domains/tpch/modeling/model.dql.yaml': ['Model: TPC-H', 'model'],
-      'notebooks/welcome.dqlnb': ['workspace - ZLens Workbench', 'notebook'],
+      // The welcome notebook ZLens writes is named by its file, not "workspace - ZLens Workbench" (V3).
+      'notebooks/welcome.dqlnb': ['Welcome', 'notebook'],
       'semantic-layer/metrics/revenue.yaml': ['Metric: revenue', 'semantic'],
     });
     expect(readableFileLabel('domains/tpch/modeling/areas/core.dql.yaml')).toBe('Model: Tpch core');

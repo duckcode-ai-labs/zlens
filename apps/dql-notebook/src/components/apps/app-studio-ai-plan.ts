@@ -23,9 +23,21 @@ export interface AppStudioAiPlanSummary {
 
 export type AppStudioProposalSourceAddMode = 'select_existing' | 'enable_review_and_replan' | 'replan';
 
+/** An AI provider as people know it, never its setting id ("cortex" is Snowflake Cortex). */
+const PLANNER_NAMES: Record<string, string> = {
+  cortex: 'Snowflake Cortex',
+  anthropic: 'Claude',
+  'claude-code': 'Claude',
+  openai: 'OpenAI',
+  codex: 'OpenAI',
+  gemini: 'Google Gemini',
+  ollama: 'Ollama',
+};
+
 /**
  * Render only server-issued direct-planner provenance. In particular, never
- * turn a configured provider setting into a claim that the planner ran.
+ * turn a configured provider setting into a claim that the planner ran. Said
+ * in words (V3: "AI planner response · cortex"): "Planned with Snowflake Cortex".
  */
 export function appStudioPlannerProvenanceLabel(
   proposal: Pick<AppStudioAiProposal, 'plannerProvenance'>,
@@ -33,9 +45,8 @@ export function appStudioPlannerProvenanceLabel(
   const provenance = proposal.plannerProvenance;
   if (!provenance) return undefined;
   if (provenance.mode === 'ai' && provenance.providerInvocation === 'succeeded') {
-    return provenance.providerId
-      ? `AI planner response · ${provenance.providerId}`
-      : 'AI planner response';
+    const name = provenance.providerId ? PLANNER_NAMES[provenance.providerId.toLowerCase()] : undefined;
+    return name ? `Planned with ${name}` : 'Planned with AI';
   }
   if (provenance.mode === 'deterministic' && provenance.providerInvocation === 'not_attempted') {
     // The built-in keyword matcher, never called AI (design D4).

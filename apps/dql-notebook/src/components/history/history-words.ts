@@ -87,6 +87,10 @@ export function initials(name: string): string {
 export function actionLabel(entry: Pick<HistoryFeedEntry, 'change' | 'action' | 'by' | 'count'>): string {
   switch (entry.change) {
     case 'started': return 'History starts here:';
+    case 'created':
+      // What ZLens found when it started was not made then: it started keeping its versions (V3: "ZLens created 5 apps").
+      if (entry.action === 'found' && entry.by.kind === 'zlens') return 'started keeping versions of';
+      return entry.by.kind === 'ai' ? 'drafted' : 'created';
     case 'removed':
       if (entry.action === 'clear-drafts') return 'cleared';
       if (entry.action === 'upgrade') return 'moved to the trash:';
@@ -94,7 +98,6 @@ export function actionLabel(entry: Pick<HistoryFeedEntry, 'change' | 'action' | 
       return 'removed';
     case 'published': return 'published';
     case 'drafted': return 'drafted';
-    case 'created': return entry.by.kind === 'ai' ? 'drafted' : 'created';
     case 'edited': return 'edited';
     case 'renamed': return 'renamed';
     case 'certified': return 'certified';
@@ -109,7 +112,10 @@ export function itemLabel(entry: Pick<HistoryFeedEntry, 'items' | 'count' | 'kin
   if (entry.count === 1) return entry.items[0]?.name ?? '';
   if (entry.action === 'clear-drafts') return `${entry.count} automatic Ask drafts`;
   const kinds = new Set(entry.items.map((item) => item.kind));
-  return kinds.size <= 1 ? `${entry.count} ${kindLabel(entry.kind, entry.count).toLowerCase()}` : `${entry.count} items`;
+  if (kinds.size > 1) return `${entry.count} items`;
+  // "13 Apps" keeps its capital, as everywhere; "4 saved queries".
+  const words = kindLabel(entry.kind, entry.count);
+  return `${entry.count} ${entry.kind === 'app' ? words : words.toLowerCase()}`;
 }
 
 /** What a group of items holds, kind by kind: "2 saved queries, 1 App, 3 model files". */

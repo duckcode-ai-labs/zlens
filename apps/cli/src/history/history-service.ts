@@ -9,7 +9,8 @@ import { AI_ASK_NAME, ZLENS_AUTHOR, type HistoryAction, type HistoryAuthor, type
 import { changedLineCount, diffLines, type DiffLine } from './line-diff.js';
 import { asDraftSource, compareSavedQueryFields, isCertifiedVersion, readSavedQueryFields, receiptSummary, type FieldChange } from './saved-query-fields.js';
 import { APP_STUDIO_DRAFT_FILE, appKeyOf, besideSuffix, besideSuffixOf, isAppStudioDraftPath, isDraftPath, isTrackedItemKey, isTrackedPath, listTrackedFiles, type HistoryItemKind } from './tracked-files.js';
-import { appDraftShape, parseAppDraftHistoryText, publishedAppShape, sameAsPublished } from './app-drafts.js';
+import { appChanges, appDraftShape, appVersionShape, parseAppDraftHistoryText, publishedAppShape, sameAsPublished, type AppChange } from './app-drafts.js';
+import { registerHistoryAppIds } from './known-app-ids.js';
 
 /**
  * VERSION HISTORY IN THE ZLENS APP FOR SNOWFLAKE (V15, decisions H1–H10).
@@ -33,13 +34,20 @@ const encoder = new TextEncoder();
 const TRASH_STATE = 'zlens-trash.json';
 
 /**
+ * Each App's live App Studio draft History keeps (`apps/<id>/studio-draft.json` → its text), and, in `unkept`, the
+ * paths of live drafts it keeps no version of (V3): a Describe with AI draft nobody has built or changed yet. Such a
+ * draft is a plan, not an App: it makes no line in History, and leaving it leaves none either.
+ */
+export type HistoryAppDrafts = Map<string, string> & { unkept?: ReadonlySet<string> };
+
+/**
  * Apps as App Studio keeps them (V2). An App is a draft in ZLens's local store until it is published, so History
  * reads each App's live draft from there (`apps/<id>/studio-draft.json`, kept in History's repository only), and
  * restores an App version as an App Studio draft, never as a published App.
  */
 export interface HistoryAppSource {
   /** Each App's live App Studio draft, as History keeps it: `apps/<id>/studio-draft.json` → its text. */
-  drafts(): Map<string, string>;
+  drafts(): HistoryAppDrafts;
   /**
    * Writes an App version back as an App Studio draft, never publishing. For an App that is there (`asNew` false):
    * into its live draft, else a new draft editing its published App. For a removed App (`asNew` true): always a new
@@ -101,6 +109,8 @@ export interface HistoryFeedItem {
   certified: boolean;
   removed: boolean;
   isCurrentVersion: boolean;
+  /** In a line that stands for several items found in the trash: why and when this one went there. */
+  detail?: string;
 }
 
 export interface HistoryFeedEntry {
@@ -161,6 +171,8 @@ export interface HistoryCompareResult {
   to: HistoryVersionCard;
   sql?: { lines: DiffLine[]; changed: number };
   fields?: FieldChange[];
+  /** An App: what changed, in plain words (its name, pages, tiles, text, layout and data), in reading order. */
+  app?: { changes: AppChange[] };
   files: Array<{ path: string; status: 'added' | 'removed' | 'changed' | 'same'; lines: DiffLine[]; changed: number }>;
 }
 
@@ -259,6 +271,8 @@ export class HistoryService {
       const { created } = await this.store.open();
       await this.index.load();
       this.started = true;
+      // A new App never takes the id of an App History knows (V3).
+      registerHistoryAppIds(this.root, this.knownAppIds);
       const commits = created || !(await this.store.head())
         ? await this.commitNow(ZLENS_AUTHOR, 'start', STARTED, { allowEmpty: true })
         : await this.commitNow(ZLENS_AUTHOR, 'found', 'Changes found when ZLens started');
@@ -322,12 +336,16 @@ export class HistoryService {
   stop(): void {
     if (this.sweepTimer) clearTimeout(this.sweepTimer);
     if (this.sqlFlushTimer) clearTimeout(this.sqlFlushTimer);
+    registerHistoryAppIds(this.root, null, this.knownAppIds);
   }
+
+  /** The id of every App History has kept, there now or removed. */
+  private readonly knownAppIds = (): string[] => this.index.appIds();
 
   // ── Finding changes and committing them ──────────────────────────────────────────────────────────────────────
 
   /** Each App's live App Studio draft (V2); null when the store could not be read (then nothing counts as removed). */
-  private appDrafts(): Map<string, string> | null {
+  private appDrafts(): HistoryAppDrafts | null {
     if (!this.options.apps) return new Map();
     try {
       return this.options.apps.drafts();
@@ -371,8 +389,9 @@ export class HistoryService {
     for (const path of head.keys()) {
       if (only && !only(path)) continue;
       if (isAppStudioDraftPath(path)) {
-        // A draft is gone when the store no longer has it; when the store could not be read, nothing is gone.
-        if (drafts && !drafts.has(path)) changes.push({ path, content: null });
+        // A draft is gone when the store no longer has it; when the store could not be read, nothing is gone. A plan
+        // History kept before V3 is still there while it is a plan: no change until it is built or removed.
+        if (drafts && !drafts.has(path) && !drafts.unkept?.has(path)) changes.push({ path, content: null });
         continue;
       }
       if (!listed.has(path)) {
@@ -555,9 +574,10 @@ export class HistoryService {
         all.push(entry);
       }
     }
+    const lines = groupFoundInTrash(all);
     const offset = Math.max(0, filters.offset ?? 0);
     const limit = Math.min(Math.max(1, filters.limit ?? 200), 1000);
-    return { entries: all.slice(offset, offset + limit), total: all.length, people: [...people].sort() };
+    return { entries: lines.slice(offset, offset + limit), total: lines.length, people: [...people].sort() };
   }
 
   private entriesFor(commit: IndexedCommit): HistoryFeedEntry[] {
@@ -729,6 +749,11 @@ export class HistoryService {
         lines,
         changed: changedLineCount(lines),
       });
+    }
+    if (to.change.kind === 'app') {
+      // In words first; the files stay for Technical details.
+      const shapeOf = (version: ItemVersion, files: Array<{ path: string; content: string }>) => appVersionShape(new Map(files.map((file) => [file.path.slice(version.change.item.length + 1), file.content])));
+      result.app = { changes: appChanges(shapeOf(from, fromFiles), shapeOf(to, toFiles)) };
     }
     if (to.change.kind === 'saved_query') {
       const aSource = fromByRole.get(':main')?.content ?? null;
@@ -1014,6 +1039,35 @@ export class HistoryService {
       })).reverse(),
     };
   }
+}
+
+/**
+ * Apps found in the trash when History started (one line each, kept one after another) are one line that opens:
+ * "ZLens found in the trash: 13 Apps", each still restorable, with why it went there (V3: 13 lines filled the top).
+ */
+export function groupFoundInTrash(entries: HistoryFeedEntry[]): HistoryFeedEntry[] {
+  const out: HistoryFeedEntry[] = [];
+  const found = (entry: HistoryFeedEntry | undefined) => entry?.action === 'trash' && entry.change === 'removed';
+  for (const entry of entries) {
+    const last = out.at(-1);
+    if (!found(entry) || !found(last) || last!.at.slice(0, 10) !== entry.at.slice(0, 10)) {
+      out.push(entry);
+      continue;
+    }
+    const itemsOf = (line: HistoryFeedEntry) => line.items.map((item) => (line.count === 1 && line.detail && !item.detail ? { ...item, detail: line.detail } : item));
+    const items = [...itemsOf(last!), ...itemsOf(entry)];
+    const { version: _version, ...rest } = last!;
+    out[out.length - 1] = {
+      ...rest,
+      id: last!.id.startsWith('trash:') ? last!.id : `trash:${last!.id}`,
+      items,
+      count: items.length,
+      detail: 'Each can be restored from History',
+      canCompare: false,
+      canRestore: last!.canRestore || entry.canRestore,
+    };
+  }
+  return out;
 }
 
 /** The file holding a saved query version's source: its draft edit, when it was one. */

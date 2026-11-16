@@ -139,3 +139,28 @@ export function studioErrorWords(raw: string): StudioErrorWords {
   }
   return { message: text };
 }
+
+/**
+ * What Delete draft does, said truly (V3: it promised a "recovery bundle" and "local history"). With History (the
+ * app for Snowflake) an App comes back from History later too; a Describe with AI plan nobody built is not kept
+ * there, so only Undo is promised for it. Said after the App's name: "Sales leaves the App list. …".
+ */
+export function deleteDraftWords(input: { history: boolean; builtApp: boolean }): string {
+  return input.history && input.builtApp
+    ? 'leaves the App list. You can Undo right away, or restore it later from History.'
+    : 'leaves the App list. You can Undo right away.';
+}
+
+/** The note after an App or draft was deleted, after its name and before Undo (V3: "moved to local recovery"). */
+export const DELETED_NOTE = 'removed.';
+
+/** Deleting a published App (Type its name to confirm), said truly for where it runs. */
+export function deleteAppWords(input: { history: boolean }): string {
+  return input.history
+    ? 'It leaves the App list for everyone. You can Undo right away, or restore it later from History as a draft.'
+    : 'Its files leave the project and go to ZLens’s trash, so you can Undo right away. Source control shows them as deleted.';
+}
+
+/** The App view's share button: it copies a link to this App, with its name and page, to send to someone. */
+export const COPY_APP_LINK = 'Copy a link to this App';
+export const APP_LINK_COPIED = 'Link copied';
