@@ -216,6 +216,26 @@ describe('every save is a version', () => {
     expect(history.blockHistory('blocks/_drafts/raptors_wins_2018.dql').entries[0]!.author).toBe('AI (Ask) for JSMITH');
   });
 
+  it('says a question asked again was asked again, never "Settings changed"', async () => {
+    const root = project();
+    const history = await open(root);
+    const { utimesSync } = await import('node:fs');
+    const path = 'blocks/_drafts/warriors_wins.dql';
+    const q = '"'.repeat(3);
+    const draft = (times: number, at: string, sql = 'SELECT 1') => `block "warriors_wins" {\n  status = "draft"\n  source_question = "How many games did the Warriors win?"\n  answer_fingerprint = "abc"\n  asked_times = ${times}\n  last_asked = "${at}"\n  query = ${q}${sql}${q}\n}\n`;
+    const ask = async (times: number, at: string, sql?: string) => {
+      put(root, path, draft(times, at, sql));
+      utimesSync(join(root, path), new Date(at), new Date(at));
+      return save(history, 'TEST_ADMIN', '/api/agent-runs');
+    };
+    expect((await ask(1, '2026-11-14T18:10:00.000Z'))[0]!.changes[0]).toMatchObject({ change: 'drafted' });
+    const again = await ask(2, '2026-11-14T18:12:00.000Z');
+    expect(again[0]).toMatchObject({ author: { name: 'AI (Ask)', kind: 'ai', askedBy: 'TEST_ADMIN' }, changes: [expect.objectContaining({ change: 'edited', detail: 'Asked again: "How many games did the Warriors win?"' })] });
+    // Asked again with a different answer: it says what changed too.
+    const changed = await ask(3, '2026-11-14T18:14:00.000Z', 'SELECT 2');
+    expect(changed[0]!.changes[0]!.detail).toBe('Asked again: "How many games did the Warriors win?". SQL changed');
+  });
+
   it('keeps an AI draft out of "By <person>" even when that person has no saves of their own', async () => {
     const root = project();
     const history = await open(root, { sqlLog: { appName: 'ZLENS_APP', warehouse: () => 'WH', query: async () => [] } });

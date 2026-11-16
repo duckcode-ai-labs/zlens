@@ -189,7 +189,7 @@ describe('AI Data step with keyword suggestions', () => {
   });
 
   it('keeps "AI picked" when an AI made the plan', () => {
-    const markup = render(aiProps(AI_PROPOSAL, { voice: 'ai', plannerLabel: 'AI planner response · anthropic' }));
+    const markup = render(aiProps(AI_PROPOSAL, { voice: 'ai', plannerLabel: 'Planned with Claude' }));
     expect(markup).toContain('AI picked 2 sources');
     expect(markup).not.toContain(KEYWORD_SUGGESTIONS_LABEL);
   });

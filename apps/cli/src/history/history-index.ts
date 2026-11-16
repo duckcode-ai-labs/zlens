@@ -46,10 +46,11 @@ export interface IndexedCommit {
 }
 
 /**
- * The saved index's format. 2 (V2): App Studio drafts are Apps' versions, and items have readable names; an index
- * saved in an older format is rebuilt from the commits on the next start, so names already shown change too.
+ * The saved index's format. 2 (V2): App Studio drafts are Apps' versions, and items have readable names. 3 (V3): an
+ * App's text edit, a repeated Ask question and the welcome notebook are said in plain words. An index saved in an
+ * older format is rebuilt from the commits on the next start, so what is already shown changes too.
  */
-const INDEX_FORMAT = 2;
+const INDEX_FORMAT = 3;
 
 interface IndexFile {
   format: typeof INDEX_FORMAT;
@@ -113,6 +114,7 @@ export class HistoryIndex {
 
   /** Rebuilds the whole index from the repository. */
   async rebuild(): Promise<void> {
+    this.appIdCache = undefined;
     this.commits = [];
     this.head = null;
     this.byItem.clear();
@@ -126,6 +128,7 @@ export class HistoryIndex {
 
   /** Re-derives the lookups from `commits` (after loading the saved index). */
   private rederive(): void {
+    this.appIdCache = undefined;
     this.byItem.clear();
     this.movedTo.clear();
     this.commits.forEach((commit, commitIndex) => commit.changes.forEach((change, changeIndex) => this.link(change, commitIndex, changeIndex)));
@@ -297,6 +300,9 @@ export class HistoryIndex {
         detail = certified ? 'Draft edit discarded: the certified version is current' : 'Draft edit removed';
       } else if (kind === 'certified') {
         detail = receiptSummary(now?.companion ?? null).oldReport ?? undefined;
+      } else if (kind === 'edited' && commit.author.kind === 'ai' && old && now) {
+        // The same question asked again rewrites its automatic draft: that is what happened, not "Settings changed".
+        detail = askedAgainWords(old.fields, now.fields);
       } else if (kind === 'drafted' || (kind === 'created' && commit.author.kind === 'ai')) {
         detail = now?.fields.sourceQuestion ? `From Ask: "${now.fields.sourceQuestion}"` : 'From Ask';
       } else if (kind === 'renamed') {
@@ -446,7 +452,8 @@ export class HistoryIndex {
     try {
       const parsed = JSON.parse(text) as { title?: unknown; name?: unknown; metadata?: { title?: unknown } };
       const title = [parsed.title, parsed.name, parsed.metadata?.title].find((value) => typeof value === 'string' && value.trim());
-      return typeof title === 'string' ? title.trim() : undefined;
+      if (typeof title !== 'string') return undefined;
+      return ref.kind === 'notebook' ? notebookName(title.trim(), ref.key) : title.trim();
     } catch {
       return undefined;
     }
@@ -482,6 +489,22 @@ export class HistoryIndex {
   headFiles(): Map<string, string> {
     return new Map(this.files);
   }
+
+  private appIdCache: { commits: number; ids: string[] } | undefined;
+
+  /** The id of every App History has kept, there now or removed, under every key it had (V3). */
+  appIds(): string[] {
+    if (this.appIdCache?.commits === this.commits.length) return this.appIdCache.ids;
+    const ids = new Set<string>();
+    for (const commit of this.commits) {
+      for (const change of commit.changes) {
+        if (change.kind !== 'app') continue;
+        for (const key of [change.item, change.from]) if (key) ids.add(key.split('/').pop()!);
+      }
+    }
+    this.appIdCache = { commits: this.commits.length, ids: [...ids] };
+    return this.appIdCache.ids;
+  }
 }
 
 /** The name a saved query keeps: a draft edit's copy is named `<name> (draft edit)`. */
@@ -503,6 +526,23 @@ function savedQueryEditWords(before: SavedQueryFields | null, after: SavedQueryF
   if (!parts.length) return status || 'Settings changed';
   const words = `${parts[0]![0]!.toUpperCase()}${parts[0]!.slice(1)}${parts.length > 1 ? `, ${parts.slice(1).join(', ')}` : ''} changed`;
   return [words, after.status === 'draft' && before.status === 'certified' ? 'Not certified yet' : status].filter(Boolean).join('. ');
+}
+
+/**
+ * A notebook as History names it: its title. The welcome notebook ZLens writes is titled "<folder> - ZLens
+ * Workbench" ("workspace - ZLens Workbench" in the app for Snowflake): it is named by its file, "Welcome".
+ */
+export function notebookName(title: string, path: string): string {
+  if (!/\s[-–—]\s*ZLens Workbench$/i.test(title)) return title;
+  const stem = path.split('/').pop()!.replace(/\.dqlnb$/i, '');
+  return humanizeName(stem) || title;
+}
+
+/** An automatic Ask draft written again: the question was asked again (and what that changed, when anything did). */
+function askedAgainWords(before: SavedQueryFields, after: SavedQueryFields): string {
+  const asked = after.sourceQuestion ? `Asked again: "${after.sourceQuestion}"` : 'Asked again';
+  const words = savedQueryEditWords(before, after);
+  return words && words !== 'Settings changed' ? `${asked}. ${words}` : asked;
 }
 
 function removedWords(commit: StoredCommit): string | undefined {

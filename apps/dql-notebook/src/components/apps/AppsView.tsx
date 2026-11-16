@@ -97,7 +97,7 @@ import {
 } from './dashboard-filters';
 import { semanticApprovalState } from './app-semantic-approval';
 import { relativeAge } from './reader-trust';
-import { NOT_PUBLISHED_YET, NOT_PUBLISHED_YET_ONLY_YOU, UNPUBLISHED_CHANGES } from './app-studio-words';
+import { APP_LINK_COPIED, COPY_APP_LINK, DELETED_NOTE, NOT_PUBLISHED_YET, NOT_PUBLISHED_YET_ONLY_YOU, UNPUBLISHED_CHANGES, deleteAppWords } from './app-studio-words';
 import { draftCardTrustText } from './app-studio-publish-readiness';
 import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrustAcrossPages, unpublishedChangesText, type AppRunTrust } from './app-certification';
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
@@ -1186,9 +1186,9 @@ export function AppsView(): JSX.Element {
       )}
       {deleteUndo ? (
         <div className="dql-app-delete-undo" role="status">
-          <span><strong>{deleteUndo.appName}</strong> moved to local recovery.</span>
+          <span><strong>{deleteUndo.appName}</strong> {DELETED_NOTE}</span>
           <button type="button" onClick={() => void restoreDeletedApp()}>Undo</button>
-          <button type="button" aria-label="Dismiss delete recovery message" onClick={() => setDeleteUndo(null)}>×</button>
+          <button type="button" aria-label="Dismiss" onClick={() => setDeleteUndo(null)}>×</button>
         </div>
       ) : null}
     </div>
@@ -1592,6 +1592,7 @@ function DeleteAppDialog({
 }) {
   const [confirmation, setConfirmation] = useState('');
   const confirmed = confirmation.trim() === app.name;
+  const historyKept = useSnowflakeApp();
   return (
     <div
       className="dql-app-delete-backdrop"
@@ -1603,7 +1604,7 @@ function DeleteAppDialog({
           <span className="dql-app-delete-icon"><Trash2 size={16} /></span>
           <div>
             <h2 id="delete-app-title">Delete {app.name}?</h2>
-            <p>Its project files and App-scoped local context move to recoverable local trash. Source control will show the canonical project files as deleted.</p>
+            <p>{deleteAppWords({ history: historyKept })}</p>
           </div>
         </div>
         <label className="dql-app-delete-confirm">
@@ -2195,7 +2196,7 @@ function AppWorkspaceSurface({
             <AppHistoryButton appId={workspaceAppId} className="dql-apps-btn dql-apps-btn-line dql-apps-btn-icon" onOpen={(path) => openHistory(dispatch, { page: 'item', path })} />
           )}
           {readerOnly ? null : (
-            <button type="button" className="dql-apps-btn dql-apps-btn-line dql-apps-btn-icon" title={shareStatus === 'copied' ? 'Copied handoff' : 'Share local app handoff'} onClick={() => void copyShareLink()}>
+            <button type="button" className="dql-apps-btn dql-apps-btn-line dql-apps-btn-icon" title={shareStatus === 'copied' ? APP_LINK_COPIED : COPY_APP_LINK} aria-label={COPY_APP_LINK} onClick={() => void copyShareLink()}>
               {shareStatus === 'copied' ? <Check size={15} /> : <Share2 size={15} />}
             </button>
           )}
@@ -2204,7 +2205,7 @@ function AppWorkspaceSurface({
           </button>
           {shareStatus === 'ready' ? (
             <div className="dql-app-share-popover">
-              <b>Local handoff</b>
+              <b>Link to this App</b>
               <textarea readOnly value={shareText} onFocus={(event) => event.currentTarget.select()} />
             </div>
           ) : null}

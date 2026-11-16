@@ -73,7 +73,8 @@ describe('the words', () => {
     expect(actionLabel({ ...base, by: { name: 'ZLens', kind: 'zlens' }, change: 'removed', action: 'upgrade' })).toBe('moved to the trash:');
     expect(actionLabel({ ...base, by: { name: 'ZLens', kind: 'zlens' }, change: 'removed', action: 'trash' })).toBe('found in the trash:');
     expect(actionLabel({ ...base, count: 1, change: 'published', action: 'save' })).toBe('published');
-    expect(itemLabel({ items: [], count: 5, kind: 'app', action: 'upgrade' })).toBe('5 apps');
+    expect(itemLabel({ items: [], count: 5, kind: 'app', action: 'upgrade' })).toBe('5 Apps');
+    expect(itemLabel({ items: [], count: 4, kind: 'saved_query', action: 'upgrade' })).toBe('4 saved queries');
     expect(actionLabel({ ...base, count: 1, change: 'created', action: 'ask', by: { name: 'AI (Ask)', kind: 'ai' } })).toBe('drafted');
     expect(restorableVersion({ change: 'removed', version: 4 })).toBe(3);
     expect(restorableVersion({ change: 'edited', version: 2 })).toBe(2);
@@ -301,6 +302,84 @@ describe('V2: one AI label, the first line, and readable kinds', () => {
     expect(html).not.toContain('is an edit of certified');
     expect(restoredNotice('Restored v1 as v3')).toBe('Restored v1 as v3, as a draft.');
     expect(restoredNotice('Restored v1 as a new draft, "Sales (2)"', 'Sales')).toBe('Sales: Restored v1 as a new draft, "Sales (2)".');
+  });
+});
+
+describe('V3: History in plain words', () => {
+  const app = (key: string, name: string, extra: Partial<HistoryFeedEntry['items'][number]> = {}) => ({ key, current: key, name, kind: 'app' as const, version: 2, certified: false, removed: true, isCurrentVersion: true, ...extra });
+
+  it('says ZLens started keeping versions of what it found, never that it created it', () => {
+    const zlens = { name: 'ZLens', kind: 'zlens' as const };
+    expect(actionLabel({ by: zlens, count: 5, change: 'created', action: 'found' })).toBe('started keeping versions of');
+    expect(actionLabel({ by: { name: 'TEST_ADMIN', kind: 'person' }, count: 1, change: 'created', action: 'save' })).toBe('created');
+    const found: HistoryFeedEntry = {
+      id: 'f', commit: 'f', at: new Date(2026, 10, 14, 9).toISOString(), by: zlens, action: 'found', change: 'created', kind: 'app',
+      items: [1, 2, 3, 4, 5].map((n) => app(`apps/a${n}`, `App ${n}`, { version: 1, removed: false })), count: 5, certified: false, canCompare: false, canRestore: false,
+    };
+    const html = renderToStaticMarkup(<ChangeLine entry={found} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(html).toContain('started keeping versions of');
+    expect(html).toContain('5 Apps');
+    expect(html).not.toMatch(/<\/strong> created/);
+  });
+
+  it('shows what was found in the trash as one line that opens, each item restorable with its reason', () => {
+    const trash: HistoryFeedEntry = {
+      id: 'trash:t1', commit: 't1', at: new Date(2026, 10, 14, 9).toISOString(), by: { name: 'ZLens', kind: 'zlens' }, action: 'trash', change: 'removed', kind: 'app',
+      items: [app('apps/a', 'Points per game', { detail: 'Deleted on 2026-11-10, before History kept App drafts. It can be restored from History' }), app('apps/b', 'Wins (3)', { detail: 'An empty copy of another App, moved to the trash on 2026-11-12. It can be restored from History' })],
+      count: 2, certified: false, detail: 'Each can be restored from History', canCompare: false, canRestore: true,
+    };
+    const closed = renderToStaticMarkup(<ChangeLine entry={trash} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(closed).toContain('found in the trash:');
+    expect(closed).toContain('2 Apps');
+    expect(closed).toContain('Each can be restored from History');
+    expect(closed).not.toContain('Points per game');
+    const open = renderToStaticMarkup(<ChangeLine entry={trash} first t={t} expanded onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(open).toContain('Points per game');
+    expect(open).toContain('Deleted on 2026-11-10, before History kept App drafts');
+    expect(open.match(/> Restore</g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+  });
+
+  it('compares an App in words, with its files under Technical details, closed', () => {
+    const appItem: HistoryItem = {
+      item: { key: 'apps/warriors-wins', kind: 'app', name: 'Warriors Wins By Season', removed: false, currentVersion: 3 },
+      banner: null,
+      versions: [{ version: 1, commit: 'a', path: 'apps/warriors-wins', at: new Date(2026, 10, 14, 18, 13).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, change: 'created', state: 'saved', current: false, canRestore: true }],
+    };
+    const appCompare: HistoryCompare = {
+      item: appItem.item,
+      from: { version: 1, commit: 'a', path: 'apps/warriors-wins', at: new Date(2026, 10, 14, 18, 13).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, state: 'saved' },
+      to: { version: 3, commit: 'c', path: 'apps/warriors-wins', at: new Date(2026, 10, 14, 18, 20).toISOString(), by: { name: 'TEST_ADMIN', kind: 'person' }, state: 'saved' },
+      app: { changes: [
+        { kind: 'tile', text: 'Tile added: "Points per game"' },
+        { kind: 'text', text: 'Text changed in "Intro"' },
+        { kind: 'layout', text: 'Layout changed: 2 tiles moved or resized' },
+      ] },
+      files: [{ path: 'apps/warriors-wins/studio-draft.json', status: 'changed', changed: 1, lines: [{ kind: 'added', text: '  "sourceRef": "blocks/nba/ppg.dql", "sha256": "abc"', newNumber: 180 }] }],
+    };
+    const html = renderToStaticMarkup(<CompareView compare={appCompare} item={appItem} run={null} from={1} to={3} t={t} onRestore={noop} onRunBoth={noop} onBack={noop} />);
+    expect(html).toContain('Restore v1 as v4');
+    expect(html).toContain('3 changes');
+    expect(html).toContain('aria-label="What changed"');
+    expect(html).toContain('Tile added: &quot;Points per game&quot;');
+    expect(html).toContain('Text changed in &quot;Intro&quot;');
+    expect(html).toContain('data-app-change="layout"');
+    expect(html).not.toContain('file changed');
+    // The files are there, closed, under Technical details: nothing of them before it.
+    expect(html).toMatch(/<details data-technical-details[^>]*><summary[^>]*>Technical details<\/summary>/);
+    expect(html).not.toMatch(/<details[^>]* open/);
+    expect(html.indexOf('studio-draft.json')).toBeGreaterThan(html.indexOf('Technical details'));
+    expect(html.indexOf('Restore v1 as v4')).toBeLessThan(html.indexOf('aria-label="What changed"'));
+    // Nothing wider than the page: the column shrinks, long lines scroll inside their own box.
+    expect(html).toMatch(/^<div style="display:flex;flex-direction:column;gap:16px;min-width:0;max-width:100%/);
+    const same = renderToStaticMarkup(<CompareView compare={{ ...appCompare, app: { changes: [] }, files: [] }} item={appItem} run={null} from={1} to={3} t={t} onRestore={noop} onRunBoth={noop} onBack={noop} />);
+    expect(same).toContain('v1 and v3 have the same name, pages, tiles and data.');
+    expect(same).not.toContain('Technical details');
+  });
+
+  it('keeps the History pages to the page\'s width (one column that shrinks)', () => {
+    const page = readFileSync(fileURLToPath(new URL('./HistoryPage.tsx', import.meta.url)), 'utf8');
+    expect(page.match(/display: 'grid', gridTemplateColumns: 'minmax\(0, 1fr\)', gap: 14/g)).toHaveLength(2);
+    expect(page).not.toMatch(/display: 'grid', gap: 14 \}/);
   });
 });
 

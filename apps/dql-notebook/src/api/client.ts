@@ -8697,10 +8697,15 @@ export const api = {
     });
   },
 
-  async deleteAppBuild(id: string, expectedRevision: number, proposalHash: string): Promise<{ ok: true; id: string; recoveryId: string }> {
+  /**
+   * Deletes an App Studio draft to the trash (Undo brings it back). `discard`: leaving a Describe with AI plan nobody
+   * built or changed, which then goes with no trash entry and no line in History; a draft with anything in it is
+   * deleted to the trash as usual (`recoveryId` is then set).
+   */
+  async deleteAppBuild(id: string, expectedRevision: number, proposalHash: string, options: { discard?: boolean } = {}): Promise<{ ok: true; id: string; recoveryId: string | null; discarded?: true }> {
     return request(`/api/app-builds/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      body: JSON.stringify({ expectedRevision, proposalHash }),
+      body: JSON.stringify({ expectedRevision, proposalHash, ...(options.discard ? { discard: true } : {}) }),
     });
   },
 

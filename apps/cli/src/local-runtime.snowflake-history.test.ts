@@ -184,6 +184,33 @@ describe('Apps in History (V2)', () => {
     expect(item.versions[0]).toMatchObject({ version: 7, change: 'restored', by: { name: 'JSMITH' }, current: true });
   });
 
+  it('V3: leaving a Describe with AI plan nobody built leaves no History line and no trash; a new App never takes a removed App\'s id', async () => {
+    const projectRoot = project();
+    const { call } = await start(projectRoot, true);
+    // "Generate editable App", then Back to Apps.
+    const created = await call('POST', '/api/app-builds', { goal: 'How did the Warriors do in each season', authoringMode: 'ai', template: 'operational_dashboard' });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const plan = created.body.draft;
+    const left = await call('DELETE', `/api/app-builds/${plan.id}`, { expectedRevision: plan.revision, proposalHash: plan.proposalHash, discard: true });
+    expect(left.body).toMatchObject({ ok: true, discarded: true, recoveryId: null });
+    await new Promise((done) => setTimeout(done, 100));
+    expect((await call('GET', '/api/history/changes?kind=app')).body.entries).toEqual([]);
+    expect(existsSync(join(projectRoot, '.dql', 'local', 'trash', 'app-drafts'))).toBe(false);
+
+    // An App someone made, then deleted: in History's trash. Discard never applies to it.
+    const made = await call('POST', '/api/app-builds', { name: 'Points per game', authoringMode: 'manual', template: 'blank' });
+    const kept = made.body.draft;
+    await versionsOf(call, `apps/${kept.appId}`, 1);
+    const deleted = await call('DELETE', `/api/app-builds/${kept.id}`, { expectedRevision: kept.revision, proposalHash: kept.proposalHash, discard: true });
+    expect(deleted.body.recoveryId).toEqual(expect.any(String));
+    await versionsOf(call, `apps/${kept.appId}`, 2);
+    // A new App with the same name keeps the name, and gets an id of its own.
+    const again = await call('POST', '/api/app-builds', { name: 'Points per game', authoringMode: 'manual', template: 'blank' });
+    expect(again.body.draft).toMatchObject({ name: 'Points per game', appId: `${kept.appId}-2` });
+    await versionsOf(call, `apps/${kept.appId}-2`, 1);
+    expect((await call('GET', `/api/history/item?path=${encodeURIComponent(`apps/${kept.appId}`)}`)).body.versions).toHaveLength(2);
+  });
+
   it('makes no version for opening a published App for edit; changing a tile is one version by the signed-in user', async () => {
     const projectRoot = project();
     // A published App with one tile.
@@ -211,25 +238,24 @@ describe('Apps in History (V2)', () => {
     draft = changed.body.draft;
     const item = await versionsOf(call, key, 2);
     expect(item.versions).toHaveLength(2);
-    expect(item.versions[0]).toMatchObject({ version: 2, change: 'edited', detail: 'Tiles or layout changed. Not published yet', by: { name: 'JSMITH', kind: 'person' } });
+    expect(item.versions[0]).toMatchObject({ version: 2, change: 'edited', detail: 'Tile "Revenue" renamed to "Revenue by month". Text changed in "Revenue". Not published yet', by: { name: 'JSMITH', kind: 'person' } });
   });
 
   it('lists the empty copy an earlier upgrade moved to the trash as removed, and restores it as a draft', async () => {
     const projectRoot = project();
     // Before this version: an App, and the empty "(3)" copy the upgrade clean-up moved to the trash.
     createStoredAppBuildDraft(projectRoot, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
-    const shell = createStoredAppBuildDraft(projectRoot, { name: 'Sales overview (3)', authoringMode: 'ai', template: 'operational_dashboard', goal: 'Sales by month' });
+    const shell = createStoredAppBuildDraft(projectRoot, { name: 'Sales overview (3)', authoringMode: 'manual', template: 'operational_dashboard', goal: 'Sales by month' });
     expect(removeEmptyAppCopies(projectRoot)).toEqual(['Sales overview (3)']);
     const gone = createStoredAppBuildDraft(projectRoot, { name: 'Margins', authoringMode: 'manual', template: 'blank' });
     deleteStoredAppBuildDraft(projectRoot, gone);
     await new Promise((done) => setTimeout(done, 5));
     const { call } = await start(projectRoot, true);
     const feed = await call('GET', '/api/history/changes');
+    // Found in the trash: one line that opens (V3), each item restorable.
     const removed = feed.body.entries.filter((entry: { change: string }) => entry.change === 'removed');
-    expect(removed.map((entry: { by: { name: string }; items: Array<{ name: string }>; canRestore: boolean }) => [entry.by.name, entry.items[0]!.name, entry.canRestore])).toEqual([
-      ['ZLens', 'Margins', true],
-      ['ZLens', 'Sales overview (3)', true],
-    ]);
+    expect(removed.map((entry: { by: { name: string }; count: number; canRestore: boolean }) => [entry.by.name, entry.count, entry.canRestore])).toEqual([['ZLens', 2, true]]);
+    expect(removed[0].items.map((item: { name: string; removed: boolean }) => [item.name, item.removed])).toEqual([['Margins', true], ['Sales overview (3)', true]]);
     const restored = await call('POST', '/api/history/restore', { path: `apps/${shell.appId}`, version: 1 });
     expect(restored.status, JSON.stringify(restored.body)).toBe(200);
     const drafts = await call('GET', '/api/app-builds');

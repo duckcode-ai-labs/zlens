@@ -41,7 +41,7 @@ function ItemPage({ route, t }: { route: Extract<HistoryRoute, { page: 'item' }>
     return () => { active = false; };
   }, [route.path]);
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 14 }}>
       <BackLink t={t} onClick={() => setHistoryRoute({ page: 'feed' })} label="All changes" />
       <header style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }}>
         {kind ? <span style={kindChip(t)}>{kindLabel(kind).toUpperCase()}</span> : null}
@@ -71,8 +71,10 @@ function ComparePage({ route, t }: { route: Extract<HistoryRoute, { page: 'compa
   const certify = (card: HistoryVersionCard) => {
     void openHistoryItem(dispatch, { kind: 'saved_query', path: card.path ?? route.path, files });
   };
+  // One column that never grows past the page (V3: a long line in an App's file made Compare scroll sideways and
+  // pushed Restore off screen at 1315 px): what is wider scrolls inside its own box.
   return (
-    <div style={{ display: 'grid', gap: 14 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 14 }}>
       <BackLink t={t} onClick={back} label={route.back === 'item' ? 'Versions' : 'All changes'} />
       <CompareVersions key={`${route.path}:${route.from}:${route.to}`} path={route.path} from={route.from} to={route.to} t={t} onBack={back} onCertify={certify} />
     </div>
@@ -282,6 +284,7 @@ export function ChangeLine({
                 <button type="button" onClick={() => onOpen(item)} style={{ ...linkButton(t), textDecoration: 'none', fontFamily: t.fontMono, fontWeight: 500, fontSize: 12.5 }}>{item.name}</button>
                 {started || new Set(entry.items.map((other) => other.kind)).size > 1 ? <span style={muted(t, { fontSize: 12 })}>{kindLabel(item.kind)}</span> : null}
                 <span style={versionPill(t)}>v{item.version}</span>
+                {item.detail ? <span style={muted(t, { fontSize: 12 })}>{item.detail}</span> : null}
                 {entry.change === 'removed' && item.removed && item.version > 1 ? (
                   <button type="button" onClick={() => void onRestore(item, item.version - 1)} style={smallButton(t)}><RotateCcw size={12} aria-hidden="true" /> Restore</button>
                 ) : null}
