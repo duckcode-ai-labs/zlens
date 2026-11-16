@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
@@ -207,19 +207,27 @@ describe('the app package for Snowflake', () => {
     expect(page).toContain('st.caption(f"{minutes(elapsed)} so far. Your projects are kept. Checked at {checked}.")');
   });
 
-  it('V3: the launcher shows the ZLens logo from a small PNG uploaded with the page', () => {
+  it('V3: the launcher draws the ZLens logo inline, with nothing to fetch', () => {
     const page = read('launcher/launcher.py');
-    expect(page).toContain('LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zlens-logo.png")');
-    expect(page).toMatch(/def show_title\(\):[\s\S]*?st\.image\(image\.read\(\), width=56\)[\s\S]*?except Exception:[\s\S]*?st\.title\("ZLens"\)/);
+    // An image file shown with st.image loaded as a broken image in the Native App's page (V16 release check).
+    expect(page).not.toContain('st.image(');
+    expect(page).not.toMatch(/\.png/);
+    expect(page).toContain('st.markdown(LOGO_SVG, unsafe_allow_html=True)');
+    expect(page).toMatch(/LOGO_SVG = \([\s\S]*?<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"[\s\S]*?aria-label="ZLens"[\s\S]*?M11 12H51V20L24 44H37V52H11V44L38 20H11Z[\s\S]*?<circle cx="47\.9" cy="48" r="6\.4"[\s\S]*?<\/svg>'\n\)/);
+    // No outside address in the mark: nothing for the page to load.
+    const svg = page.slice(page.indexOf('LOGO_SVG = ('), page.indexOf("</svg>'") + 7);
+    expect(svg.match(/https?:\/\/[^"]+/g)).toEqual(['http://www.w3.org/2000/svg']);
+    expect(page).toMatch(/def show_title\(\):[\s\S]*?st\.markdown\(LOGO_SVG, unsafe_allow_html=True\)[\s\S]*?except Exception:[\s\S]*?st\.title\("ZLens"\)/);
     expect(page.indexOf('show_title()\n\nif status["error"]')).toBeGreaterThan(-1);
-    const logo = readFileSync(join(APP, 'launcher', 'zlens-logo.png'));
-    expect(logo.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
-    // IHDR: width and height, big-endian, after the signature and the chunk header.
-    expect([logo.readUInt32BE(16), logo.readUInt32BE(20)]).toEqual([128, 128]);
-    expect(statSync(join(APP, 'launcher', 'zlens-logo.png')).size).toBeLessThan(8_192);
-    // The package uploads everything under app/, the launcher folder with it.
-    const project = yaml.load(readFileSync(join(APP, '..', 'snowflake.yml'), 'utf8')) as { entities: Record<string, { artifacts?: Array<{ src: string }> }> };
-    for (const entity of ['zlens_package', 'zlens_release']) expect(project.entities[entity]!.artifacts!.map((artifact) => artifact.src)).toContain('app/*');
+  });
+
+  it('V3: the launcher set-up steps grant tables and views, as the README does', () => {
+    const page = read('launcher/launcher.py');
+    const readme = read('README.md');
+    for (const kind of ['TABLES', 'VIEWS']) {
+      expect(page).toContain(`GRANT SELECT ON ALL ${kind} IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};`);
+      expect(readme).toContain(`GRANT SELECT ON ALL ${kind} IN SCHEMA`);
+    }
   });
 
   it('V3: the readme, Help and the launcher say which warehouse to pick when Snowsight asks for one', () => {

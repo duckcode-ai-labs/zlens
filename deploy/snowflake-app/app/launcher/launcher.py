@@ -17,7 +17,6 @@ app_public.launcher_status() and app_public.launcher_start(), and the app's name
 
 import datetime
 import json
-import os
 import time
 
 import streamlit as st
@@ -32,8 +31,17 @@ STOP_WAITING_SECONDS = 1200
 # Once ZLens is ready: check again every minute, for 10 minutes, then stop.
 RECHECK_SECONDS = 60
 RECHECK_FOR_SECONDS = 600
-# The ZLens mark, uploaded with this page (the launcher folder of the app package).
-LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zlens-logo.png")
+# The ZLens mark (paper Z and the green certified dot on a dark tile), drawn inline. An image file
+# shown with st.image does not load in a Native App's Streamlit page (V16 release check: a broken
+# image), so the mark is SVG markup in the page itself, with nothing to fetch.
+LOGO_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="56" height="56" '
+    'role="img" aria-label="ZLens">'
+    '<rect width="64" height="64" rx="14" fill="#0F1216"/>'
+    '<g transform="translate(9 9) scale(0.7)">'
+    '<path d="M11 12H51V20L24 44H37V52H11V44L38 20H11Z" fill="#EEF0EA"/>'
+    '<circle cx="47.9" cy="48" r="6.4" fill="#2FD8A0"/></g></svg>'
+)
 
 st.set_page_config(page_title="ZLens", layout="centered")
 session = get_active_session()
@@ -109,8 +117,7 @@ def clock(moment, later_seconds=0):
 def show_title():
     """The ZLens mark above the page's title. The page works without it."""
     try:
-        with open(LOGO, "rb") as image:
-            st.image(image.read(), width=56)
+        st.markdown(LOGO_SVG, unsafe_allow_html=True)
     except Exception:  # noqa: BLE001 - a missing or unreadable logo never stops the page
         pass
     st.title("ZLens")
@@ -155,6 +162,7 @@ if not status["zlens_user"]:
         f"GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};\n"
         f"GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
         f"GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
+        f"GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
         f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};",
         language="sql",
     )
