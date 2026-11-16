@@ -134,7 +134,15 @@ export function statedValues(question: string, intent?: AnalyticalIntentV1, opti
       // as a name in the question is: the data may hold only "Celtics" (new-user test, V7 retest, 2026-11-10).
       if (values.length > before && /^[A-Z][\w&'-]*(\s+[A-Z][\w&'-]*)+$/.test(literal.trim())) values[values.length - 1]!.name = literal.trim();
     }
-    for (const clause of intent.unresolved) for (const word of properNouns(`x ${named.length ? withoutBlockNames(clause.clause, named) : clause.clause}`)) add(word, 'text');
+    // A name in a clause the reading could not place counts only when the question says it too. The clause is the
+    // model's own note, and a note that starts "Restrict to playoff games only. The only points column…" states no
+    // value "Restrict" (V3 gate on Claude Sonnet 5.5, G2: refused as "does not apply \"Restrict\"").
+    const asked = new Set(question.toLowerCase().match(/[\p{L}\p{N}_'-]+/gu) ?? []);
+    for (const clause of intent.unresolved) {
+      for (const word of properNouns(`x ${named.length ? withoutBlockNames(clause.clause, named) : clause.clause}`)) {
+        if (asked.has(word.toLowerCase())) add(word, 'text');
+      }
+    }
   }
   return values;
 }
