@@ -56,15 +56,17 @@ describe('the decision flow graph of an Ask run', () => {
     for (let index = 1; index < xs.length; index += 1) expect(xs[index]!).toBeGreaterThan(xs[index - 1]!);
   });
 
-  it('a declined draft is a refused node, and a reading that failed after its call keeps the failed step', () => {
+  it('a declined draft is a "found nothing" node, and a reading that failed after its call keeps the failed step', () => {
     const declined = decisionFlowGraph(explainAskRun({
       receipt: receipt({ dispatches: [{ purpose: 'intent:resolve', ms: 1_000 }, { purpose: 'intent:draft', ms: 900, label: 'draft', outcome: 'declined' }], refusals: [{ tier: 'exploratory', code: 'exploration_declined', message: 'nothing records churn' }], tiers: [{ round: 97, tier: 'exploratory', outcome: 'refused' }] }),
       payload: { gap: { message: 'nothing records churn' } },
       status: 'blocked',
     })!);
-    expect(declined.nodes.find((node) => node.title === 'Drafted SQL')?.outcome).toBe('refused');
+    // A call that wrote no SQL is not "Drafted SQL" (V3 tester retest), and the run ends "Not in this data".
+    expect(declined.nodes.some((node) => node.title === 'Drafted SQL')).toBe(false);
+    expect(declined.nodes.find((node) => node.title === 'Looked for the data')).toMatchObject({ outcome: 'not_found', subtitle: '900 ms · found nothing' });
     expect(declined.nodes.some((node) => node.id === 'ai-sql')).toBe(false);
-    expect(declined.nodes.at(-1)).toMatchObject({ kind: 'end', subtitle: 'No answer' });
+    expect(declined.nodes.at(-1)).toMatchObject({ kind: 'end', subtitle: 'Not in this data', outcome: 'not_found' });
 
     const failedRead = decisionFlowGraph(explainAskRun({
       receipt: receipt({ dispatches: [{ purpose: 'intent:resolve', ms: 60_000 }], failure: { stage: 'resolve', message: 'the AI model took too long' } }),

@@ -151,6 +151,11 @@ describe('where it stopped', () => {
     expect(stoppingSteps({ steps: [s('failed', 'failed', 'failed', 'Stopped.')] }).map((step) => step.id)).toEqual(['failed']);
     const gap = [s('read', 'read', 'done', 'Read.'), s('tier-certified', 'certified', 'refused', 'No certified saved query matches this question.'), s('ai-sql', 'ai_sql', 'refused', 'The AI looked at the tables and found nothing that answers this.'), s('gap', 'gap', 'refused', 'No answer.')];
     expect(stoppingSteps({ steps: gap }).map((step) => step.id)).toEqual(['tier-certified', 'ai-sql']);
+    // "Not in this data": the AI looked and found nothing; the closing step says how it ended, not why (V3 tester retest).
+    const notInData = [s('read', 'read', 'done', 'Read.'), s('ai-sql', 'ai_sql', 'not_found', 'The AI looked at the tables and found nothing that answers this.'), s('gap', 'gap', 'not_found', 'No payroll.')];
+    expect(stoppingSteps({ steps: notInData }).map((step) => step.id)).toEqual(['ai-sql']);
+    const stopped = [s('read', 'read', 'done', 'Read.'), s('tier-semantic', 'semantic', 'refused', 'A project policy does not allow this question.'), s('gap', 'gap', 'failed', 'A project policy does not allow this question.')];
+    expect(stoppingSteps({ steps: stopped }).map((step) => step.id)).toEqual(['tier-semantic']);
     expect(stoppingSteps(undefined)).toEqual([]);
   });
 });

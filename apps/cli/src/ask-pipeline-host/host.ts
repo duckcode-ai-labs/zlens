@@ -431,7 +431,8 @@ function kindFacts(kinds: CodeKinds[]): string[] {
 /**
  * NAMES A BUSINESS READER USES. "GAME_ID starting with 4" is not a game type anyone says (new-user test V9 retest):
  * the kinds are named once, from the model's rules and when each kind's rows fall, for the words of an answer.
- * The names never reach the SQL; the code stays beside them in every line, so a reader can check them.
+ * The names never reach the SQL. A reading says the names alone ("regular season games", V3 tester retest); the
+ * SQL and its filter on the code stay in How it was answered for anyone who checks them.
  */
 export function kindNamesMessages(kinds: CodeKinds): AgentMessage[] {
   const noun = kindNoun(kinds.code);
@@ -526,7 +527,8 @@ export function joinKindNames(names: string[]): string {
 
 /**
  * The line that says which kinds an answer counts, in the names a reader uses when every kind it needs is named:
- * "it counts only playoff games (GAME_ID starting with 4)". Without names, the code says it.
+ * "it counts only playoff games". No column detail beside the names (V3 tester retest: "regular season games
+ * (GAME_ID starting with 2)" in every reading); the SQL shows the filter. Without names, the code says it.
  */
 export function kindsAnswerLine(kinds: Pick<CodeKinds, 'code' | 'values' | 'names'> | undefined, code: string, filter: { filtered: boolean; kinds: string[] }): string | undefined {
   const noun = kindNoun(code);
@@ -536,15 +538,14 @@ export function kindsAnswerLine(kinds: Pick<CodeKinds, 'code' | 'values' | 'name
     const firsts = [...filter.kinds].sort();
     const named = firsts.every((first) => nameOf(first));
     return named
-      ? `it counts only ${joinKindNames(firsts.map((first) => nameOf(first)!))} (${code} starting with ${orList(firsts)})`
+      ? `it counts only ${joinKindNames(firsts.map((first) => nameOf(first)!))}`
       : `it counts only ${noun}s whose ${code} starts with ${orList(firsts)}, one kind of ${noun}${firsts.length > 1 ? ' each' : ''}`;
   }
   const all = kinds?.values.map((value) => value.first) ?? [];
-  const every = all.length ? ` (${code} starting with ${orList(all)})` : '';
   const named = all.length > 0 && all.every((first) => nameOf(first));
   return named
-    ? `it counts every kind of ${noun} together: ${joinKindNames(all.map((first) => nameOf(first)!))}${every}; to count one kind, name it in the question`
-    : `it counts every kind of ${noun} together${every}; to count one kind, name it in the question`;
+    ? `it counts every kind of ${noun} together: ${joinKindNames(all.map((first) => nameOf(first)!))}; to count one kind, name it in the question`
+    : `it counts every kind of ${noun} together${all.length ? ` (${code} starting with ${orList(all)})` : ''}; to count one kind, name it in the question`;
 }
 
 const KIND_CLAIM_NEGATION = /\b(?:no|not|cannot|can't|can ?not|without|neither|nor|isn't|aren't|doesn't|don't|lacks?|lacking|missing|unavailable|absent)\b/i;

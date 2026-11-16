@@ -288,7 +288,8 @@ GRANT SELECT ON VIEW app_public.history TO APPLICATION ROLE app_admin;
 -- Open ZLens and its address, so no one lands on Snowflake's "service is not yet running" page. It
 -- reads no customer data and calls nothing outside Snowflake: only the two procedures below. It runs
 -- on the app's own extra-small warehouse, which an open page keeps running (about 15 minutes after
--- its last use). app_url() stays for SQL.
+-- its last use). Once ZLens is ready it checks again every minute for 10 minutes, then stops so the
+-- warehouse can suspend, and every state says when it was checked. app_url() stays for SQL.
 
 -- The state the launcher shows: the service status, its address and the configured ZLens user.
 -- Starts nothing. READY means the service is RUNNING and its container reports READY (a service
@@ -388,8 +389,9 @@ END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.launcher_start() TO APPLICATION ROLE app_user;
 
--- The page itself, on the app's own warehouse (created by core.ensure_zlens above), so no one is
--- asked to pick one.
+-- The page itself, on the app's own warehouse (created by core.ensure_zlens above). Snowsight may still
+-- ask a viewer to select a warehouse before a page on a warehouse opens (Snowflake: "Consumers may be
+-- prompted to select a warehouse"); the README and the page say to pick this one, <app>_WH.
 EXECUTE IMMEDIATE $$
 DECLARE
   stmt VARCHAR;

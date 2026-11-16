@@ -9,6 +9,19 @@ export function blockFolderLabel(name: string): string {
   return name === '_drafts' ? 'Drafts' : name;
 }
 
+/**
+ * The line under a saved query's name: its domain, its status and what replaced it. Ask's drafts read
+ * "Drafts", once: "_drafts · draft" said the same thing twice, in a folder's file name (V3 tester retest).
+ */
+export function blockRowMeta(domain: string | undefined, statusWords: string, replacedBy?: string): string {
+  const drafts = domain?.trim() === '_drafts';
+  return [
+    domain?.trim() ? blockFolderLabel(domain.trim()) : undefined,
+    drafts && statusWords === 'draft' ? undefined : statusWords,
+    replacedBy ? `replaced by ${replacedBy}` : undefined,
+  ].filter(Boolean).join(' · ');
+}
+
 export function blockPathInsideDomain(blockPath: string, domain: string): string {
   const normalized = blockPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   const domainFirst = normalized.match(/^domains\/[^/]+\/blocks\/(.+)$/);

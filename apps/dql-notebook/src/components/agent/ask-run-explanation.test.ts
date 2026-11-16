@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REFUSAL_SENTENCES, checksPassedSentence, containsInternalCode, explainAskRun, isAskPipelineReceipt, passedCheckCount, plainReason, plainRefs, readerDetail, rowCountWords, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
+import { OUTCOME_WORDS, REFUSAL_SENTENCES, checksPassedSentence, containsInternalCode, explainAskRun, isAskPipelineReceipt, passedCheckCount, plainReason, plainRefs, readerDetail, rowCountWords, withoutConfigHints, type RunExplanation } from './ask-run-explanation';
 
 const base = (overrides: Record<string, unknown>) => ({ version: 1, dispatches: [], tiers: [], candidates: [], refusals: [], story: [], timings: {}, ...overrides });
 
@@ -111,7 +111,7 @@ describe('how an Ask run was answered, as steps in plain words', () => {
     const explanation = explainAskRun({ receipt: declinedGap, payload: { kind: 'no_answer', gap: { kind: 'not_modeled', message: 'these tables hold orders only; nothing records churn or region' } }, status: 'blocked' })!;
     expect(explanation.ending).toBe('gap');
     expect(explanation.steps.map((step) => [step.kind, step.outcome])).toEqual([
-      ['read', 'done'], ['semantic', 'skipped'], ['ai_sql', 'refused'], ['warehouse', 'not_reached'], ['gap', 'refused'],
+      ['read', 'done'], ['semantic', 'skipped'], ['ai_sql', 'not_found'], ['warehouse', 'not_reached'], ['gap', 'not_found'],
     ]);
     expect(explanation.steps[2]!.reason).toBe('The AI looked at the tables and found nothing that answers this: these tables hold orders only; nothing records churn or region.');
     expect(explanation.steps[2]!.aiCalls[0]!.outcome).toBe('declined');
@@ -121,6 +121,38 @@ describe('how an Ask run was answered, as steps in plain words', () => {
     expect(answered.steps[1]!.reason).toBe('The question is not about a certified saved query or a semantic metric, so the AI wrote the SQL.');
   });
 
+  it('"Not in this data": steps titled for what happened, never "AI wrote SQL" or "Not used" when no SQL was written (V3 tester retest)', () => {
+    // "What was our payroll in 1997?": the AI looked at the tables, found nothing, and wrote no SQL.
+    const payroll = explainAskRun({ receipt: base({ ...declinedGap, reading: 'Payroll in 1997.', refusals: [{ tier: 'exploratory', code: 'exploration_declined', message: 'no table records payroll or salaries' }] }), payload: { kind: 'no_answer', gap: { kind: 'not_modeled', message: 'no table records payroll or salaries' } }, status: 'blocked' })!;
+    const titled = payroll.steps.map((step) => [step.title, OUTCOME_WORDS[step.outcome]]);
+    expect(titled).toEqual([
+      ['Read the question', 'Done'],
+      ['Certified saved queries and semantic layer', 'Skipped'],
+      ['Looked for the data', 'Not in this data'],
+      ['Ran on the warehouse', 'Not reached'],
+      ['Answer', 'Not in this data'],
+    ]);
+    expect(payroll.headline).toBe('Not in this data: no table records payroll or salaries');
+    expect(payroll.steps.map((step) => step.title)).not.toContain('AI wrote SQL');
+    expect(payroll.steps.map((step) => OUTCOME_WORDS[step.outcome])).not.toContain('Not used');
+    // The AI call that wrote no SQL says so too.
+    expect(payroll.steps[2]!.aiCalls.map((call) => call.label)).toEqual(['Looked for the data']);
+    // A run that wrote SQL still says it did.
+    const answered = explainAskRun({ receipt: aiAnswer, payload: { kind: 'uncertified', proof: [] }, status: 'completed' })!;
+    expect(answered.steps.find((step) => step.kind === 'ai_sql')!.title).toBe('AI wrote SQL');
+  });
+
+  it('a gap that is a stop, not a finding about the data, ends "No answer · Failed", never "Not used"', () => {
+    const stopped = explainAskRun({ receipt: declinedGap, payload: { kind: 'no_answer', gap: { kind: 'not_modeled', message: 'the AI-written SQL failed a check, so it was not run' } }, status: 'blocked' })!;
+    expect(stopped.steps.at(-1)).toMatchObject({ kind: 'gap', title: 'No answer', outcome: 'failed' });
+    expect(stopped.headline).toMatch(/^No answer: /);
+    const denied = explainAskRun({ receipt: base({ reading: 'Salaries.', tiers: [{ round: 0, tier: 'semantic', outcome: 'refused' }], refusals: [{ tier: 'semantic', code: 'policy_denied', message: 'denied' }] }), payload: { gap: { kind: 'denied', message: 'A project policy does not allow this question.' } }, status: 'blocked' })!;
+    expect(denied.steps.at(-1)).toMatchObject({ title: 'No answer', outcome: 'failed' });
+    // An AI step that wrote no SQL and did not run is not titled as if it had.
+    const off = explainAskRun({ receipt: base({ reading: 'Churn.', refusals: [{ tier: 'exploratory', code: 'exploration_failed', message: 'the model returned nothing' }], tiers: [{ round: 97, tier: 'exploratory', outcome: 'refused' }] }), payload: { gap: { kind: 'unsupported', message: 'The AI could not write SQL for this question.' } }, status: 'blocked' })!;
+    expect(off.steps.find((step) => step.kind === 'ai_sql')).toMatchObject({ title: 'AI-written SQL', outcome: 'failed' });
+  });
+
   it('a long gap reads short in the headline, names tables without quotes, and lists what was searched once', () => {
     const message = 'There is no sales region dimension or churn definition (e.g., customer status/inactivity flag) in any listed relation (searched "jaffle_shop"."dev"."orders", "jaffle_shop"."raw"."raw_customers"). Ask for a modeled measure instead.';
     const explanation = explainAskRun({
@@ -128,7 +160,7 @@ describe('how an Ask run was answered, as steps in plain words', () => {
       payload: { gap: { kind: 'not_modeled', message } },
       status: 'blocked',
     })!;
-    expect(explanation.headline).toBe('No answer: There is no sales region dimension or churn definition (e.g., customer status/inactivity flag) in any listed relation.');
+    expect(explanation.headline).toBe('Not in this data: There is no sales region dimension or churn definition (e.g., customer status/inactivity flag) in any listed relation.');
     expect(explanation.steps.find((step) => step.kind === 'ai_sql')!.reason).toContain('(searched jaffle_shop.dev.orders, jaffle_shop.raw.raw_customers)');
     expect(explanation.steps.find((step) => step.kind === 'gap')!.reason).not.toContain('searched');
     for (const step of explanation.steps) expect(step.reason).not.toContain('"jaffle_shop"');

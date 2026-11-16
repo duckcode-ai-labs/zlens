@@ -217,8 +217,9 @@ export function formatStepMs(ms: number): string {
  */
 export function stoppingSteps(explanation: Pick<RunExplanation, 'steps'> | undefined): RunStep[] {
   if (!explanation) return [];
-  const failed = explanation.steps.filter((step) => step.outcome === 'failed');
+  // The closing step of a gap says how it ended; the steps before it say why.
+  const failed = explanation.steps.filter((step) => step.outcome === 'failed' && step.kind !== 'gap');
   const specific = failed.filter((step) => step.kind !== 'failed');
   if (failed.length) return (specific.length ? specific : failed).slice(0, 3);
-  return explanation.steps.filter((step) => step.outcome === 'refused' && step.kind !== 'gap').slice(-2);
+  return explanation.steps.filter((step) => (step.outcome === 'refused' || step.outcome === 'not_found') && step.kind !== 'gap').slice(-2);
 }
