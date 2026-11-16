@@ -174,11 +174,13 @@ export interface ServerEventFrame {
 /**
  * Read a same-origin SSE stream through fetch so LAN sessions can use the same
  * bearer header as every other API call. Native EventSource has no header API.
+ * `onOpen` is called once the server has accepted the stream.
  */
 export async function streamServerEvents(
   path: string,
   onEvent: (frame: ServerEventFrame) => void,
   signal: AbortSignal,
+  onOpen?: () => void,
 ): Promise<void> {
   const response = await fetch(path, {
     headers: withServerAuthorization({ Accept: 'text/event-stream' }),
@@ -189,6 +191,7 @@ export async function streamServerEvents(
   reportServerAuthRejected(response.status, response.headers.get('x-dql-sign-in'));
   if (!response.ok) throw new Error(`Event stream failed with HTTP ${response.status}.`);
   if (!response.body) throw new Error('Event stream response did not include a body.');
+  onOpen?.();
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

@@ -1,3 +1,4 @@
+import type { IncomingHttpHeaders } from 'node:http';
 import { readEnv } from '@zlens/core';
 import { brandedPage } from './brand-page.js';
 
@@ -170,41 +171,124 @@ export function snowflakeAppSetupPage(input: { appName?: string; needsUser: bool
 }
 
 /**
+ * Requests that are not someone using ZLens, so they neither restart the idle clock nor hold ZLens up:
+ * - Snowflake's readiness probe (`/api/health`);
+ * - an open page's event streams (`/api/operations/events`, `/api/watch`), which stay open as long as the tab;
+ * - what an open page asks for by itself once the person has not touched it for a while: the page marks those
+ *   `x-dql-background: 1` (api/server-auth.ts in the notebook; polls, refreshes, reconnects).
+ * The polls of a long request (`/api/long-requests/<id>`) always count: they follow work a person started.
+ */
+export const PAGE_EVENT_STREAMS: ReadonlySet<string> = new Set(['/api/operations/events', '/api/watch']);
+
+export function countsAsUse(method: string | undefined, path: string, headers: IncomingHttpHeaders): boolean {
+  if (path === '/api/health') return false;
+  if ((method ?? 'GET').toUpperCase() === 'GET' && PAGE_EVENT_STREAMS.has(path)) return false;
+  if (path.startsWith('/api/long-requests/')) return true;
+  const background = headers['x-dql-background'];
+  return (Array.isArray(background) ? background[0] : background)?.trim() !== '1';
+}
+
+/** Why ZLens is stopping, as the open pages are told (the `stopping` event on their event streams). */
+export interface ZLensStoppingNotice {
+  /** `idle`: ZLens stopped itself after the quiet spell; `stopped`: it was stopped (stop_app(), or Snowflake). */
+  reason: 'idle' | 'stopped';
+  /** For `idle`: the quiet spell, in minutes. */
+  idleMinutes?: number;
+}
+
+/** The `stopping` event, as written on an open event stream. */
+export function stoppingEventFrame(notice: ZLensStoppingNotice): string {
+  return `event: stopping\ndata: ${JSON.stringify(notice)}\n\n`;
+}
+
+/** The part of `process` the stop signal is read from (a test passes its own). */
+export type StopSignalSource = Pick<NodeJS.Process, 'prependListener' | 'removeListener' | 'listenerCount' | 'kill' | 'pid'>;
+
+/**
+ * When the process is told to stop (SIGTERM: `stop_app()`, which suspends the service, or Snowflake itself),
+ * tell the open pages first, so none of them starts ZLens again by itself. It runs before the other SIGTERM
+ * listeners (`zlens notebook` exits in its own), and when there is none the process still ends on SIGTERM as
+ * it would have. Returns the function that removes it.
+ */
+export function tellPagesOnStopSignal(tell: () => void, source: StopSignalSource = process): () => void {
+  const onSignal = () => {
+    try { tell(); } catch { /* telling the pages must never keep the process up */ }
+    if (source.listenerCount('SIGTERM') <= 1) {
+      source.removeListener('SIGTERM', onSignal);
+      source.kill(source.pid, 'SIGTERM');
+    }
+  };
+  source.prependListener('SIGTERM', onSignal);
+  return () => { source.removeListener('SIGTERM', onSignal); };
+}
+
+/** How long server work may hold ZLens up after the last time someone used it. */
+export const IDLE_WORK_HOLD_MS = 6 * 60 * 60_000;
+
+/**
  * Stops the app's own service after a quiet spell. Snowflake does not auto-suspend a service with a
  * public endpoint, but it wakes a stopped one when its address is opened (both checked live), so an
  * idle free app costs nothing until someone comes back.
+ *
+ * Only someone's requests count as use (see countsAsUse): an open tab nobody touches does not keep it up.
+ * Server work a person started (a long request, an Ask run, a backup) holds it up while it runs, and the
+ * quiet spell starts again when that work ends; a hold lasts at most IDLE_WORK_HOLD_MS after the last use,
+ * so work that never ends cannot keep the service billing.
  */
 export class IdleSuspender {
+  /** The last request someone made. */
+  private lastUse: number;
+  /** The last use, or the last time server work was seen running: the quiet spell counts from here. */
   private lastActivity: number;
   private inFlight = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private suspending = false;
   private beforeSuspend: (() => Promise<void>) | undefined;
+  private readonly holds: Array<() => boolean> = [];
 
   constructor(
     private readonly idleMs: number,
     private readonly suspend: () => Promise<void>,
     private readonly now: () => number = Date.now,
+    private readonly maxHoldMs: number = IDLE_WORK_HOLD_MS,
   ) {
-    this.lastActivity = now();
+    this.lastUse = now();
+    this.lastActivity = this.lastUse;
   }
 
-  /** A request (other than Snowflake's readiness probe) started; call the returned function when it ends. */
+  /** Someone's request started (see countsAsUse); call the returned function when it ends. */
   touch(): () => void {
-    this.lastActivity = this.now();
+    this.used();
     this.inFlight += 1;
     let done = false;
     return () => {
       if (done) return;
       done = true;
       this.inFlight -= 1;
-      this.lastActivity = this.now();
+      this.used();
     };
+  }
+
+  /** Server work that keeps ZLens up while it says so. */
+  holdWhile(working: () => boolean): void {
+    this.holds.push(working);
+  }
+
+  private used(): void {
+    this.lastUse = this.now();
+    this.lastActivity = this.lastUse;
+  }
+
+  private working(): boolean {
+    if (this.now() - this.lastUse >= this.maxHoldMs) return false;
+    return this.holds.some((working) => {
+      try { return working(); } catch { return false; }
+    });
   }
 
   /** Whether the service should stop now. */
   due(): boolean {
-    return !this.suspending && this.inFlight === 0 && this.now() - this.lastActivity >= this.idleMs;
+    return !this.suspending && this.inFlight === 0 && !this.working() && this.now() - this.lastActivity >= this.idleMs;
   }
 
   /** Work to do just before stopping (the daily backup). Someone coming back meanwhile keeps ZLens running. */
@@ -213,6 +297,7 @@ export class IdleSuspender {
   }
 
   async check(): Promise<boolean> {
+    if (!this.suspending && this.working()) this.lastActivity = this.now();
     if (!this.due()) return false;
     this.suspending = true;
     try {
@@ -222,7 +307,7 @@ export class IdleSuspender {
         } catch (error) {
           console.warn(`[zlens] Before stopping: ${error instanceof Error ? error.message : String(error)}`);
         }
-        if (this.inFlight > 0 || this.now() - this.lastActivity < this.idleMs) {
+        if (this.inFlight > 0 || this.working() || this.now() - this.lastActivity < this.idleMs) {
           this.suspending = false;
           return false;
         }
@@ -244,6 +329,7 @@ export class IdleSuspender {
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 }
 

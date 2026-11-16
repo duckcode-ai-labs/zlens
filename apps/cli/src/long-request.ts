@@ -161,6 +161,13 @@ export async function handleLongRequestPoll(req: IncomingMessage, res: ServerRes
   return true;
 }
 
+/** How many long requests are still working: they keep the app for Snowflake from stopping as idle. */
+export function longRequestsRunning(): number {
+  let running = 0;
+  for (const job of jobs.values()) if (!job.answer) running += 1;
+  return running;
+}
+
 /** Test seam: forget every kept answer. */
 export function clearLongRequestsForTests(): void {
   for (const job of jobs.values()) if (job.expires) clearTimeout(job.expires);
