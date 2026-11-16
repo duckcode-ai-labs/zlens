@@ -75,6 +75,8 @@ export interface RedactedProviderSettings {
   connection?: string;
   /** Snowflake Cortex: the Snowflake connection it signs in with and its sign-in method, or why it cannot sign in. */
   connectionSignIn?: CortexSignIn;
+  /** Snowflake Cortex: the model it asks when none is named (CORTEX_DEFAULT_MODEL), so Settings can say which model is in use. */
+  defaultModel?: string;
 }
 
 export interface EffectiveProviderConfig {
@@ -228,6 +230,7 @@ function listAllProviderSettings(projectRoot: string): RedactedProviderSettings[
         allowed: true,
         ...(local?.connection ? { connection: local.connection } : {}),
         connectionSignIn: signIn,
+        defaultModel: CORTEX_DEFAULT_MODEL,
       };
     }
     const configured = id === 'ollama'
@@ -307,6 +310,16 @@ export function isCortexClaudeModel(model: string): boolean {
   return /^claude-[a-z0-9][a-z0-9.-]*$/i.test(model.trim());
 }
 
+/**
+ * Why a Snowflake Cortex model is refused, in one plain sentence, or undefined when it may be used (a Claude model,
+ * or none named: the default). Saving and testing say the same, and a test refuses before it calls Cortex.
+ */
+export function cortexModelRefusal(model: string | undefined): string | undefined {
+  const name = model?.trim();
+  if (!name || isCortexClaudeModel(name)) return undefined;
+  return `ZLens asks Claude through Snowflake Cortex. Name a Claude model that Cortex offers in your account, such as ${CORTEX_DEFAULT_MODEL} (not "${name}").`;
+}
+
 export function saveProviderSettings(projectRoot: string, input: ProviderSettingsInput): RedactedProviderSettings[] {
   if (!modelProviderAllowed(input.id)) throw new Error(`The ${input.id} model provider is not available on this install (ZLENS_MODEL_PROVIDERS).`);
   const state = readStoredProviderState(projectRoot);
@@ -334,9 +347,8 @@ export function saveProviderSettings(projectRoot: string, input: ProviderSetting
     updatedAt: new Date().toISOString(),
   };
   // Cortex: ZLens sends Claude's Messages request, and its listing names Claude models only.
-  if (signsInWithConnection && next.model && !isCortexClaudeModel(next.model)) {
-    throw new ProviderSettingsInputError(`ZLens asks Claude through Snowflake Cortex. Name a Claude model that Cortex offers in your account, such as claude-sonnet-5-5 (not "${next.model}").`);
-  }
+  const refusal = signsInWithConnection ? cortexModelRefusal(next.model) : undefined;
+  if (refusal) throw new ProviderSettingsInputError(refusal);
   // Cortex has no key or base URL of its own; neither is kept.
   if (signsInWithConnection) {
     delete next.apiKey;

@@ -12,6 +12,8 @@ import { buildDerivationWalk, type DerivationWalk } from '@zlens/core/lineage/de
 import { useNotebook } from '../../store/NotebookStore';
 import { formatDisplayValue, type DisplayColumnMeta } from '../../utils/value-format';
 import { GuidedBySkills, RouteBadge } from './AiBuildResult';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { axisOptionLabel } from '../../snowflake-app/snowflake-app-words';
 
 type AnswerTab = 'answer' | 'dql' | 'visual' | 'data' | 'lineage' | 'context' | 'sql' | 'review';
 
@@ -1875,6 +1877,7 @@ function ChartCustomizationPanel({
   t: Theme;
   onChange: (next: Partial<CellChartConfig>) => void;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const columns = result.columns;
   if (columns.length === 0) return null;
   const chartTypeOptions = CHART_TYPE_OPTIONS.filter((option) => option.value !== 'table');
@@ -1915,7 +1918,7 @@ function ChartCustomizationPanel({
           onChange={(event) => onChange({ x: event.target.value })}
           style={chartControlSelectStyle(t)}
         >
-          {columns.map((column) => <option key={column} value={column}>{column}</option>)}
+          {columns.map((column) => <option key={column} value={column}>{axisOptionLabel(column, snowflakeApp)}</option>)}
         </select>
       </ChartControlLabel>
       <ChartControlLabel label="Y axis" t={t}>
@@ -1924,7 +1927,7 @@ function ChartCustomizationPanel({
           onChange={(event) => onChange({ y: event.target.value })}
           style={chartControlSelectStyle(t)}
         >
-          {columns.map((column) => <option key={column} value={column}>{column}</option>)}
+          {columns.map((column) => <option key={column} value={column}>{axisOptionLabel(column, snowflakeApp)}</option>)}
         </select>
       </ChartControlLabel>
       <ChartControlLabel label="Color" t={t}>
@@ -1934,7 +1937,7 @@ function ChartCustomizationPanel({
           style={chartControlSelectStyle(t)}
         >
           <option value="">None</option>
-          {columns.map((column) => <option key={column} value={column}>{column}</option>)}
+          {columns.map((column) => <option key={column} value={column}>{axisOptionLabel(column, snowflakeApp)}</option>)}
         </select>
       </ChartControlLabel>
     </div>

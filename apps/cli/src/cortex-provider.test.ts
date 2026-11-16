@@ -133,6 +133,25 @@ describe('the provider test route for Snowflake Cortex', () => {
     expect(sent).toEqual([]);
   });
 
+  it('refuses a model that is not Claude before it calls Cortex, in the words Save uses, and Save keeps the model in use', async () => {
+    const projectRoot = keyPairProject();
+    const sent = fakeSnowflake();
+    const call = await start(projectRoot);
+    const refusal = 'ZLens asks Claude through Snowflake Cortex. Name a Claude model that Cortex offers in your account, such as claude-sonnet-5-5 (not "llama3.1-70b").';
+    const tested = await call('POST', '/api/settings/providers/test', { id: 'cortex', model: 'llama3.1-70b' });
+    expect(tested.status).toBe(400);
+    expect(tested.json).toEqual({ ok: false, message: refusal });
+    expect(sent).toEqual([]);
+    const saved = await call('POST', '/api/settings/providers', { id: 'cortex', enabled: true, model: 'llama3.1-70b' });
+    expect(saved.status).toBe(400);
+    expect(saved.json.error).toBe(refusal);
+    // Nothing was saved: the list names no model, and says which one Cortex asks then.
+    const listed = (await call('GET', '/api/settings/providers')).json.providers as Array<Record<string, any>>;
+    expect(listed.find((provider) => provider.id === 'cortex')).toMatchObject({ defaultModel: 'claude-sonnet-5-5' });
+    expect(listed.find((provider) => provider.id === 'cortex')?.model).toBeUndefined();
+    expect(sent).toEqual([]);
+  });
+
   it('is the only provider an install that allows only Cortex lists', async () => {
     vi.stubEnv('ZLENS_MODEL_PROVIDERS', 'cortex');
     const projectRoot = keyPairProject();

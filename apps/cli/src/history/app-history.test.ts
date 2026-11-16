@@ -13,10 +13,12 @@ import {
   markStoredAppBuildDraftPreflighted,
   publishStoredAppBuildDraft,
   removeEmptyAppCopies,
+  restoreAppRecovery,
   restoreAppHistoryVersion,
   writeStoredAppBuildDraft,
 } from '../apps-api.js';
-import { appChanges, appDraftHistoryText, appDraftShape, appPagesKey, publishedAppShape } from './app-drafts.js';
+import { appChanges, appDraftHistoryText, appDraftShape, appPagesKey, appTilesAdded, publishedAppShape } from './app-drafts.js';
+import { tilesJustAdded } from './history-index.js';
 import { HistoryService, type HistoryAppSource } from './history-service.js';
 import { historyAppIds } from './known-app-ids.js';
 import { readableFileLabel } from './tracked-files.js';
@@ -258,6 +260,73 @@ describe('removed Apps stay in History and come back as drafts', () => {
     // Unpublished: the App's folder is not back until the draft is published.
     expect(existsSync(join(root, key, 'dql.app.json'))).toBe(false);
     expect(history.item(key).versions[0]).toMatchObject({ change: 'restored', state: 'saved', by: { name: 'JSMITH' } });
+  });
+});
+
+describe('what an App\'s line says (V4 tester)', () => {
+  it('says an App brought back by Undo after Delete was restored, not created', async () => {
+    const root = project();
+    const draft = createStoredAppBuildDraft(root, { name: 'Sales overview', authoringMode: 'manual', template: 'blank' });
+    const withTiles = edit(root, draft, [{ type: 'add_tile', pageId: draft.pages[0]!.id, tile: tile('t1', 'Revenue') }]);
+    const published = publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, withTiles));
+    const history = await open(root);
+    const key = `apps/${draft.appId}`;
+    const deleted = deleteAppPackage(root, draft.appId, { expectedFingerprint: published.app.fingerprint });
+    if (!deleted.ok) throw new Error(deleted.error);
+    await after(history, 'DELETE', `/api/apps/${draft.appId}`);
+    expect(restoreAppRecovery(root, deleted.recoveryId)).toMatchObject({ ok: true });
+    const back = await after(history, 'POST', `/api/app-recoveries/${deleted.recoveryId}/restore`);
+    expect(back[0]).toMatchObject({ action: 'restore', message: `Restored ${draft.appId}`, changes: [expect.objectContaining({ item: key, change: 'restored', detail: 'Brought back from the trash' })] });
+    expect(history.item(key).item.removed).toBe(false);
+    expect(history.feed({ kind: 'app' }).entries[0]).toMatchObject({ change: 'restored', by: { name: 'JSMITH' } });
+  });
+
+  it('says a new tile App Studio placed after adding it was placed, and a tile the person moved changed the layout', async () => {
+    const root = project();
+    const history = await open(root);
+    let draft = createStoredAppBuildDraft(root, { name: 'Season review', authoringMode: 'manual', template: 'blank' });
+    await after(history, 'POST', '/api/app-builds');
+    const page = draft.pages[0]!.id;
+    const key = `apps/${draft.appId}`;
+    draft = edit(root, draft, [{ type: 'add_tile', pageId: page, tile: { ...tile('intro', 'Intro'), y: 0 } }]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    // Added under the page, then put in the first free space: the second save of one add.
+    draft = edit(root, draft, [{ type: 'add_tile', pageId: page, tile: { ...tile('wins', 'Wins by season'), y: 9 } }]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    draft = edit(root, draft, [{ type: 'update_tile', pageId: page, tileId: 'wins', patch: { x: 6, y: 0 } }]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    expect(history.item(key).versions.slice(0, 2).map((row) => [row.version, row.detail])).toEqual([
+      [4, 'New tile placed: "Wins by season"'],
+      [3, 'Added 1 tile'],
+    ]);
+    expect((await history.compare(key, 3, 4)).app!.changes).toEqual([{ kind: 'tile', text: 'New tile placed: "Wins by season"' }]);
+    // The person moves it afterwards: that is a layout change.
+    draft = edit(root, draft, [{ type: 'update_tile', pageId: page, tileId: 'wins', patch: { x: 0, y: 3 } }]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    expect(history.item(key).versions[0]).toMatchObject({ version: 5, detail: 'Layout changed: 1 tile moved or resized' });
+    // A tile that was there before, moved in the save after an add, is still the person's move.
+    draft = edit(root, draft, [{ type: 'add_tile', pageId: page, tile: { ...tile('notes', 'Notes'), y: 12 } }]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    draft = edit(root, draft, [
+      { type: 'update_tile', pageId: page, tileId: 'notes', patch: { x: 6, y: 0 } },
+      { type: 'update_tile', pageId: page, tileId: 'intro', patch: { w: 4 } },
+    ]);
+    await after(history, 'PATCH', `/api/app-builds/${draft.id}`);
+    expect(history.item(key).versions[0]).toMatchObject({ version: 7, detail: 'Layout changed: 1 tile moved or resized. New tile placed: "Notes"' });
+  });
+
+  it('keeps a move after an add by someone else, or long after, a layout change', () => {
+    const shape = (tiles: Array<Record<string, unknown>>) => publishedAppShape(JSON.stringify({ version: 1, id: 'season', name: 'Season' }), [JSON.stringify({ version: 1, id: 'overview', metadata: { title: 'Overview' }, layout: { kind: 'grid', cols: 12, rowHeight: 80, items: tiles } })]);
+    const before = shape([{ ...tile('wins', 'Wins'), y: 9 }]);
+    const placed = shape([{ ...tile('wins', 'Wins'), y: 0 }]);
+    expect(appChanges(before, placed)).toEqual([{ kind: 'layout', text: 'Layout changed: 1 tile moved or resized' }]);
+    expect(appChanges(before, placed, { justAdded: new Set(['overview/wins']) })).toEqual([{ kind: 'tile', text: 'New tile placed: "Wins"' }]);
+    expect(appTilesAdded(shape([]), before)).toEqual(['overview/wins']);
+    const person = { name: 'JSMITH', kind: 'person' as const };
+    const added = { tilesAdded: ['overview/wins'] };
+    expect(tilesJustAdded({ author: person, at: '2026-11-16T10:00:05.000Z' }, added, { author: person, at: '2026-11-16T10:00:04.000Z' })).toEqual(new Set(['overview/wins']));
+    expect(tilesJustAdded({ author: person, at: '2026-11-16T10:05:00.000Z' }, added, { author: person, at: '2026-11-16T10:00:04.000Z' })).toBeUndefined();
+    expect(tilesJustAdded({ author: { name: 'OTHER', kind: 'person' }, at: '2026-11-16T10:00:05.000Z' }, added, { author: person, at: '2026-11-16T10:00:04.000Z' })).toBeUndefined();
   });
 });
 

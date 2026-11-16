@@ -57,3 +57,36 @@ export function cortexSignInLine(provider?: Pick<ProviderSettings, 'connectionSi
   const how = signIn.method ? ` with its ${CORTEX_METHOD_WORDS[signIn.method] ?? signIn.method.replace(/_/g, ' ')}` : '';
   return { ok: true, text: `Signs in through the Snowflake connection “${signIn.connection ?? 'default'}”${how}.` };
 }
+
+/**
+ * Which model a provider asks, said under its Model field (V4 tester: after a refused save the field came back
+ * blank, and nothing said which model was in use): the saved model, else the default the server names.
+ */
+export function modelInUseLine(provider?: Pick<ProviderSettings, 'model' | 'defaultModel'>): string | null {
+  const model = provider?.model?.trim();
+  if (model) return `In use: ${model}`;
+  const fallback = provider?.defaultModel?.trim();
+  return fallback ? `In use: ${fallback} (the default)` : null;
+}
+
+export type TestThenSaveOutcome<T> =
+  | { ok: true; message: string; saved: T }
+  | { ok: false; failed: 'test' | 'save'; message: string };
+
+/**
+ * "Test, save & activate": the test first, then the save. The line the page shows is the outcome of both: a save
+ * the server refuses replaces the test's success (V4 tester: a green "Cortex answered" stayed while Save refused the
+ * model out of sight), and nothing is saved when the test fails.
+ */
+export async function testThenSave<T>(
+  test: () => Promise<{ ok: boolean; message: string }>,
+  save: () => Promise<T>,
+): Promise<TestThenSaveOutcome<T>> {
+  const tested = await test();
+  if (!tested.ok) return { ok: false, failed: 'test', message: tested.message };
+  try {
+    return { ok: true, message: tested.message, saved: await save() };
+  } catch (error) {
+    return { ok: false, failed: 'save', message: error instanceof Error ? error.message : String(error) };
+  }
+}

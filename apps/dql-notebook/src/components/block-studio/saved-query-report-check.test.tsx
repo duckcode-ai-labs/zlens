@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BlockDetailView, certificationReceiptTechnical, CERTIFIER_NOT_RECORDED, IMPORT_SOURCE_EXPORT_HINT, importSourceUploadNote } from './BlockStudio';
+import { BlockDetailView, certificationReceiptTechnical, CERTIFIER_NOT_RECORDED, IMPORT_SOURCE_EXPORT_HINT, importSourceUploadNote, receiptMoment } from './BlockStudio';
 import { CertificationReportLines, certificationReportView, comparedSinceCertified, DIFFERS_SINCE_CERTIFIED, DiffersSinceCertifiedBadge, RECEIPT_REBUILT_NOTE, receiptLineDay, receiptLineWords, reportCheckStatusWords, reportMatchReceipt, wordsOnViewerClock } from './SavedQueryReportCheck';
 import { ComparisonResult, comparisonVerdictLine, recordedWords } from './ReportComparePanel';
 import type { ReportComparison, ReportQueryMatch } from '../../store/types';
@@ -70,6 +70,14 @@ describe('the receipt of a saved query compared with its old report', () => {
     expect(nameless).not.toContain('Recorded as local');
     expect(certificationReceiptTechnical({ ...receipt, certifiedBy: 'local', certifiedByName: 'Test Admin' })).toContain('Recorded as Test Admin');
     expect(certificationReceiptTechnical({ ...receipt, rules: 'enterprise' })).toContain('enterprise certification rules');
+  });
+
+  it('says when it was certified the way the lines above say a day (V4: "11/11/2026, 10:44:27 PM" under 2026-11-11)', () => {
+    const certifiedAt = new Date(2026, 10, 11, 22, 44, 27).toISOString();
+    expect(receiptMoment(certifiedAt)).toBe('2026-11-11 22:44:27');
+    expect(certificationReceiptTechnical({ ...receipt, certifiedAt })).toContain(' · 2026-11-11 22:44:27 · ');
+    expect(certificationReceiptTechnical({ ...receipt, certifiedAt })).not.toMatch(/AM|PM|\d+\/\d+\/\d{4}/);
+    expect(receiptMoment('not a date')).toBe('not a date');
   });
 });
 

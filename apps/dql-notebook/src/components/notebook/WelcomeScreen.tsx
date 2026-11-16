@@ -5,6 +5,8 @@ import { useNotebook } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 import { hostReadOnly, useHostUi } from '../../host/host-ui';
 import type { NotebookFile } from '../../store/types';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { notebookWriteWords } from '../../snowflake-app/snowflake-app-words';
 import {
   compareNotebookResearchSummaries,
   notebookResearchSummaryDetail,
@@ -46,6 +48,7 @@ export function WelcomeScreen({ onOpenFile, onOpenResearchFile }: WelcomeScreenP
   const { state, dispatch } = useNotebook();
   const t = themes[state.themeMode];
   const hostUi = useHostUi();
+  const snowflakeApp = useSnowflakeApp();
   const readOnlyFiles = hostReadOnly(hostUi, 'files');
   const readOnlyBlocks = hostReadOnly(hostUi, 'block_library');
   const fileSignature = state.files.map((file) => file.path).join('|');
@@ -170,7 +173,7 @@ export function WelcomeScreen({ onOpenFile, onOpenResearchFile }: WelcomeScreenP
               Notebook workspace
             </h1>
             <p style={{ margin: '8px 0 0', color: t.textSecondary, fontSize: 13, lineHeight: 1.55, maxWidth: 520 }}>
-              Open a notebook to explore data — write SQL/DQL, chart the results, and
+              Open a notebook to explore data — {notebookWriteWords(snowflakeApp)}, chart the results, and
               save what is reusable as a saved query. Create a new one to start a focused analysis.
             </p>
           </div>

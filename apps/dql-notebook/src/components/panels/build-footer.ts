@@ -1,3 +1,5 @@
+import { semanticLayerName } from '../../snowflake-app/snowflake-app-words';
+
 /**
  * The Build sidebar status line (Notebooks and Blocks). Each count says what it
  * counts: dbt models from the dbt artifacts, warehouse tables from the schema
@@ -10,11 +12,13 @@ export function buildCatalogFooter(input: {
   dbtModels?: number;
   warehouseTables?: number;
   metrics: number;
+  /** The ZLens app for Snowflake: its own semantic layer is "Semantic layer", never "DQL semantic layer". */
+  snowflakeApp?: boolean;
 }): string {
   const plural = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`;
   // `dql` is the native semantic layer: the DQL semantic-layer files in this project.
   const provider = input.provider === 'dql'
-    ? 'DQL semantic layer'
+    ? semanticLayerName(Boolean(input.snowflakeApp))
     : input.provider
       ? input.provider
       : 'dbt';

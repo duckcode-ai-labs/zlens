@@ -308,12 +308,29 @@ function listWords(parts: string[]): string {
   return `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
 }
 
+/** A tile as History tells it apart across versions: its page's id and its own. */
+const tileKey = (pageId: unknown, tileId: unknown) => `${String(pageId ?? '')}/${String(tileId ?? '')}`;
+
+/** The tiles a version added (page id and tile id), so the next version can tell the new tile's placing from a move. */
+export function appTilesAdded(before: AppVersionShape | null, after: AppVersionShape | null): string[] {
+  if (!after) return [];
+  const had = new Set((before?.pageList ?? []).flatMap((page) => tilesOfPage(page).map((tile) => tileKey(page.id, tile.i))));
+  return after.pageList.flatMap((page) => tilesOfPage(page).map((tile) => tileKey(page.id, tile.i))).filter((key) => !had.has(key));
+}
+
+/** What History knows about the version before: the tiles it had just added (App Studio then places them). */
+export interface AppChangeContext {
+  justAdded?: ReadonlySet<string>;
+}
+
 /**
  * What changed in an App between two versions, in plain words, in the order people read an App: its name and
  * purpose, its pages, each page's tiles (added, removed, renamed, text, chart, data), the layout, and its data.
- * Tiles are told apart by their id, and named by their titles. Never paths, ids or fingerprints.
+ * Tiles are told apart by their id, and named by their titles. Never paths, ids or fingerprints. A tile the version
+ * before had just added, moved into its place by App Studio, is placed, not a layout change (V4 tester: "Layout
+ * changed: 1 tile moved or resized" after adding a tile, with nothing moved).
  */
-export function appChanges(before: AppVersionShape | null, after: AppVersionShape | null): AppChange[] {
+export function appChanges(before: AppVersionShape | null, after: AppVersionShape | null, context: AppChangeContext = {}): AppChange[] {
   if (!before || !after) return [];
   const changes: AppChange[] = [];
   if ((before.name ?? '') !== (after.name ?? '')) {
@@ -335,6 +352,7 @@ export function appChanges(before: AppVersionShape | null, after: AppVersionShap
   }
   let moved = 0;
   let layoutOnly = false;
+  const placed: string[] = [];
   for (const [id, page] of afterPages) {
     const old = beforePages.get(id);
     if (!old) continue;
@@ -352,6 +370,7 @@ export function appChanges(before: AppVersionShape | null, after: AppVersionShap
       tilesCameOrWent = true;
       changes.push({ kind: 'tile', text: `Tile removed: ${quoted(appTileLabel(tile))}${onPage(page)}` });
     }
+    let placedOnPage = false;
     for (const [tileId, tile] of newTiles) {
       const was = oldTiles.get(tileId);
       if (!was) continue;
@@ -359,10 +378,19 @@ export function appChanges(before: AppVersionShape | null, after: AppVersionShap
         || !same(was.title, tile.title) || !same(was.text, tile.text)) {
         changes.push(...tileChanges(was, tile, onPage(page)));
       }
-      if (!same([was.x, was.y, was.w, was.h], [tile.x, tile.y, tile.w, tile.h])) moved += 1;
+      if (!same([was.x, was.y, was.w, was.h], [tile.x, tile.y, tile.w, tile.h])) {
+        // Placing keeps the new tile's size; a resize is the person's.
+        if (context.justAdded?.has(tileKey(id, tileId)) && same([was.w, was.h], [tile.w, tile.h])) {
+          placed.push(`${quoted(appTileLabel(tile))}${onPage(page)}`);
+          placedOnPage = true;
+        } else {
+          moved += 1;
+        }
+      }
     }
-    // Tiles that come or go move the others in every screen size: that is not a layout change of its own.
-    if (!tilesCameOrWent && !same(gridOf(old), gridOf(page))) layoutOnly = true;
+    // Tiles that come or go, or a new tile put in its place, move the others in every screen size: that is not a
+    // layout change of its own.
+    if (!tilesCameOrWent && !placedOnPage && !same(gridOf(old), gridOf(page))) layoutOnly = true;
     const oldMeta = (old.metadata ?? {}) as Record<string, unknown>;
     const newMeta = (page.metadata ?? {}) as Record<string, unknown>;
     if (!same(oldMeta.description, newMeta.description)) changes.push({ kind: 'page', text: `Page ${quoted(pageLabel(page))}: description changed` });
@@ -375,6 +403,7 @@ export function appChanges(before: AppVersionShape | null, after: AppVersionShap
   }
   if (moved) changes.push({ kind: 'layout', text: `Layout changed: ${plural(moved, 'tile')} moved or resized` });
   else if (layoutOnly) changes.push({ kind: 'layout', text: 'Layout changed' });
+  for (const tile of placed) changes.push({ kind: 'tile', text: `New tile placed: ${tile}` });
   // Two drafts compare their own lists of data; a draft and a published App, what their tiles read.
   const sourcesOf = (shape: AppVersionShape) => (before.form === after.form ? shape.sources : shape.tileData);
   const oldSources = new Map(sourcesOf(before).map((source) => [source.id, source]));
@@ -428,7 +457,7 @@ function tileChanges(was: Record<string, unknown>, tile: Record<string, unknown>
 }
 
 /** One line about what changed between two shapes of an App: "Added 1 tile", "Text changed in "Intro"". */
-export function appEditWords(before: AppVersionShape | null, after: AppVersionShape | null): string | undefined {
+export function appEditWords(before: AppVersionShape | null, after: AppVersionShape | null, context: AppChangeContext = {}): string | undefined {
   if (!before || !after) return undefined;
   const parts: string[] = [];
   if (after.pages > before.pages) parts.push(`Added ${after.pages - before.pages === 1 ? 'a page' : plural(after.pages - before.pages, 'page')}`);
@@ -437,7 +466,7 @@ export function appEditWords(before: AppVersionShape | null, after: AppVersionSh
   if (after.tiles < before.tiles) parts.push(`Removed ${plural(before.tiles - after.tiles, 'tile')}`);
   if (!parts.length && before.content !== after.content) {
     // Said as what changed when it is one or two things ("Text changed in "Intro""), else in general.
-    const said = appChanges(before, after).filter((change) => change.kind !== 'name' && change.kind !== 'description' && change.kind !== 'data');
+    const said = appChanges(before, after, context).filter((change) => change.kind !== 'name' && change.kind !== 'description' && change.kind !== 'data');
     parts.push(said.length && said.length <= 2 ? said.map((change) => change.text).join('. ') : 'Tiles or layout changed');
   }
   // Settings compare only between two drafts or two published versions (they are kept differently).

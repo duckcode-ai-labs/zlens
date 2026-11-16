@@ -12,6 +12,8 @@ import {
   type AppStudioAiPick,
 } from '../app-studio-ai-plan';
 import { appStudioPlannerWords, CONNECT_AI_ACTION, type AppStudioPlannerVoice } from '../app-studio-ai-voice';
+import { isSnowflakeApp } from '../../../snowflake-app/snowflake-app-mode';
+import { generateGapLabel } from '../../../snowflake-app/snowflake-app-words';
 
 /**
  * The AI mode of the Data step (design D3, AI path): the data an AI proposal
@@ -180,6 +182,8 @@ function AiDataStep({
   browser: Omit<AddDataBrowserProps, 'draft' | 'sourcePolicy' | 'draftId'>;
   ai: DataStepAiProps;
 }): JSX.Element {
+  // Read, not subscribed: the Data step is also rendered by calling it (tests flatten it), where no hook may run.
+  const snowflakeApp = isSnowflakeApp();
   const model = ai.model;
   const voice = ai.voice ?? 'ai';
   const words = appStudioPlannerWords(voice);
@@ -260,7 +264,7 @@ function AiDataStep({
             <header><strong>Not covered yet</strong><small>{model.uncovered.length} {model.uncovered.length === 1 ? (voice === 'keywords' ? 'note' : 'gap') : (voice === 'keywords' ? 'notes' : 'gaps')}</small></header>
             {/* Keyword suggestions only note what they did not match (design D4): never publish blockers. */}
             {voice === 'keywords' ? <p className="data-step-not-covered-note">No suggested source matched these parts of your request. They are notes, not publish blockers: add tiles for them yourself, or leave them out.</p> : null}
-            {model.uncovered.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => ai.onGenerateGap(requirement.id)} disabled={locked}>Generate draft DQL</button></div>)}
+            {model.uncovered.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => ai.onGenerateGap(requirement.id)} disabled={locked}>{generateGapLabel(snowflakeApp)}</button></div>)}
           </section> : null}
           {model.clarifications.length ? <section className="studio-ai-questions" aria-label="AI needs one more decision">
             <header><strong>AI needs one more decision</strong><small>{model.clarifications.length} required</small></header>

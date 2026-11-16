@@ -81,6 +81,8 @@ import { openAppProposalInStudio } from '../apps/app-studio-handoff';
 import { ResultView } from '../output/ResultView';
 import { DraftReviewCard } from '../blocks/DraftReviewCard';
 import { draftNameFromPath, savedQueryNameFromQuestion } from '../blocks/block-types';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { clarificationChoiceWords, draftNameTooltip } from '../../snowflake-app/snowflake-app-words';
 import { SaveAsBlockModal } from '../modals/SaveAsBlockModal';
 import { BlockParameterControls, isRuntimeEditableParameter } from '../parameters/BlockParameterControls';
 export { deriveResultChartConfig } from '../output/ResultView';
@@ -3259,6 +3261,7 @@ function AskRunCard(props: AskRunCardProps) {
   } = props;
   const { dispatch } = useNotebook();
   const hostUiState = useHostUi();
+  const snowflakeApp = useSnowflakeApp();
   const [copied, setCopied] = useState(false);
   const openArtifact = onOpenArtifact ?? (() => dispatch({ type: 'OPEN_AGENT_LOG', run }));
 
@@ -3494,7 +3497,7 @@ function AskRunCard(props: AskRunCardProps) {
       {run.reviewDraft?.path ? (
         <div data-testid="ask-review-draft" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, color: t.textMuted, marginTop: -2, marginBottom: 4 }}>
           <span>
-            Saved as a draft saved query for review (not certified): <code title={run.reviewDraft.path} style={{ fontFamily: t.fontMono, fontSize: 11, overflowWrap: 'anywhere' }}>{draftNameFromPath(run.reviewDraft.path)}</code>
+            Saved as a draft saved query for review (not certified): <code title={draftNameTooltip(run.reviewDraft.path, snowflakeApp)} style={{ fontFamily: t.fontMono, fontSize: 11, overflowWrap: 'anywhere' }}>{draftNameFromPath(run.reviewDraft.path)}</code>
             {run.reviewDraft.created ? '' : ` · asked ${run.reviewDraft.askedTimes} times`}
           </span>
           <button
@@ -3565,22 +3568,27 @@ function ClarificationChoiceList({
   t: Theme;
   onSelect?: (option: AgentRunClarificationOption) => void;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   if (run.status !== 'needs_clarification' || !run.clarificationOptions?.length || !onSelect) return null;
   return (
     <div aria-label="Choose a governed meaning" style={{ display: 'grid', gap: 7, maxWidth: 620 }}>
-      {run.clarificationOptions.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          className="dql-hover dql-lift"
-          onClick={() => onSelect(option)}
-          title={option.kind === 'member' ? `Read the question about ${option.label}` : `Use governed evidence ${option.id}`}
-          style={{ display: 'grid', gap: 3, width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border-default)', background: 'var(--bg-2)', color: t.textPrimary, cursor: 'pointer', textAlign: 'left', fontFamily: t.font }}
-        >
-          <span style={{ fontSize: 12.5, fontWeight: 700 }}>{option.label}</span>
-          {option.description ? <span style={{ fontSize: 11, lineHeight: 1.4, color: t.textMuted }}>{option.description}</span> : null}
-        </button>
-      ))}
+      {run.clarificationOptions.map((option) => {
+        // The words a person reads; the choice sent back is the option itself (its id), never these words.
+        const shown = clarificationChoiceWords(option, snowflakeApp);
+        return (
+          <button
+            key={option.id}
+            type="button"
+            className="dql-hover dql-lift"
+            onClick={() => onSelect(option)}
+            title={option.kind === 'member' ? `Read the question about ${option.label}` : snowflakeApp ? `Use ${shown.label}` : `Use governed evidence ${option.id}`}
+            style={{ display: 'grid', gap: 3, width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid var(--border-default)', background: 'var(--bg-2)', color: t.textPrimary, cursor: 'pointer', textAlign: 'left', fontFamily: t.font }}
+          >
+            <span style={{ fontSize: 12.5, fontWeight: 700 }}>{shown.label}</span>
+            {shown.description ? <span style={{ fontSize: 11, lineHeight: 1.4, color: t.textMuted }}>{shown.description}</span> : null}
+          </button>
+        );
+      })}
     </div>
   );
 }

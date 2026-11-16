@@ -1,10 +1,17 @@
 import type { ReactNode } from 'react';
 import { relatedFieldWords } from '@zlens/core/datasets/related-fields';
+import { isSnowflakeApp } from '../../../snowflake-app/snowflake-app-mode';
 import { studioErrorWords } from '../app-studio-words';
 
-/** A name in words: "order_total" → "Order Total"; a related field "location__location_name" → "Location Name" (design D2). */
+/**
+ * A name in words: "order_total" → "Order Total"; a related field "location__location_name" → "Location Name" (design
+ * D2). In the app for Snowflake a column is named in capitals: "POINTS_PER_GAME" reads "Points Per Game", not
+ * "POINTS PER GAME" (V4 tester).
+ */
 export function humanize(value: string): string {
-  return (relatedFieldWords(value) ?? value).replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const named = relatedFieldWords(value) ?? value;
+  const spoken = isSnowflakeApp() && /[A-Z]/.test(named) && !/[a-z]/.test(named) ? named.toLowerCase() : named;
+  return spoken.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 /**

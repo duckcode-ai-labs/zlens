@@ -14,8 +14,9 @@ const FILTER_LABELS: Record<LibraryFilter, string> = {
 /**
  * The App library's words. A reader under a host (RFC 0010 HH-9 `audience: 'reader'`) reads Apps shared with them
  * and drafts nothing here, so the single-user notebook's words (local drafts, private, local files) are left out.
+ * The ZLens app for Snowflake keeps no local files: its loading line says what it reads in plain words (V4 tester).
  */
-export function appLibraryWords(reader: boolean): {
+export function appLibraryWords(reader: boolean, snowflakeApp = false): {
   intro: string;
   filters: LibraryFilter[];
   label: (filter: LibraryFilter) => string;
@@ -30,7 +31,7 @@ export function appLibraryWords(reader: boolean): {
       filters: ['all', 'drafts', 'private', 'shared', 'fav'],
       label: (filter) => FILTER_LABELS[filter],
       localCounts: true,
-      loadingDetail: 'Reading local app files from this ZLens project.',
+      loadingDetail: snowflakeApp ? 'Getting your Apps.' : 'Reading local app files from this ZLens project.',
       emptyDetail: 'Change the filter or start a new App above. A new App stays visible only to you until you publish it.',
       appNote: (app) => `${app.name} consumption surface for ${app.domain}.`,
     };

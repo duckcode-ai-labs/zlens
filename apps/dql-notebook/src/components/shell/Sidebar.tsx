@@ -6,6 +6,7 @@ import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 import { BuildSidebar } from '../panels/BuildSidebar';
 import { buildCatalogFooter } from '../panels/build-footer';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { ConnectionPanel } from '../panels/ConnectionPanel';
 import { LineagePanel } from '../panels/LineagePanel';
 import { GitPanel } from '../panels/GitPanel';
@@ -35,6 +36,7 @@ export function Sidebar({ onOpenFile }: SidebarProps) {
   })));
   const dispatch = useDispatch();
   const hostUi = useHostUi();
+  const snowflakeApp = useSnowflakeApp();
   const t = themes[state.themeMode];
   const [collapseHover, setCollapseHover] = useState(false);
   // Match Block Studio's explorer width so all four Build tabs retain their
@@ -53,6 +55,7 @@ export function Sidebar({ onOpenFile }: SidebarProps) {
       dbtModels: state.blockStudioDbtStatus?.counts.models,
       warehouseTables: state.schemaTables.length,
       metrics: state.semanticLayer.metrics.length,
+      snowflakeApp,
     });
 
   // The dbt model count is a local artifact read (no warehouse call); load it

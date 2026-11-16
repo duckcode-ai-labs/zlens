@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CORTEX_HELP, aiTurnedOff, brandsAllowed, cortexSignInLine, providerAllowed } from './provider-choices';
+import { CORTEX_HELP, aiTurnedOff, brandsAllowed, cortexSignInLine, modelInUseLine, providerAllowed, testThenSave } from './provider-choices';
 
 const BRANDS = [
   { key: 'claude', modes: { subscription: 'claude-code', api: 'anthropic' } },
@@ -58,5 +58,41 @@ describe('Snowflake Cortex in Settings', () => {
     const problem = 'Snowflake Cortex signs in with your Snowflake connection\'s key pair, programmatic access token or OAuth token; this connection uses a password.';
     expect(cortexSignInLine({ connectionSignIn: { connection: 'app', method: 'password', problem } })).toEqual({ ok: false, text: problem });
     expect(CORTEX_HELP.join(' ')).toContain('cross-region inference');
+  });
+});
+
+/**
+ * V4 tester: "llama3.1-70b" in Settings » AI provider » Model, then "Test, save & activate": a green "Snowflake
+ * Cortex answered" line, no refusal, and a blank field after a reload, so nobody could tell which model was in use.
+ */
+describe('Test, save & activate says the outcome of both steps', () => {
+  const refusal = 'ZLens asks Claude through Snowflake Cortex. Name a Claude model that Cortex offers in your account, such as claude-sonnet-5-5 (not "llama3.1-70b").';
+
+  it('shows the save\'s refusal in place of the test\'s success', async () => {
+    const outcome = await testThenSave(
+      async () => ({ ok: true, message: 'Snowflake Cortex answered through Cortex SQL (model llama3.1-70b).' }),
+      async () => { throw new Error(refusal); },
+    );
+    expect(outcome).toEqual({ ok: false, failed: 'save', message: refusal });
+  });
+
+  it('shows the test\'s refusal, and never saves, when the test refuses', async () => {
+    let saved = false;
+    const outcome = await testThenSave(async () => ({ ok: false, message: refusal }), async () => { saved = true; return {}; });
+    expect(outcome).toEqual({ ok: false, failed: 'test', message: refusal });
+    expect(saved).toBe(false);
+  });
+
+  it('says the test passed only once the save went through', async () => {
+    const outcome = await testThenSave(async () => ({ ok: true, message: 'Snowflake Cortex responded: OK' }), async () => ({ providers: [] }));
+    expect(outcome).toEqual({ ok: true, message: 'Snowflake Cortex responded: OK', saved: { providers: [] } });
+  });
+
+  it('says which model is in use, the default when none is saved', () => {
+    expect(modelInUseLine({ defaultModel: 'claude-sonnet-5-5' })).toBe('In use: claude-sonnet-5-5 (the default)');
+    expect(modelInUseLine({ model: ' ', defaultModel: 'claude-sonnet-5-5' })).toBe('In use: claude-sonnet-5-5 (the default)');
+    expect(modelInUseLine({ model: 'claude-opus-5', defaultModel: 'claude-sonnet-5-5' })).toBe('In use: claude-opus-5');
+    expect(modelInUseLine({})).toBeNull();
+    expect(modelInUseLine(undefined)).toBeNull();
   });
 });

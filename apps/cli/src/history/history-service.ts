@@ -3,7 +3,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { automaticAskDraftState } from '@zlens/agent';
 import { applyCompanionCertification } from '../certification-receipt.js';
 import { GitHistoryStore } from './git-history-store.js';
-import { HistoryIndex, withoutDraftEditName, type HistoryChangeKind, type IndexedChange, type IndexedCommit, type ItemVersion } from './history-index.js';
+import { HistoryIndex, tilesJustAdded, withoutDraftEditName, type HistoryChangeKind, type IndexedChange, type IndexedCommit, type ItemVersion } from './history-index.js';
 import { HistorySqlLog, type HistorySqlLogOptions, type SqlLogRow, type SqlLogState } from './history-sql-log.js';
 import { AI_ASK_NAME, ZLENS_AUTHOR, type HistoryAction, type HistoryAuthor, type HistoryStore } from './history-store.js';
 import { changedLineCount, diffLines, type DiffLine } from './line-diff.js';
@@ -512,7 +512,8 @@ export class HistoryService {
     if (!changes.length && !options.allowEmpty) return [];
     const made: IndexedCommit[] = [];
     let rest = changes;
-    if (action !== 'start' && action !== 'clear-drafts' && action !== 'restore' && author.kind !== 'ai') {
+    // A restore from History is exactly the version asked for; an automatic Ask draft saved meanwhile is still Ask's.
+    if (action !== 'start' && action !== 'clear-drafts' && !(action === 'restore' && options.restoredFrom) && author.kind !== 'ai') {
       const drafted = this.askDrafts(changes);
       if (drafted.length) {
         const ai: HistoryAuthor = { name: AI_ASK_NAME, kind: 'ai', ...(author.kind === 'person' ? { askedBy: author.name } : {}) };
@@ -753,7 +754,9 @@ export class HistoryService {
     if (to.change.kind === 'app') {
       // In words first; the files stay for Technical details.
       const shapeOf = (version: ItemVersion, files: Array<{ path: string; content: string }>) => appVersionShape(new Map(files.map((file) => [file.path.slice(version.change.item.length + 1), file.content])));
-      result.app = { changes: appChanges(shapeOf(from, fromFiles), shapeOf(to, toFiles)) };
+      // One save after another: a tile the first had just added is placed by the second, not moved.
+      const justAdded = to.version === from.version + 1 ? tilesJustAdded(to.commit, from.change, from.commit) : undefined;
+      result.app = { changes: appChanges(shapeOf(from, fromFiles), shapeOf(to, toFiles), { justAdded }) };
     }
     if (to.change.kind === 'saved_query') {
       const aSource = fromByRole.get(':main')?.content ?? null;
@@ -1106,6 +1109,8 @@ function authorMatches(author: HistoryAuthor, by: string | undefined): boolean {
 
 export function actionForRequest(method: string, path: string): HistoryAction {
   if (path === '/api/blocks/ask-drafts/clear') return 'clear-drafts';
+  // Undo of a delete brings an App back from ZLens's trash: it is restored, not made again (V4 tester).
+  if (method === 'POST' && /^\/api\/app-recoveries\/[^/]+\/restore$/.test(path)) return 'restore';
   if (/\/certify$/.test(path)) return 'certify';
   if (method === 'DELETE') return 'delete';
   return 'save';
@@ -1124,6 +1129,7 @@ function defaultMessage(action: HistoryAction, changes: PendingChange[]): string
     case 'certify': return `Certified ${what}`;
     case 'clear-drafts': return `Cleared ${changes.filter((change) => change.path.endsWith('.dql')).length} automatic Ask drafts`;
     case 'delete': return `Removed ${what}`;
+    case 'restore': return `Restored ${what}`;
     case 'upgrade': {
       const removed = changes.filter((change) => change.content === null && isAppStudioDraftPath(change.path)).length;
       if (removed && removed === changes.length) return removed === 1 ? 'An empty copy of another App, moved to the trash' : `${removed} empty copies of other Apps, moved to the trash`;

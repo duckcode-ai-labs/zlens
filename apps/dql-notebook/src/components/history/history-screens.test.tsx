@@ -16,7 +16,7 @@ import { ItemHistoryView } from './ItemHistory';
 import { historyRoute, requestBlockHistoryTab, setHistoryRoute, takeBlockHistoryTab } from './history-route';
 import { appIdOf } from './history-navigation';
 import {
-  actionLabel, authorLabel, bannerText, dayLabel, formatBytes, groupByDay, historySql, initials, itemLabel, kindsLabel, restorableVersion, restoredNotice, whenLabel,
+  actionLabel, authorLabel, bannerText, dayLabel, formatBytes, groupByDay, groupRestoreLabel, historySql, initials, itemLabel, kindsLabel, restorableVersion, restoredNotice, whenLabel,
 } from './history-words';
 
 /**
@@ -132,6 +132,25 @@ describe('a line in the project\'s History', () => {
     const open = renderToStaticMarkup(<ChangeLine entry={cleared} first t={t} expanded onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
     expect(open).toContain('draft_a');
     expect(open).toContain('draft_b');
+  });
+
+  it('says what the Restore of a line of several items does: it lists them, each with its own Restore (V4)', () => {
+    const appItem = (n: number) => ({ key: `apps/app-${n}`, current: `apps/app-${n}`, name: `App ${n}`, kind: 'app' as const, version: 2, certified: false, removed: true, isCurrentVersion: true });
+    const trash: HistoryFeedEntry = {
+      ...certifiedLine, id: 't1', by: { name: 'ZLens', kind: 'zlens' }, action: 'trash', change: 'removed', kind: 'app', certified: false,
+      detail: 'Each can be restored from History', canCompare: false, canRestore: true, version: undefined, count: 13,
+      items: Array.from({ length: 13 }, (_, n) => appItem(n + 1)),
+    };
+    const closed = renderToStaticMarkup(<ChangeLine entry={trash} first t={t} expanded={false} onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(closed).toContain('found in the trash:');
+    expect(closed).toContain('13 Apps');
+    expect(closed).toContain('Choose Apps to restore');
+    expect(closed).not.toMatch(/<\/svg> Restore<\/button>/);
+    const open = renderToStaticMarkup(<ChangeLine entry={trash} first t={t} expanded onExpand={noop} onOpen={noop} onCompare={noop} onRestore={async () => undefined} />);
+    expect(open).toContain('Hide the list');
+    expect(open).toContain('App 13');
+    expect(groupRestoreLabel({ kind: 'saved_query', items: [{ kind: 'saved_query' }, { kind: 'saved_query' }] as never }, false)).toBe('Choose saved queries to restore');
+    expect(groupRestoreLabel({ kind: 'app', items: [{ kind: 'app' }, { kind: 'notebook' }] as never }, false)).toBe('Choose items to restore');
   });
 });
 
