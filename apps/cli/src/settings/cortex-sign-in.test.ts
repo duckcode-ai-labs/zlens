@@ -148,7 +148,7 @@ describe('the Cortex provider built from the connection', () => {
     await provider.generate([{ role: 'user', content: 'Reply with exactly: OK' }], { maxTokens: 1 });
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://myorg-test-acct.snowflakecomputing.com/api/v2/cortex/v1/messages');
-    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'claude-sonnet-5', max_tokens: 1 });
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: 'claude-sonnet-5-5', max_tokens: 1 });
     const headers = init.headers as Record<string, string>;
     expect(headers['x-snowflake-authorization-token-type']).toBe('KEYPAIR_JWT');
     const [header, payload, signature] = headers.authorization!.replace(/^Bearer /, '').split('.');

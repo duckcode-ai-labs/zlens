@@ -77,7 +77,7 @@ Snowflake connection.
 2. The form shows which Snowflake connection Cortex signs in with: the
    project's default connection, or the one you name under **Snowflake
    connection**.
-3. Optional: set a **Model**. The default is `claude-sonnet-5`. Cortex names
+3. Optional: set a **Model**. The default is `claude-sonnet-5-5`. Cortex names
    its Claude models the same way (`claude-opus-5`, `claude-haiku-4-5`, ...);
    which ones you can use depends on your account and region.
 4. Click **Test, save & activate**. The test asks Cortex for a one-token answer.

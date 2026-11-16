@@ -233,7 +233,7 @@ const EXPECTED_TEST_FILES = 201;
 // that say columns in words and name no other table, "Not in this data" in plain words (ask-pipeline/v2-answers.test.ts
 // +8), one draft per name across drafts folders and its owner in the app for Snowflake (metadata/drafts.test.ts +3),
 // and the signed-in owner (metadata/identity.test.ts +2).
-const EXPECTED_TESTS = 2947;
+const EXPECTED_TESTS = 2949;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2853.

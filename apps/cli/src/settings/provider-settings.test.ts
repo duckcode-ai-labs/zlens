@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   getEffectiveProviderConfig,
+  isCortexClaudeModel,
   listProviderSettings,
   saveProviderSettings,
 } from './provider-settings.js';
@@ -120,5 +121,24 @@ describe('provider reasoning-effort settings', () => {
     // Local + subscription providers never expose the control.
     expect(listProviderSettings(root).find((p) => p.id === 'ollama')!.supportsReasoningEffort).toBe(false);
     expect(listProviderSettings(root).find((p) => p.id === 'claude-code')!.supportsReasoningEffort).toBe(false);
+  });
+});
+
+describe('Snowflake Cortex models (the listing names Claude models only)', () => {
+  it('keeps the default when no model is named, and accepts any Claude model Cortex names', () => {
+    saveProviderSettings(root, { id: 'cortex', model: '' });
+    expect(getEffectiveProviderConfig(root, 'cortex').model).toBeUndefined();
+    saveProviderSettings(root, { id: 'cortex', model: ' claude-opus-4-7 ' });
+    expect(getEffectiveProviderConfig(root, 'cortex').model).toBe('claude-opus-4-7');
+    expect(isCortexClaudeModel('claude-sonnet-5')).toBe(true);
+    expect(isCortexClaudeModel('claude-3-5-sonnet')).toBe(true);
+  });
+
+  it('refuses a model that is not Claude, and keeps the one saved before', () => {
+    saveProviderSettings(root, { id: 'cortex', model: 'claude-sonnet-5' });
+    for (const model of ['llama3.1-70b', 'mistral-large2', 'openai-gpt-4.1', 'claude', 'claude-']) {
+      expect(() => saveProviderSettings(root, { id: 'cortex', model })).toThrow(/Claude model that Cortex offers/);
+    }
+    expect(getEffectiveProviderConfig(root, 'cortex').model).toBe('claude-sonnet-5');
   });
 });

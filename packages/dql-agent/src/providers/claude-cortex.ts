@@ -20,7 +20,7 @@ import { ClaudeProvider } from './claude.js';
  */
 
 /** The model a Cortex provider uses when none is set; Cortex names Claude models `claude-<family>-<version>`. */
-export const CORTEX_DEFAULT_MODEL = 'claude-sonnet-5';
+export const CORTEX_DEFAULT_MODEL = 'claude-sonnet-5-5';
 
 export type CortexTokenType = 'KEYPAIR_JWT' | 'PROGRAMMATIC_ACCESS_TOKEN' | 'OAUTH';
 

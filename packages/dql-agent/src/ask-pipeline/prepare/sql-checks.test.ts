@@ -185,3 +185,18 @@ describe('the checks an AI-drafted statement passes before it runs', () => {
     expect(mentionsColumn('SELECT "location_name" FROM t', 'location_name')).toBe(true);
   });
 });
+
+describe('a clause the reading could not place states no value the question did not (V3 gate, Claude Sonnet 5.5)', () => {
+  const reading = (clause: string) => ({ version: 1, kind: 'analytics', reading: 'x', measures: [], groupBy: [], display: [], filters: [], expectedShape: 'ranking', unresolved: [{ clause, options: [], material: true }], provenance: {} }) as never;
+
+  it('does not take the first word of the model\'s note as a value', () => {
+    const note = 'Restrict to playoff games only. The only points column I can see is season totals per player (FCT_PLAYER_JOURNEY), which mixes regular season and playoffs.';
+    const stated = statedValues('Who were the top 5 scorers in the 2016 playoffs?', reading(note));
+    expect(stated.map((item) => item.value)).toEqual(['2016']);
+  });
+
+  it('still keeps a name the question says, written in capitals by the note', () => {
+    const stated = statedValues('how many home wins did the celtics have in 2008', reading('Celtics home games in the 2008 regular season'));
+    expect(stated.map((item) => item.value)).toEqual(['2008', 'Celtics']);
+  });
+});
