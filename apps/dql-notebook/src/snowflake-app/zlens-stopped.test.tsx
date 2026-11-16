@@ -5,8 +5,8 @@ import { followServerEvents, STREAM_FAILURES_BEFORE_STOPPED, STREAM_RETRY_MS } f
 import type { ServerEventFrame } from '../api/server-auth';
 import { operationsPollMs } from '../operations/OperationsProvider';
 import { setSnowflakeApp } from './snowflake-app-mode';
-import { isZLensStopped, markZLensStopped, resetZLensStoppedForTests, stoppingNotice, zlensStopped } from './zlens-stopped';
-import { ZLensStoppedNotice, zlensStoppedWords } from './ZLensStoppedNotice';
+import { isZLensStopped, markZLensStopped, resetZLensStoppedForTests, startZLensAgain, stoppingNotice, zlensStopped } from './zlens-stopped';
+import { GAVE_UP_WORDS, startingWords, ZLensStoppedNotice, zlensStoppedWords } from './ZLensStoppedNotice';
 
 /**
  * V4 idle stop: after ZLens stopped in Snowflake, an open tab's stream reconnects woke the service 11 seconds
@@ -181,5 +181,64 @@ describe('the notice', () => {
     expect(zlensStoppedWords({ reason: 'lost' }).detail).toMatch(/^ZLens was stopped, or this page lost its connection to it\. /);
     expect(zlensStoppedWords({ reason: 'idle', idleMinutes: 1 }).detail).toMatch(/^ZLens stopped because no one used it for 1 minute\. /);
     expect(zlensStoppedWords({ reason: 'idle' }).detail).toMatch(/^ZLens stopped because no one used it for a while\. /);
+  });
+});
+
+describe('starting ZLens again', () => {
+  // V4 release check: the button reloaded the page at once, the reload landed while Snowflake was still starting
+  // the service, and the person saw Snowflake's raw "service is not yet running" error page. Now the page wakes
+  // ZLens, checks its health until ZLens itself answers, and only then opens it.
+  const unavailable = () => new Response('{"responseType":"ERROR_SERVICE_UNAVAILABLE"}', { status: 503 });
+  const clock = () => {
+    let at = 0;
+    return { now: () => at, sleep: async (ms: number) => { at += ms; } };
+  };
+
+  it('waits through Snowflake\'s "not yet running" answers and opens ZLens only once it answers', async () => {
+    const send = vi.fn()
+      .mockResolvedValueOnce(unavailable())
+      .mockRejectedValueOnce(new TypeError('network error'))
+      .mockResolvedValueOnce(unavailable())
+      .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+    const { now, sleep } = clock();
+    await expect(startZLensAgain({ send: send as unknown as typeof fetch, now, sleep, intervalMs: 10_000 })).resolves.toBe('ready');
+    expect(send).toHaveBeenCalledTimes(4);
+    expect(send.mock.calls[0][0]).toBe('/api/health');
+    expect(send.mock.calls[0][1]).toMatchObject({ cache: 'no-store', redirect: 'manual' });
+  });
+
+  it('reloads for sign-in when Snowflake redirects', async () => {
+    const redirect = { type: 'opaqueredirect', status: 0, ok: false } as unknown as Response;
+    const send = vi.fn().mockResolvedValueOnce(unavailable()).mockResolvedValueOnce(redirect);
+    const { now, sleep } = clock();
+    await expect(startZLensAgain({ send: send as unknown as typeof fetch, now, sleep })).resolves.toBe('sign-in');
+  });
+
+  it('stops checking after 20 minutes and offers to check again', async () => {
+    const send = vi.fn().mockImplementation(async () => unavailable());
+    const { now, sleep } = clock();
+    await expect(startZLensAgain({ send: send as unknown as typeof fetch, now, sleep, intervalMs: 10_000 })).resolves.toBe('gave-up');
+    expect(send).toHaveBeenCalledTimes(121);
+    expect(GAVE_UP_WORDS).toBe('ZLens has not started after 20 minutes. Check again in a few minutes.');
+  });
+
+  it('sends its check although the page holds every other request to ZLens', async () => {
+    const original = vi.fn().mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    const before = globalThis.fetch;
+    globalThis.fetch = original as unknown as typeof fetch;
+    try {
+      markZLensStopped({ reason: 'stopped' });
+      expect(globalThis.fetch).not.toBe(original);
+      await expect(startZLensAgain()).resolves.toBe('ready');
+      expect(original).toHaveBeenCalledWith('/api/health', expect.objectContaining({ redirect: 'manual' }));
+    } finally {
+      resetZLensStoppedForTests();
+      globalThis.fetch = before;
+    }
+  });
+
+  it('shows the time so far while ZLens starts', () => {
+    expect(startingWords(0)).toBe('Starting ZLens… 0:00. This page opens it when it is ready.');
+    expect(startingWords(83_400)).toBe('Starting ZLens… 1:23. This page opens it when it is ready.');
   });
 });

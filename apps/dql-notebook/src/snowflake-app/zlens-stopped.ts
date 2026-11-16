@@ -4,7 +4,8 @@ import { useSyncExternalStore } from 'react';
  * The ZLens app for Snowflake stopped: by itself after its quiet spell, or because it was stopped
  * (`stop_app()`, or Snowflake suspending the service). Snowflake starts a stopped app again on ANY request
  * to its address, so from then on this page sends nothing by itself: it holds every request to ZLens,
- * unsent, until the person chooses to start ZLens again (which reloads the page).
+ * unsent, until the person chooses to start ZLens again (startZLensAgain: it wakes ZLens, waits until it answers, then
+ * the page reloads).
  *
  * The server says so with a `stopping` event on the page's event streams (it sends one only inside
  * Snowflake). In the app for Snowflake the page also takes ZLens as stopped when its event streams fail
@@ -103,6 +104,48 @@ function holdRequestsToZLens(): void {
       signal.addEventListener('abort', () => reject(aborted(signal)), { once: true });
     });
   }) as typeof fetch;
+}
+
+/** How starting ZLens again ended: ZLens answers, Snowflake wants the person to sign in, or it did not start in time. */
+export type StartOutcome = 'ready' | 'sign-in' | 'gave-up';
+
+/** How often the page checks whether ZLens answers again, and when it stops checking. */
+export const START_CHECK_MS = 10_000;
+export const START_GIVE_UP_MS = 20 * 60_000;
+
+/**
+ * Starts ZLens again, once the person asks. The first request to its address wakes the service (Snowflake
+ * starts a stopped app on any request); its health is then checked every few seconds until ZLens itself
+ * answers, and only then does the caller reload the page. Reloading at once landed while ZLens was still
+ * starting and showed Snowflake's raw "service is not yet running" error page (V4 release check). A redirect
+ * means Snowflake wants the person to sign in again, which a reload shows.
+ */
+export async function startZLensAgain(options: {
+  send?: typeof fetch;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+  intervalMs?: number;
+  giveUpMs?: number;
+} = {}): Promise<StartOutcome> {
+  // The page holds every request to ZLens once it stopped; this one the person asked for, so it goes out.
+  const send = options.send ?? pageFetch ?? globalThis.fetch;
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms); }));
+  const interval = options.intervalMs ?? START_CHECK_MS;
+  const giveUp = options.giveUpMs ?? START_GIVE_UP_MS;
+  const started = now();
+  for (;;) {
+    try {
+      const response = await send('/api/health', { cache: 'no-store', credentials: 'same-origin', redirect: 'manual' });
+      if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) return 'sign-in';
+      if (response.ok) return 'ready';
+      // 503 from Snowflake: the service is still starting.
+    } catch {
+      // Not reachable yet.
+    }
+    if (now() - started >= giveUp) return 'gave-up';
+    await sleep(interval);
+  }
 }
 
 /** Tests: ZLens running again, requests sent as before. */
