@@ -6,6 +6,13 @@ import { START_GIVE_UP_MS, startZLensAgain, useZLensStopped, watchForStoppedServ
 
 /** What the page says once ZLens stopped. */
 export function zlensStoppedWords(stopped: ZLensStopped): { title: string; detail: string; start: string } {
+  if (stopped.startNow) {
+    return {
+      title: 'ZLens is starting',
+      detail: 'ZLens had stopped while no one was using it. It is starting again now.',
+      start: 'This takes about 2 to 3 minutes, longer right after an install or update.',
+    };
+  }
   const minutes = stopped.idleMinutes;
   const detail = stopped.reason === 'idle'
     ? `ZLens stopped because no one used it for ${minutes === undefined ? 'a while' : `${minutes} minute${minutes === 1 ? '' : 's'}`}.`
@@ -43,16 +50,6 @@ export function ZLensStoppedNotice() {
   }, [snowflakeApp]);
   const [state, setState] = useState<StartState>({ phase: 'waiting' });
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (state.phase !== 'starting') return undefined;
-    // A clock on the page only: it sends nothing.
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [state.phase]);
-  if (!stopped) return null;
-  const t = themes[themeMode];
-  const words = zlensStoppedWords(stopped);
-  const starting = state.phase === 'starting';
   const start = () => {
     const since = Date.now();
     setNow(since);
@@ -62,6 +59,22 @@ export function ZLensStoppedNotice() {
       else window.location.reload();
     });
   };
+  useEffect(() => {
+    if (state.phase !== 'starting') return undefined;
+    // A clock on the page only: it sends nothing.
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [state.phase]);
+  useEffect(() => {
+    // The person is here and ZLens has already been asked to start (their request woke it): no need to ask them.
+    if (stopped?.startNow && state.phase === 'waiting') start();
+    // start() only reads module functions and sets state; it changes with every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stopped, state.phase]);
+  if (!stopped) return null;
+  const t = themes[themeMode];
+  const words = zlensStoppedWords(stopped);
+  const starting = state.phase === 'starting';
   return (
     <div data-testid="zlens-stopped" style={{ position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: t.modalOverlay }}>
       <div

@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { NotebookProvider } from '../store/NotebookStore';
 import { followServerEvents, STREAM_FAILURES_BEFORE_STOPPED, STREAM_QUIET_MS, STREAM_RETRY_MS } from '../api/follow-server-events';
-import type { ServerEventFrame } from '../api/server-auth';
+import { notePersonActive, type ServerEventFrame } from '../api/server-auth';
 import { operationsPollMs } from '../operations/OperationsProvider';
 import { setSnowflakeApp } from './snowflake-app-mode';
-import { isZLensStopped, markZLensStopped, resetZLensStoppedForTests, snowflakeSaysNotRunning, startZLensAgain, stoppingNotice, watchForStoppedService, zlensStopped } from './zlens-stopped';
+import { isZLensStopped, markZLensStopped, QUIET_AFTER_MS, resetZLensStoppedForTests, snowflakeSaysNotRunning, startZLensAgain, stoppingNotice, watchForStoppedService, zlensStopped } from './zlens-stopped';
 import { GAVE_UP_WORDS, startingWords, ZLensStoppedNotice, zlensStoppedWords } from './ZLensStoppedNotice';
 
 /**
@@ -311,6 +311,8 @@ describe('streams the Snowflake ingress ends or drops (V4 release check)', () =>
       ? new Response(snowflake503, { status: 503 })
       : new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', send);
+    // Background work: the person last touched the page a minute ago (still under the 2-minute quiet mark).
+    notePersonActive(Date.now() - 60_000);
     watchForStoppedService();
     await fetch('/api/operations?limit=50');
     expect(isZLensStopped()).toBe(false);
@@ -329,5 +331,104 @@ describe('streams the Snowflake ingress ends or drops (V4 release check)', () =>
     expect(snowflakeSaysNotRunning(503, 'Service ZLENS not reachable: service is not yet running')).toBe(true);
     expect(snowflakeSaysNotRunning(503, '{"error":"Cortex is busy"}')).toBe(false);
     expect(snowflakeSaysNotRunning(500, '{"responseType":"ERROR_SERVICE_UNAVAILABLE"}')).toBe(false);
+  });
+});
+
+describe('a page nobody touched goes quiet (V4 release check)', () => {
+  // The Snowflake ingress ends every connection after about 90 s, so the page reopens its streams; and the stopping
+  // event can lose the race against the ingress (stop_app(): the streams were cut, reopened 3 s later, and woke ZLens).
+  // A page nobody touched for 2 minutes now sends nothing by itself; the person's next touch resumes it.
+  const snowflake503 = '{"responseType":"ERROR_SERVICE_UNAVAILABLE","detail":"Service ZLENS not reachable: service is not yet running (serviceStatus=PENDING)."}';
+
+  it('holds background requests once quiet; the next touch checks ZLens first, then sends what waited', async () => {
+    setSnowflakeApp(true);
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => { calls.push(String(input)); return new Response('{}', { status: 200 }); }));
+    notePersonActive();
+    watchForStoppedService();
+    await fetch('/api/host/ui');
+    expect(calls).toEqual(['/api/host/ui']);
+
+    await vi.advanceTimersByTimeAsync(QUIET_AFTER_MS + 1);
+    let answered: Response | undefined;
+    void fetch('/api/host/ui').then((response) => { answered = response; });
+    // A long Ask the person started still reports back without a touch.
+    await fetch('/api/long-requests/run-1');
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await settle();
+    expect(calls).toEqual(['/api/host/ui', '/api/long-requests/run-1']);
+    expect(answered).toBeUndefined();
+
+    notePersonActive();
+    await settle();
+    expect(calls).toEqual(['/api/host/ui', '/api/long-requests/run-1', '/api/health', '/api/host/ui']);
+    expect(answered?.status).toBe(200);
+    expect(isZLensStopped()).toBe(false);
+  });
+
+  it('a touch on a quiet page that finds ZLens stopped starts it and opens it when ready, sending nothing that waited', async () => {
+    setSnowflakeApp(true);
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return String(input) === '/api/health' ? new Response(snowflake503, { status: 503 }) : new Response('{}', { status: 200 });
+    }));
+    notePersonActive();
+    watchForStoppedService();
+    await vi.advanceTimersByTimeAsync(QUIET_AFTER_MS + 1);
+    void fetch('/api/host/ui');
+    void fetch('/api/operations?limit=50');
+    await settle();
+    expect(calls).toEqual([]);
+    notePersonActive();
+    await settle();
+    expect(calls).toEqual(['/api/health']);
+    expect(zlensStopped()).toEqual({ reason: 'idle', startNow: true });
+  });
+
+  it('a stream the ingress ends while the page is quiet is opened again only after the person is back', async () => {
+    setSnowflakeApp(true);
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return String(input) === '/api/health' ? new Response('{}', { status: 200 }) : eventStream(': connected\n\n', 'close');
+    }));
+    notePersonActive();
+    watchForStoppedService();
+    const stop = followServerEvents('/api/watch', () => undefined);
+    await settle();
+    await vi.advanceTimersByTimeAsync(QUIET_AFTER_MS + STREAM_RETRY_MS * 2);
+    await settle();
+    const before = calls.length;
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await settle();
+    expect(calls.length).toBe(before);
+    notePersonActive();
+    await settle();
+    expect(calls.slice(before)).toEqual(['/api/health', '/api/watch']);
+    stop();
+  });
+
+  it("the person's own request that finds ZLens stopped has started it: the page starts it without asking", async () => {
+    setSnowflakeApp(true);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(snowflake503, { status: 503 })));
+    notePersonActive();
+    watchForStoppedService();
+    await fetch('/api/semantic-layer');
+    expect(zlensStopped()).toEqual({ reason: 'stopped', startNow: true });
+    expect(zlensStoppedWords({ reason: 'stopped', startNow: true })).toEqual({
+      title: 'ZLens is starting',
+      detail: 'ZLens had stopped while no one was using it. It is starting again now.',
+      start: 'This takes about 2 to 3 minutes, longer right after an install or update.',
+    });
+  });
+
+  it('outside the app for Snowflake nothing goes quiet', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => { calls.push(String(input)); return new Response('{}', { status: 200 }); }));
+    notePersonActive();
+    await vi.advanceTimersByTimeAsync(QUIET_AFTER_MS * 5);
+    await fetch('/api/host/ui');
+    expect(calls).toEqual(['/api/host/ui']);
   });
 });
