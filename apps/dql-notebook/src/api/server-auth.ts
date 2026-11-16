@@ -176,11 +176,33 @@ export interface ServerEventFrame {
  * bearer header as every other API call. Native EventSource has no header API.
  * `onOpen` is called once the server has accepted the stream.
  */
+/**
+ * One read of an event stream, or an error once it carried nothing (not even the server's keep-alive line) for
+ * `quietMs`: a connection a proxy dropped without closing it looks open forever, and the page would miss what the
+ * server says next (V4 release check: a dropped stream missed `stopping`).
+ */
+async function readOrQuiet(reader: ReadableStreamDefaultReader<Uint8Array>, quietMs: number | undefined): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (quietMs === undefined || !(quietMs > 0)) return reader.read();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const quiet = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`Event stream carried nothing for ${Math.round(quietMs / 1000)} s.`));
+    }, quietMs);
+  });
+  try {
+    return await Promise.race([reader.read(), quiet]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function streamServerEvents(
   path: string,
   onEvent: (frame: ServerEventFrame) => void,
   signal: AbortSignal,
   onOpen?: () => void,
+  quietMs?: number,
 ): Promise<void> {
   const response = await fetch(path, {
     headers: withServerAuthorization({ Accept: 'text/event-stream' }),
@@ -205,7 +227,7 @@ export async function streamServerEvents(
   };
 
   while (!signal.aborted) {
-    const next = await reader.read();
+    const next = await readOrQuiet(reader, quietMs);
     buffer += decoder.decode(next.value, { stream: !next.done });
     const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() ?? '';

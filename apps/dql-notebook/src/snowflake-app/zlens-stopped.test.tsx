@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { NotebookProvider } from '../store/NotebookStore';
-import { followServerEvents, STREAM_FAILURES_BEFORE_STOPPED, STREAM_RETRY_MS } from '../api/follow-server-events';
+import { followServerEvents, STREAM_FAILURES_BEFORE_STOPPED, STREAM_QUIET_MS, STREAM_RETRY_MS } from '../api/follow-server-events';
 import type { ServerEventFrame } from '../api/server-auth';
 import { operationsPollMs } from '../operations/OperationsProvider';
 import { setSnowflakeApp } from './snowflake-app-mode';
-import { isZLensStopped, markZLensStopped, resetZLensStoppedForTests, startZLensAgain, stoppingNotice, zlensStopped } from './zlens-stopped';
+import { isZLensStopped, markZLensStopped, resetZLensStoppedForTests, snowflakeSaysNotRunning, startZLensAgain, stoppingNotice, watchForStoppedService, zlensStopped } from './zlens-stopped';
 import { GAVE_UP_WORDS, startingWords, ZLensStoppedNotice, zlensStoppedWords } from './ZLensStoppedNotice';
 
 /**
@@ -240,5 +240,94 @@ describe('starting ZLens again', () => {
   it('shows the time so far while ZLens starts', () => {
     expect(startingWords(0)).toBe('Starting ZLens… 0:00. This page opens it when it is ready.');
     expect(startingWords(83_400)).toBe('Starting ZLens… 1:23. This page opens it when it is ready.');
+  });
+});
+
+describe('streams the Snowflake ingress ends or drops (V4 release check)', () => {
+  // A tab left untouched for an hour never heard `stopping`: the ingress ends a stream that is quiet for 90 s, and
+  // the page stopped following a stream that ended without an error. Its next background request woke ZLens.
+
+  it('a stream that ends without an error is opened again', async () => {
+    setSnowflakeApp(true);
+    const send = vi.fn(async () => eventStream(': connected\n\n', 'close'));
+    vi.stubGlobal('fetch', send);
+    const stop = followServerEvents('/api/watch', () => undefined);
+    await settle();
+    expect(send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(STREAM_RETRY_MS);
+    await settle();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(isZLensStopped()).toBe(false);
+    stop();
+  });
+
+  it('a stream that carries nothing, not even a keep-alive line, for 45 s is taken as dropped and opened again', async () => {
+    setSnowflakeApp(true);
+    let cancelled = 0;
+    const send = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(encoder.encode(': connected\n\n')); },
+      cancel() { cancelled += 1; },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', send);
+    const stop = followServerEvents('/api/operations/events', () => undefined);
+    await settle();
+    await vi.advanceTimersByTimeAsync(STREAM_QUIET_MS - 1_000);
+    expect(send).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settle();
+    expect(cancelled).toBe(1);
+    await vi.advanceTimersByTimeAsync(STREAM_RETRY_MS);
+    await settle();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(isZLensStopped()).toBe(false);
+    stop();
+  });
+
+  it('a stream that hears keep-alive lines stays open', async () => {
+    setSnowflakeApp(true);
+    let push: ((text: string) => void) | undefined;
+    const send = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(': connected\n\n'));
+        push = (text) => controller.enqueue(encoder.encode(text));
+      },
+    }), { status: 200 }));
+    vi.stubGlobal('fetch', send);
+    const stop = followServerEvents('/api/watch', () => undefined);
+    await settle();
+    for (let beat = 0; beat < 8; beat += 1) {
+      await vi.advanceTimersByTimeAsync(15_000);
+      push?.(': keep-alive\n\n');
+      await settle();
+    }
+    expect(send).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("Snowflake's \"service is not running\" answer to any request means ZLens stopped: the page then sends nothing more", async () => {
+    setSnowflakeApp(true);
+    const snowflake503 = '{"requestId":"r","responseType":"ERROR_SERVICE_UNAVAILABLE","detail":"Service ZLENS not reachable: service is not yet running (serviceStatus=PENDING)."}';
+    const send = vi.fn(async (input: RequestInfo | URL) => String(input).includes('host/ui')
+      ? new Response(snowflake503, { status: 503 })
+      : new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', send);
+    watchForStoppedService();
+    await fetch('/api/operations?limit=50');
+    expect(isZLensStopped()).toBe(false);
+    const answer = await fetch('/api/host/ui');
+    expect(answer.status).toBe(503);
+    expect(zlensStopped()).toEqual({ reason: 'stopped' });
+    let answered = false;
+    void fetch('/api/operations?limit=50').then(() => { answered = true; }, () => { answered = true; });
+    await settle();
+    expect(answered).toBe(false);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads only Snowflake\'s own not-running answer that way', () => {
+    expect(snowflakeSaysNotRunning(503, '{"responseType":"ERROR_SERVICE_UNAVAILABLE"}')).toBe(true);
+    expect(snowflakeSaysNotRunning(503, 'Service ZLENS not reachable: service is not yet running')).toBe(true);
+    expect(snowflakeSaysNotRunning(503, '{"error":"Cortex is busy"}')).toBe(false);
+    expect(snowflakeSaysNotRunning(500, '{"responseType":"ERROR_SERVICE_UNAVAILABLE"}')).toBe(false);
   });
 });

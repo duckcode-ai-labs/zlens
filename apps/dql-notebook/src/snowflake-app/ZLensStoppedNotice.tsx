@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNotebookStore } from '../store/NotebookStore';
 import { themes } from '../themes/notebook-theme';
-import { START_GIVE_UP_MS, startZLensAgain, useZLensStopped, type ZLensStopped } from './zlens-stopped';
+import { useSnowflakeApp } from './snowflake-app-mode';
+import { START_GIVE_UP_MS, startZLensAgain, useZLensStopped, watchForStoppedService, type ZLensStopped } from './zlens-stopped';
 
 /** What the page says once ZLens stopped. */
 export function zlensStoppedWords(stopped: ZLensStopped): { title: string; detail: string; start: string } {
@@ -34,7 +35,12 @@ type StartState = { phase: 'waiting' } | { phase: 'starting'; since: number } | 
  */
 export function ZLensStoppedNotice() {
   const stopped = useZLensStopped();
+  const snowflakeApp = useSnowflakeApp();
   const themeMode = useNotebookStore((state) => state.themeMode);
+  useEffect(() => {
+    // Only inside Snowflake: there, Snowflake answers a request for a stopped app itself.
+    if (snowflakeApp) watchForStoppedService();
+  }, [snowflakeApp]);
   const [state, setState] = useState<StartState>({ phase: 'waiting' });
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
