@@ -301,3 +301,11 @@ describe('the event streams through the Snowflake ingress', () => {
     await watch.cancel();
   });
 });
+
+describe('answers inside Snowflake', () => {
+  it('every answer ZLens sends carries its mark, so the page can tell Snowflake\'s own answers apart', async () => {
+    const app = await startApp();
+    expect((await app.call('/api/health')).headers.get('x-zlens-app')).toBe('1');
+    expect((await app.call('/api/no-such-route')).headers.get('x-zlens-app')).toBe('1');
+  });
+});
