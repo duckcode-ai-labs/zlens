@@ -841,8 +841,8 @@ import {
 import { findImportedWorksheet, readBlockStudioImportCalculations } from './block-studio-import.js';
 import { comparisonLayer, compareOptionProblem, ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, queryFingerprint, runComparison } from './report-match/run.js';
 import { readExportAside } from './report-match/read-export-aside.js';
-import { moveMatchRecords, readComparisonDetail, receiptMatchWords, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
-import { catalogWithDrafts, queryChanged, queryMatchFor, receiptLines, UNREADABLE_RECORD } from './report-match/status.js';
+import { moveMatchRecords, readComparisonDetail, readMatchRecords, receiptMatchWords, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
+import { catalogWithDrafts, queryChanged, queryMatchFor, receiptCorrection, receiptLines, UNREADABLE_RECORD, type ReceiptCorrection } from './report-match/status.js';
 import {
   MetricDraftApprovalError,
   approveMetricDrafts,
@@ -13955,6 +13955,26 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
   };
 
+  /**
+   * A certified saved query's receipt line about the old report, as certifying writes it now, when the receipt
+   * was written under the earlier rule and named another comparison (report-match/status.ts, receiptCorrection).
+   * The receipt file is left as it is: its page says what was in effect, and that the file names another.
+   */
+  const certifiedReportLineCorrection = (blockPath: string | null, name: string): ReceiptCorrection | undefined => {
+    const block = blockPath ? savedBlockAt(blockPath) : undefined;
+    if (!block || block.name.toLowerCase() !== name.toLowerCase()) return undefined;
+    try {
+      if (blockSourceStatus(readFileSync(join(projectRoot, block.filePath), 'utf-8')) !== 'certified') return undefined;
+      const companionPath = blockCompanionRelativePath(projectRoot, block.filePath);
+      if (!companionPath || !existsSync(join(projectRoot, companionPath))) return undefined;
+      const receipt = readCompanionCertification(readFileSync(join(projectRoot, companionPath), 'utf-8'));
+      return receipt ? receiptCorrection(readMatchRecords(projectRoot, 'query', block.name), receipt) : undefined;
+    } catch {
+      // An unreadable record file is said by the page's own line; the receipt then stays as written.
+      return undefined;
+    }
+  };
+
   /** The name a saved query has in its file on disk, if the file is there. */
   const savedBlockName = (blockPath: string | undefined): string | undefined => {
     const absolute = blockPath ? safeJoin(projectRoot, blockPath) : undefined;
@@ -19195,7 +19215,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
-    // A saved query's own page: its last comparison with an old report, from the record kept under its name.
+    // A saved query's own page: its last comparison with an old report, from the record kept under its name: the
+    // comparison in effect, the last one made (report-match/status.ts, queryStandingRecord), as certifying reads it.
     // Records hold counts and fingerprints, never a value, so reading one is reading the project.
     if (req.method === 'GET' && path === '/api/report-match/query') {
       const name = url.searchParams.get('name')?.trim() ?? '';
@@ -19205,9 +19226,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         return;
       }
       const record = queryMatchFor(projectRoot, [name]);
-      res.end(serializeJSON(record === 'unreadable'
-        ? { match: null, unreadable: UNREADABLE_RECORD }
-        : { match: record ? { verdict: record.verdict, words: receiptMatchWords(record), report: record.report, comparedAt: record.comparedAt } : null }));
+      if (record === 'unreadable') {
+        res.end(serializeJSON({ match: null, unreadable: UNREADABLE_RECORD }));
+        return;
+      }
+      // With the query's file: a receipt written under the earlier rule, and the line certifying writes now.
+      const atCertification = certifiedReportLineCorrection(url.searchParams.get('path'), name);
+      res.end(serializeJSON({
+        match: record ? { verdict: record.verdict, words: receiptMatchWords(record), report: record.report, comparedAt: record.comparedAt } : null,
+        ...(atCertification ? { atCertification } : {}),
+      }));
       return;
     }
 

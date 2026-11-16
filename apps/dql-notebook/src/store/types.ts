@@ -1380,6 +1380,11 @@ export interface ReportQueryMatch {
   match: { verdict: ReportVerdict; words: string; report: string; comparedAt: string } | null;
   /** The record file can't be read. */
   unreadable?: string;
+  /**
+   * Its receipt was written under the earlier rule and names another comparison than the one in effect when it
+   * was certified: the line certifying writes now (`checks` passed, `warnings` not), in place of `replaces`.
+   */
+  atCertification?: { replaces: string[]; checks: string[]; warnings: string[] };
 }
 
 /** How this result gets recorded: at once on a person's own computer, as a second step on a server, or not at all. */

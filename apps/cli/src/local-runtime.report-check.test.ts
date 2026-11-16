@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import { load as loadYaml } from 'js-yaml';
+import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
+import { blockCompanionRelativePath } from '@zlens/core';
 import { startLocalServer } from './local-runtime.js';
 
 /**
@@ -50,6 +51,8 @@ function newProject(): string {
 
 const seasons = [[2014, 67], [2015, 73], [2016, 67], [2017, 58], [2018, 57]].map(([season, wins]) => ({ SEASON: season, WINS: wins }));
 const oldReport = { name: 'warriors_regular_wins_2014_2018.csv', base64: Buffer.from('SEASON,WINS\n2014,67\n2015,73\n2016,67\n2017,58\n2018,57\n').toString('base64') };
+/** The tester's edited copy: 2016 changed, so one value differs. */
+const editedReport = { name: 'warriors_regular_wins_2014_2018_edited.csv', base64: Buffer.from('SEASON,WINS\n2014,67\n2015,73\n2016,66\n2017,58\n2018,57\n').toString('base64') };
 
 async function serve(root: string, options: { snowflake?: boolean; user?: string } = {}) {
   const executor = { executeQuery: vi.fn(async () => ({ columns: ['SEASON', 'WINS'], rows: seasons, rowCount: seasons.length, executionTime: 1 })) } as unknown as QueryExecutor;
@@ -81,8 +84,8 @@ async function serve(root: string, options: { snowflake?: boolean; user?: string
     return operation.result;
   };
   /** Compare the old report with the saved query, as its page does, and record it. */
-  const compareAndRecord = async (query: string, path: string) => {
-    const compared = await call('POST', '/api/report-match/compare', { file: oldReport, query, queryPath: path });
+  const compareAndRecord = async (query: string, path: string, file: { name: string; base64: string } = oldReport) => {
+    const compared = await call('POST', '/api/report-match/compare', { file, query, queryPath: path });
     expect(compared.status, JSON.stringify(compared.body)).toBe(200);
     const recorded = await call('POST', '/api/report-match/record', { id: compared.body.comparison.id, via: 'screen' });
     expect(recorded.status, JSON.stringify(recorded.body)).toBe(200);
@@ -155,5 +158,67 @@ describe('who certified it, inside Snowflake', () => {
     const receipt = receiptOf(await certify(blockSource(FINAL_NAME), DRAFT_PATH));
     expect(receipt.certifiedBy).not.toBe('TEST_ADMIN');
     expect(receipt.certifiedByName ?? '').not.toBe('TEST_ADMIN');
+  });
+});
+
+describe('V2 retest: one comparison, one count, and the receipt names the comparison in effect', () => {
+  const localDay = (moment = new Date()) => `${moment.getFullYear()}-${String(moment.getMonth() + 1).padStart(2, '0')}-${String(moment.getDate()).padStart(2, '0')}`;
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  it('match, differ, match, certify: the receipt and the page say Matches, with the old report\'s file', async () => {
+    const root = newProject();
+    const { call, certify, compareAndRecord } = await serve(root);
+    expect((await compareAndRecord('WINS By SEASON', DRAFT_PATH)).comparison.comparison.verdict).toBe('matches');
+    await pause();
+    expect((await compareAndRecord('WINS By SEASON', DRAFT_PATH, editedReport)).comparison.comparison.verdict).toBe('differs');
+    await pause();
+    expect((await compareAndRecord('WINS By SEASON', DRAFT_PATH)).comparison.comparison.verdict).toBe('matches');
+    const result = await certify(blockSource(FINAL_NAME), DRAFT_PATH);
+    const receipt = receiptOf(result);
+    expect(receipt.checks).toContain(`Matches warriors_regular_wins_2014_2018 · every value compared (5 of 5 at whole numbers, ${localDay()})`);
+    expect([...(receipt.checks ?? []), ...(receipt.warnings ?? [])].join('\n')).not.toContain('_edited');
+    // "Last compared" on the page: the same comparison.
+    const page = await call('GET', `/api/report-match/query?name=${encodeURIComponent(FINAL_NAME)}&path=${encodeURIComponent(result.block.metadata.path)}`);
+    expect(page.body.match).toMatchObject({ verdict: 'matches', report: 'warriors_regular_wins_2014_2018' });
+    // A receipt written by this rule is never rebuilt.
+    expect(page.body.atCertification).toBeUndefined();
+  });
+
+  it('a differing compare is stored and shown with the count its result gives', async () => {
+    const root = newProject();
+    const { call, compareAndRecord } = await serve(root);
+    const { comparison } = await compareAndRecord('WINS By SEASON', DRAFT_PATH, editedReport);
+    // The fresh result: "Differs: 1 of 5 values (row 2016, WINS). 5 of 5 rows found."
+    expect(comparison.comparison.values).toEqual({ compared: 5, equal: 4 });
+    expect(comparison.comparison.differences).toEqual([expect.objectContaining({ key: ['2016'], column: 'WINS', old: '66', zlens: 67 })]);
+    const page = await call('GET', `/api/report-match/query?name=${encodeURIComponent('WINS By SEASON')}`);
+    expect(page.body.match).toMatchObject({ verdict: 'differs', report: 'warriors_regular_wins_2014_2018_edited' });
+    expect(page.body.match.words).toBe(`Differs from warriors_regular_wins_2014_2018_edited, ${localDay()}: 1 of 5 values differs (in WINS) at whole numbers`);
+  });
+
+  it('a receipt written under the earlier rule: the page gets the line certifying writes now; the file is left as written', async () => {
+    const root = newProject();
+    const { call, certify, compareAndRecord } = await serve(root);
+    await compareAndRecord('WINS By SEASON', DRAFT_PATH);
+    await pause();
+    await compareAndRecord('WINS By SEASON', DRAFT_PATH, editedReport);
+    await pause();
+    await compareAndRecord('WINS By SEASON', DRAFT_PATH);
+    const result = await certify(blockSource(FINAL_NAME), DRAFT_PATH);
+    const blockPath: string = result.block.metadata.path;
+    const matched = receiptOf(result).checks!.find((check) => check.startsWith('Matches '))!;
+    // What V15 wrote for the tester's 11 Nov sequence: the edited copy's Differs, counted by its equal values.
+    const legacyLine = `Differs from warriors_regular_wins_2014_2018_edited, ${localDay()}: 4 of 5 values at whole numbers`;
+    const companion = join(root, blockCompanionRelativePath(root, blockPath)!);
+    const yaml = loadYaml(readFileSync(companion, 'utf-8')) as { certification: { checks: string[]; warnings?: string[] } };
+    yaml.certification.checks = yaml.certification.checks.filter((check) => check !== matched);
+    yaml.certification.warnings = [...(yaml.certification.warnings ?? []), legacyLine];
+    writeFileSync(companion, dumpYaml(yaml, { lineWidth: 200 }));
+    const page = await call('GET', `/api/report-match/query?name=${encodeURIComponent(FINAL_NAME)}&path=${encodeURIComponent(blockPath)}`);
+    expect(page.body.atCertification).toEqual({ replaces: [legacyLine], checks: [matched], warnings: [] });
+    expect(readFileSync(companion, 'utf-8')).toContain(legacyLine);
+    // Another query's path, or none, asks for nothing.
+    expect((await call('GET', `/api/report-match/query?name=other&path=${encodeURIComponent(blockPath)}`)).body.atCertification).toBeUndefined();
+    expect((await call('GET', `/api/report-match/query?name=${encodeURIComponent(FINAL_NAME)}`)).body.atCertification).toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@ import type { DimensionDefinition, MetricDefinition } from '@zlens/core';
 import { importDraftsToApprove, importDraftsWithMatches, listMetricDrafts, type ImportMetricDrafts } from '../import-metric-drafts.js';
 import { matchWords, moveMatchRecords, readMatchRecords, writeMatchRecords, type MatchRecord } from './record.js';
 import { runComparison, type CompareDeps } from './run.js';
-import { catalogWithDrafts, latestMatch, metricMatchStatus, queryChanged, queryMatchFor, receiptLines, standingRecord, type MatchCatalog } from './status.js';
+import { catalogWithDrafts, latestMatch, metricMatchStatus, queryChanged, queryMatchFor, queryStandingRecord, receiptCorrection, receiptLines, standingRecord, type MatchCatalog } from './status.js';
 
 const metric = (name: string, label: string, extra: Partial<MetricDefinition> = {}): MetricDefinition => ({ name, label, description: '', domain: 'sales', type: 'sum', sql: name, table: 'analytics.orders', ...extra });
 const dimension = (name: string, label: string): DimensionDefinition => ({ name, label, description: '', sql: name, type: 'string', table: 'analytics.orders' });
@@ -325,5 +325,114 @@ describe('a saved query renamed after it was compared', () => {
     mkdirSync(join(root, 'semantic-layer/report-matches/query'), { recursive: true });
     writeFileSync(join(root, 'semantic-layer/report-matches/query/wins.yaml'), 'matches: [');
     expect(queryMatchFor(root, ['wins'], 'x')).toBe('unreadable');
+  });
+});
+
+describe('V2 retest: the comparison in effect when it was certified is the last one before it', () => {
+  // The tester's 11 Nov sequence: the old report (Matches), an edited copy with 2016 changed (Differs), the old
+  // report again (Matches), then Certify.
+  const name = 'warriors_regular_season_wins_2014_2018';
+  const sql = 'select season, wins from games';
+  const rows = [[2014, 67], [2015, 73], [2016, 67], [2017, 58], [2018, 57]].map(([season, wins]) => ({ SEASON: season, WINS: wins }));
+  const original = { name: 'warriors_regular_wins_2014_2018.csv', bytes: Buffer.from('SEASON,WINS\n2014,67\n2015,73\n2016,67\n2017,58\n2018,57\n') };
+  const edited = { name: 'warriors_regular_wins_2014_2018_edited.csv', bytes: Buffer.from('SEASON,WINS\n2014,67\n2015,73\n2016,66\n2017,58\n2018,57\n') };
+  const certifiedAt = '2026-11-11T12:44:27.000Z';
+  async function compare(root: string, file: typeof original, now: string) {
+    const outcome = await runComparison({ file, query: name }, { ...deps(rows, sql), savedQuery: async (asked) => ({ name: asked, sql, variables: {} }), now: new Date(now) });
+    writeMatchRecords(root, outcome, { comparedBy: 'TEST_ADMIN', via: 'screen' });
+    return outcome;
+  }
+  async function sequence(root: string) {
+    await compare(root, original, '2026-11-11T12:30:00Z');
+    await compare(root, edited, '2026-11-11T12:35:00Z');
+    return compare(root, original, '2026-11-11T12:40:00Z');
+  }
+  const MATCHES = 'Matches warriors_regular_wins_2014_2018 · every value compared (5 of 5 at whole numbers, 2026-11-11)';
+  const OLD_DIFFERS = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-11: 4 of 5 values at whole numbers';
+
+  it('certifying after match, differ, match names the match, with the old report\'s file', async () => {
+    const root = project();
+    const last = await sequence(root);
+    const found = queryMatchFor(root, [name], last.querySha256.query!) as MatchRecord;
+    expect(found).toMatchObject({ verdict: 'matches', report: 'warriors_regular_wins_2014_2018', comparedAt: '2026-11-11T12:40:00.000Z' });
+    expect(receiptLines(found, false)).toEqual({ checks: [MATCHES], warnings: [] });
+    // The page's "Last compared" and a CLI certification read the same rule.
+    expect((queryMatchFor(root, [name]) as MatchRecord).report).toBe('warriors_regular_wins_2014_2018');
+    expect((latestMatch(root, 'query', name) as MatchRecord).report).toBe('warriors_regular_wins_2014_2018');
+  });
+
+  it('a Differs made last is the one in effect, whichever file it was with', async () => {
+    const root = project();
+    await sequence(root);
+    await compare(root, edited, '2026-11-11T12:42:00Z');
+    expect((queryMatchFor(root, [name]) as MatchRecord).report).toBe('warriors_regular_wins_2014_2018_edited');
+  });
+
+  it('a later look at fewer rows of the same SQL does not replace a Differs', () => {
+    const at = (verdict: MatchRecord['verdict'], comparedAt: string, extra: Partial<MatchRecord> = {}) => ({ report: 'x', verdict, comparedAt, querySha256: 'same', scope: 'all rows', rows: { inFile: 5 }, ...extra }) as MatchRecord;
+    const wide = at('differs', '2026-11-11T12:35:00Z', { report: 'edited' });
+    const fewer = at('matches', '2026-11-11T12:40:00Z', { rows: { inFile: 4 } as MatchRecord['rows'] });
+    expect(queryStandingRecord([fewer, wide])).toBe(wide);
+    // A full comparison after it does.
+    const full = at('matches', '2026-11-11T12:41:00Z');
+    expect(queryStandingRecord([full, fewer, wide])).toBe(full);
+  });
+
+  it('counts a Differs as its result does: the values that differ, and where the first one is', async () => {
+    const root = project();
+    const outcome = await compare(root, edited, '2026-11-11T12:35:00Z');
+    // The fresh result: "Differs: 1 of 5 values (row 2016, WINS). 5 of 5 rows found."
+    expect(outcome.comparison.values).toEqual({ compared: 5, equal: 4 });
+    expect(outcome.comparison.differences.map((item) => [item.key.join(' · '), item.column])).toEqual([['2016', 'WINS']]);
+    const [record] = readMatchRecords(root, 'query', name);
+    expect(record!.firstDifferingColumn).toBe('WINS');
+    // Only the column: a row's key is a value, and the record is tracked in git.
+    expect(JSON.stringify(record)).not.toContain('"2016"');
+    expect(matchWords(record!)).toBe('Differs from warriors_regular_wins_2014_2018_edited, 2026-11-11: 1 of 5 values differs (in WINS) at whole numbers');
+    expect(receiptLines(record!, false).warnings).toEqual([matchWords(record!)]);
+  });
+
+  it('says how many differ, and which rows were found, for other differences', () => {
+    const base = { report: 'r', comparedAt: '2026-11-11T12:00:00Z', precision: 'whole numbers', scope: 'all rows', rows: { inFile: 5, inBoth: 5, onlyInFile: 0, onlyInZLens: 0, emptySetAside: 0, totalsSetAside: 0 } } as unknown as MatchRecord;
+    expect(matchWords({ ...base, verdict: 'differs', values: { compared: 10, equal: 7 }, firstDifferingColumn: 'WINS' })).toBe('Differs from r, 2026-11-11: 3 of 10 values differ (first in WINS) at whole numbers');
+    // A record made before V2 has no column: the count alone.
+    expect(matchWords({ ...base, verdict: 'differs', values: { compared: 5, equal: 4 } })).toBe('Differs from r, 2026-11-11: 1 of 5 values differs at whole numbers');
+    const missing = { ...base.rows, inBoth: 4, onlyInFile: 1 };
+    expect(matchWords({ ...base, verdict: 'differs', values: { compared: 4, equal: 4 }, rows: missing })).toBe('Differs from r, 2026-11-11: 4 of 5 rows found; all 4 values in them match at whole numbers');
+    expect(matchWords({ ...base, verdict: 'differs', values: { compared: 5, equal: 5 }, rows: { ...base.rows, onlyInZLens: 2 } })).toBe('Differs from r, 2026-11-11: 5 of 5 rows found, 2 more in ZLens; all 5 values in them match at whole numbers');
+    expect(matchWords({ ...base, verdict: 'differs', values: { compared: 4, equal: 3 }, rows: missing, firstDifferingColumn: 'WINS' })).toBe('Differs from r, 2026-11-11: 1 of 4 values differs (in WINS) at whole numbers, 4 of 5 rows found');
+    expect(matchWords({ ...base, verdict: 'not-proven', values: { compared: 5, equal: 3 } })).toBe('Not proven against r, 2026-11-11: 3 of 5 values equal at whole numbers');
+    // A match's count was never in doubt.
+    expect(matchWords({ ...base, verdict: 'matches', values: { compared: 5, equal: 5 }, scope: "the file's rows" })).toBe("Matches r, 2026-11-11: 5 of 5 values at whole numbers, only the file's rows");
+  });
+
+  describe('a receipt written under the earlier rule', () => {
+    const legacy = (lines: { checks?: string[]; warnings?: string[] }, at = certifiedAt) => ({ certifiedAt: at, checks: ['metadata', 'run', ...(lines.checks ?? [])], warnings: lines.warnings ?? [] });
+
+    it('is rebuilt from the records as certifying writes it now: the match, with the old report\'s file', async () => {
+      const root = project();
+      await sequence(root);
+      // A comparison after certifying is "since certified", never part of the receipt.
+      await compare(root, edited, '2026-11-14T12:20:00Z');
+      expect(receiptCorrection(readMatchRecords(root, 'query', name), legacy({ warnings: [OLD_DIFFERS] }))).toEqual({ replaces: [OLD_DIFFERS], checks: [MATCHES], warnings: [] });
+    });
+
+    it('stands when the comparison it names was the one in effect', async () => {
+      const root = project();
+      await sequence(root);
+      await compare(root, edited, '2026-11-11T12:42:00Z');
+      expect(receiptCorrection(readMatchRecords(root, 'query', name), legacy({ warnings: [OLD_DIFFERS] }))).toBeUndefined();
+    });
+
+    it('stands when it says why it did not count, was written since, or names nothing on record', async () => {
+      const root = project();
+      await sequence(root);
+      const records = readMatchRecords(root, 'query', name);
+      expect(receiptCorrection(records, legacy({ warnings: [`${OLD_DIFFERS}. Changed since compared.`] }))).toBeUndefined();
+      expect(receiptCorrection(records, legacy({ warnings: ['Differs from warriors_regular_wins_2014_2018_edited, 2026-11-11: 1 of 5 values differs (in WINS) at whole numbers'] }))).toBeUndefined();
+      expect(receiptCorrection(records, legacy({ checks: [MATCHES] }))).toBeUndefined();
+      expect(receiptCorrection(records, legacy({ warnings: ['Differs from another_report, 2026-11-11: 4 of 5 values at whole numbers'] }))).toBeUndefined();
+      expect(receiptCorrection(records, legacy({ warnings: [OLD_DIFFERS] }, 'not a date'))).toBeUndefined();
+    });
   });
 });

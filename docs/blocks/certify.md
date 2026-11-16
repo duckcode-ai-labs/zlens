@@ -51,12 +51,17 @@ Recorded as maria.lopez@example.com · 10/15/2026, 3:27:48 PM · via the saved q
 ```
 
 The certifier is your git `user.email` (else `$USER@local`), named by git `user.name`; in the ZLens app for
-Snowflake it is the Snowflake user you signed in as. When the saved query was compared
+Snowflake it is the Snowflake user you signed in as. A receipt made where ZLens could not tell who was
+certifying (an early version of the app for Snowflake) says **Who certified it was not recorded**. When the saved query was compared
 with its old report and every value matched, the receipt adds a line such as
 `Old report when certified: Matches Sales by Region · every value compared (12 of 12 at 2 decimals, 2026-10-15)`;
 see [Prove the numbers match](../guides/migrate.md#prove-the-numbers-match).
 
-The receipt states what was true when the saved query was certified, and stays that way. A comparison
+The receipt states what was true when the saved query was certified, and stays that way: the last
+comparison made before you certified, whichever file it was with. Compare with the old report, then with
+an edited copy, then with the old report again, and the receipt says Matches with the old report. A
+receipt written by ZLens before this rule may name another comparison; its page then shows the one in
+effect and says the receipt file names an earlier one, until you **Re-certify**. A comparison
 made after that shows beside it (`Old report since certified: …`), and one that differs also puts
 **Differs from the old report since it was certified** next to **CERTIFIED**. A comparison made after
 certification is never shown as "when certified": with none on record then, the receipt says

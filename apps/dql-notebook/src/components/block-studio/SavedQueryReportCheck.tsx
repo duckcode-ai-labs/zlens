@@ -13,6 +13,11 @@ import { ReportComparePanel } from './ReportComparePanel';
  * it was certified ("Old report when certified: …"); a comparison made after
  * that shows beside it ("Old report since certified: …"), and a Differs after
  * certification puts a short warning next to the Certified badge.
+ *
+ * What was true when it was certified is the last comparison made before it,
+ * whichever file it was with (V2 retest; report-match/status.ts,
+ * queryStandingRecord). One comparison reads the same on the result, the page
+ * and the receipt: a Differs counts the values that differ.
  */
 
 /** How a receipt line about an old report starts (report-match/record.ts, matchWords and receiptMatchWords). */
@@ -46,8 +51,11 @@ export function reportCheckStatusWords(status: ReportQueryMatch | null, certifie
   return `Last compared: ${wordsOnViewerClock(status.match.words, status.match.comparedAt)}.`;
 }
 
-/** A saved query's standing comparison with an old report, by its name; `reload` after a new one is recorded. */
-export function useQueryReportMatch(name: string | undefined): { status: ReportQueryMatch | null; reload: () => void } {
+/**
+ * A saved query's standing comparison with an old report, by its name; `reload` after a new one is recorded. With
+ * its file, also what its receipt names when that receipt was written under the earlier rule (atCertification).
+ */
+export function useQueryReportMatch(name: string | undefined, path?: string | null): { status: ReportQueryMatch | null; reload: () => void } {
   const [status, setStatus] = useState<ReportQueryMatch | null>(null);
   const [version, setVersion] = useState(0);
   useEffect(() => {
@@ -56,11 +64,11 @@ export function useQueryReportMatch(name: string | undefined): { status: ReportQ
       return undefined;
     }
     let cancelled = false;
-    void api.getQueryReportMatch(name)
+    void api.getQueryReportMatch(name, path ?? undefined)
       .then((next) => { if (!cancelled) setStatus(next); })
       .catch(() => { if (!cancelled) setStatus(null); });
     return () => { cancelled = true; };
-  }, [name, version]);
+  }, [name, path, version]);
   const reload = useCallback(() => setVersion((current) => current + 1), []);
   return { status, reload };
 }
@@ -87,6 +95,8 @@ export interface CertificationReportView {
   /** Nothing about an old report was on record when it was certified, but it was compared since. */
   notCompared: boolean;
   since: ComparedSince | null;
+  /** The receipt file names another comparison, written under the earlier rule: `then` is the one in effect. */
+  rebuilt?: { replaces: string[] };
 }
 
 /** The day a receipt line says its comparison was made: "Differs from X, 2026-11-12: …" or "(5 of 5 at …, 2026-11-11)". */
@@ -122,6 +132,28 @@ export function wordsOnViewerClock(words: string, comparedAt: string): string {
 
 const verdictOfLine = (line: string): ReportVerdict => (line.startsWith('Matches ') ? 'matches' : line.startsWith('Differs from ') ? 'differs' : 'not-proven');
 
+/** How a receipt said a Differs or a Not proven before V2: the count of equal values, straight after the day. */
+const OLD_COUNT = /^((?:Differs from |Not proven against ).*, \d{4}-\d{2}-\d{2}: )(\d+) of (\d+) values at /;
+
+/**
+ * A receipt line in today's words. Before V2 a Differs counted the equal values ("Differs from X, 2026-11-11:
+ * 4 of 5 values at whole numbers"), which read as 4 values differing beside a result that said 1 (V2 retest). Such
+ * a line says the values that differ ("1 of 5 values differs"), as the result and the record do; any other line
+ * is shown as written.
+ */
+export function receiptLineWords(line: string): string {
+  const found = OLD_COUNT.exec(line);
+  if (!found) return line;
+  const [whole, head, equalText, comparedText] = found as unknown as [string, string, string, string];
+  const equal = Number(equalText);
+  const compared = Number(comparedText);
+  const differing = compared - equal;
+  const counted = head.startsWith('Differs from ') && differing > 0
+    ? `${differing} of ${compared} values ${differing === 1 ? 'differs' : 'differ'}`
+    : `${equal} of ${compared} values equal`;
+  return `${head}${counted} at ${line.slice(whole.length)}`;
+}
+
 /**
  * One rule for what the receipt says (V2 on top of V14): a comparison made after the query was certified is never
  * shown as "when certified". The standing comparison's own time decides when its line is on the receipt; any other
@@ -133,7 +165,13 @@ export function certificationReportView(
   certification: { certifiedAt?: string; checks?: string[]; warnings?: string[] } | undefined,
   status: ReportQueryMatch | null,
 ): CertificationReportView {
-  const { matched, warnings } = reportMatchReceipt(certification);
+  const receipt = reportMatchReceipt(certification);
+  // A receipt written under the earlier rule names the worst comparison per file, not the one in effect when it
+  // was certified (V2 retest, 11 Nov): the server rebuilt its line from the records, as certifying writes it now.
+  const rebuilt = certification && status?.atCertification?.replaces.length ? status.atCertification : undefined;
+  const replaced = new Set(rebuilt?.replaces ?? []);
+  const matched = [...receipt.matched.filter((line) => !replaced.has(line)), ...(rebuilt?.checks ?? [])];
+  const warnings = [...receipt.warnings.filter((line) => !replaced.has(line)), ...(rebuilt?.warnings ?? [])].map(receiptLineWords);
   const certifiedAt = certification?.certifiedAt ? Date.parse(certification.certifiedAt) : Number.NaN;
   const standing = status?.match ?? null;
   // The standing comparison's own line on the receipt (a warning may add ". Changed since compared.").
@@ -155,8 +193,11 @@ export function certificationReportView(
   const since: ComparedSince | null = exact
     ? { verdict: exact.verdict, words: wordsOnViewerClock(exact.words, exact.comparedAt) }
     : later[0] ? { verdict: verdictOfLine(later[0].line), words: shown(later[0].line) } : null;
-  return { then, notCompared: Boolean(since) && then.length === 0, since };
+  return { then, notCompared: Boolean(since) && then.length === 0, since, ...(rebuilt ? { rebuilt: { replaces: rebuilt.replaces } } : {}) };
 }
+
+/** Under a rebuilt line: the receipt file is left as written, and Re-certify writes the line on it. */
+export const RECEIPT_REBUILT_NOTE = 'Its receipt file names an earlier comparison. Re-certify to write this one on it.';
 
 /** The receipt's lines about the old report: then (at certification), and since (a later comparison). */
 export function CertificationReportLines({ view, t }: { view: CertificationReportView; t: Theme }) {
@@ -170,6 +211,9 @@ export function CertificationReportLines({ view, t }: { view: CertificationRepor
           ? <div key={line} data-testid="block-certification-report-match" style={{ color: 'var(--status-success)' }}>Old report when certified: {line}</div>
           : <div key={line} data-testid="block-certification-report-warning" style={{ color: 'var(--status-warning)' }}>Old report when certified: {line}</div>
       ))}
+      {view.rebuilt && view.then.length ? (
+        <div data-testid="block-certification-report-rebuilt" title={`The receipt file says: ${view.rebuilt.replaces.map(receiptLineWords).join('; ')}`} style={{ color: t.textMuted }}>{RECEIPT_REBUILT_NOTE}</div>
+      ) : null}
       {view.since ? (
         <div data-testid="block-certification-report-since" style={{ color: verdictColor(view.since.verdict, t) }}>Old report since certified: {view.since.words}</div>
       ) : null}

@@ -249,11 +249,14 @@ export function recordedWords(result: ReportComparison, certified = false): stri
 /**
  * The verdict line over a comparison: what differs first, then what was found (V14 retest: "Differs: 5 of 5 rows,
  * 4 of 5 values." read as if 5 rows differed). "Differs: 1 of 5 values (row FRANCE, Order revenue). 5 of 5 rows
- * found." and "Matches: 5 of 5 rows, every value."
+ * found." and "Matches: 5 of 5 rows, every value." The record of it, on the page and the receipt, counts the same
+ * way: the values that differ, never the equal ones (V2 retest).
  */
 export function comparisonVerdictLine(comparison: ReportComparison['comparison'], scope: string[] = []): string {
   const { rows, values, verdict, differences } = comparison;
   const found = `${rows.inBoth} of ${rows.inFile} ${rows.inFile === 1 ? 'row' : 'rows'}`;
+  // Rows only ZLens has are a difference too: said here as on the record (report-match/record.ts, matchWords).
+  const extra = verdict === 'differs' && rows.onlyInZLens > 0 ? `, ${rows.onlyInZLens} more in ZLens` : '';
   const withScope = scope.length ? `, with ${scope.join(' and ')}` : '';
   const differing = Math.max(0, values.compared - values.equal);
   if (verdict === 'matches') {
@@ -264,10 +267,10 @@ export function comparisonVerdictLine(comparison: ReportComparison['comparison']
     if (differing > 0) {
       const only = differing === 1 && differences.length === 1 ? differences[0] : undefined;
       const where = only ? ` (${only.key.length ? `row ${only.key.join(' · ')}` : 'the total'}, ${only.column})` : '';
-      return `Differs: ${differing} of ${values.compared} ${values.compared === 1 ? 'value' : 'values'}${where}. ${found} found${withScope}.`;
+      return `Differs: ${differing} of ${values.compared} ${values.compared === 1 ? 'value' : 'values'}${where}. ${found} found${extra}${withScope}.`;
     }
     const agree = values.compared === 0 ? '' : values.compared === 1 ? '; the value in them matches' : `; all ${values.compared} values in them match`;
-    return `Differs: ${found} found${withScope}${agree}.`;
+    return `Differs: ${found} found${extra}${withScope}${agree}.`;
   }
   return `Not proven: ${found} found, ${values.equal} of ${values.compared} values equal${withScope}.`;
 }

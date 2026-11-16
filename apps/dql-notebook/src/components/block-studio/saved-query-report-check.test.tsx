@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { BlockDetailView, certificationReceiptTechnical, IMPORT_SOURCE_EXPORT_HINT, importSourceUploadNote } from './BlockStudio';
-import { CertificationReportLines, certificationReportView, comparedSinceCertified, DIFFERS_SINCE_CERTIFIED, DiffersSinceCertifiedBadge, receiptLineDay, reportCheckStatusWords, reportMatchReceipt, wordsOnViewerClock } from './SavedQueryReportCheck';
-import { ComparisonResult, recordedWords } from './ReportComparePanel';
+import { BlockDetailView, certificationReceiptTechnical, CERTIFIER_NOT_RECORDED, IMPORT_SOURCE_EXPORT_HINT, importSourceUploadNote } from './BlockStudio';
+import { CertificationReportLines, certificationReportView, comparedSinceCertified, DIFFERS_SINCE_CERTIFIED, DiffersSinceCertifiedBadge, RECEIPT_REBUILT_NOTE, receiptLineDay, receiptLineWords, reportCheckStatusWords, reportMatchReceipt, wordsOnViewerClock } from './SavedQueryReportCheck';
+import { ComparisonResult, comparisonVerdictLine, recordedWords } from './ReportComparePanel';
 import type { ReportComparison, ReportQueryMatch } from '../../store/types';
 import { themes } from '../../themes/notebook-theme';
 
@@ -63,9 +63,12 @@ describe('the receipt of a saved query compared with its old report', () => {
     expect(certificationReceiptTechnical(receipt)).toContain('standard certification rules');
     expect(certificationReceiptTechnical(receipt)).not.toContain('OSS');
     // A placeholder names nobody.
+    // The name is the certifier's. A receipt made where ZLens could not tell who was certifying (the app for
+    // Snowflake before V13) holds a placeholder: it says plainly that nobody was recorded, and never names one.
     const nameless = certificationReceiptTechnical({ ...receipt, certifiedBy: 'local' });
-    expect(nameless).toContain('No name recorded');
+    expect(nameless).toContain(CERTIFIER_NOT_RECORDED);
     expect(nameless).not.toContain('Recorded as local');
+    expect(certificationReceiptTechnical({ ...receipt, certifiedBy: 'local', certifiedByName: 'Test Admin' })).toContain('Recorded as Test Admin');
     expect(certificationReceiptTechnical({ ...receipt, rules: 'enterprise' })).toContain('enterprise certification rules');
   });
 });
@@ -137,7 +140,7 @@ describe('V14: one rule for a certified query compared again later', () => {
   });
 
   it('says the same about a Differs made before certifying: it is on the receipt, as of certification, with no warning', () => {
-    const differs = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-11: 4 of 5 values at whole numbers';
+    const differs = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-11: 1 of 5 values differs (in WINS) at whole numbers';
     const certification = { ...receipt, checks: ['run'], warnings: [differs] };
     const view = certificationReportView(certification, { match: { verdict: 'differs', words: differs, report: 'warriors_regular_wins_2014_2018_edited', comparedAt: '2026-11-11T12:30:00.000Z' } });
     const html = renderToStaticMarkup(<CertificationReportLines view={view} t={themes.paper} />);
@@ -217,7 +220,8 @@ describe('V2: a comparison made after certification is never "when certified"', 
     const view = certificationReportView({ ...certification, warnings: [differs13] }, null);
     expect(view.notCompared).toBe(true);
     expect(view.then).toEqual([]);
-    expect(view.since).toEqual({ verdict: 'differs', words: differs13 });
+    // Written before V2, it counted the equal values: it is said as the values that differ.
+    expect(view.since).toEqual({ verdict: 'differs', words: 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-13: 1 of 5 values differs at whole numbers' });
     expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={view.since} />)).toContain(DIFFERS_SINCE_CERTIFIED);
   });
 
@@ -240,7 +244,7 @@ describe('V2: a comparison made after certification is never "when certified"', 
 
   it('a comparison made minutes before certifying, after midnight UTC, stays "when certified", on the viewer\'s clock', () => {
     // 10:30 PM and 10:44 PM on 11 Nov in California: the server wrote the comparison's day as 2026-11-12 (UTC).
-    const serverWords = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-12: 4 of 5 values at whole numbers';
+    const serverWords = 'Differs from warriors_regular_wins_2014_2018_edited, 2026-11-12: 1 of 5 values differs (in WINS) at whole numbers';
     const comparedAt = '2026-11-12T06:30:00.000Z';
     const view = certificationReportView({ ...certification, certifiedAt: '2026-11-12T06:44:27.000Z', warnings: [serverWords] }, standing(serverWords, comparedAt));
     expect(view.since).toBeNull();
@@ -262,5 +266,76 @@ describe('V2: a comparison made after certification is never "when certified"', 
     const view = certificationReportView(certification, { match: null });
     expect(view).toEqual({ then: [], notCompared: false, since: null });
     expect(lines(view)).toBe('');
+  });
+});
+
+describe('V2 retest: the comparison in effect when it was certified, and one count per comparison', () => {
+  const ORIGINAL = 'warriors_regular_wins_2014_2018';
+  const EDITED = 'warriors_regular_wins_2014_2018_edited';
+  // What V15 wrote on the tester's 11 Nov receipt: the edited copy's Differs, counted by its equal values.
+  const OLD_DIFFERS = `Differs from ${EDITED}, 2026-11-11: 4 of 5 values at whole numbers`;
+  // Certified at 10:44 PM on 11 Nov in Chicago; the last comparison, with the old report, at 10:40 PM.
+  const certification = { ...receipt, certifiedAt: '2026-11-12T04:44:27.000Z', checks: ['metadata', 'validation', 'run'], warnings: [OLD_DIFFERS] };
+  const lastCompared = '2026-11-12T04:40:00.000Z';
+  const standingMatch: ReportQueryMatch['match'] = { verdict: 'matches', words: MATCH, report: ORIGINAL, comparedAt: lastCompared };
+  const lines = (view: ReturnType<typeof certificationReportView>) => renderToStaticMarkup(<CertificationReportLines view={view} t={themes.paper} />);
+
+  it('a receipt written under the earlier rule shows the comparison in effect when it was certified: Matches, with the old report\'s file', () => {
+    const status: ReportQueryMatch = { match: standingMatch, atCertification: { replaces: [OLD_DIFFERS], checks: [MATCH], warnings: [] } };
+    const view = certificationReportView(certification, status);
+    const html = lines(view);
+    expect(html).toContain(`Old report when certified: ${wordsOnViewerClock(MATCH, lastCompared)}`);
+    expect(html).toContain('block-certification-report-match');
+    expect(html).not.toContain(`Old report when certified: Differs from ${EDITED}`);
+    // It says the receipt file names another, and how to put this one on it.
+    expect(html).toContain(RECEIPT_REBUILT_NOTE);
+    expect(view.since).toBeNull();
+    expect(renderToStaticMarkup(<DiffersSinceCertifiedBadge since={view.since} />)).toBe('');
+    // "Last compared" in the box says the same comparison.
+    expect(reportCheckStatusWords(status, true)).toBe(`Last compared: ${wordsOnViewerClock(MATCH, lastCompared)}.`);
+  });
+
+  it('a receipt written by this version is shown as written, with no note', () => {
+    const view = certificationReportView({ ...certification, checks: ['run', MATCH], warnings: [] }, { match: standingMatch });
+    expect(lines(view)).toContain(`Old report when certified: ${wordsOnViewerClock(MATCH, lastCompared)}`);
+    expect(lines(view)).not.toContain(RECEIPT_REBUILT_NOTE);
+  });
+
+  it('a receipt line written before V2 is said as the values that differ, never as if 4 of 5 differed', () => {
+    expect(receiptLineWords(OLD_DIFFERS)).toBe(`Differs from ${EDITED}, 2026-11-11: 1 of 5 values differs at whole numbers`);
+    expect(receiptLineWords(`Differs from ${EDITED}, 2026-11-11: 7 of 10 values at whole numbers. Changed since compared.`)).toBe(`Differs from ${EDITED}, 2026-11-11: 3 of 10 values differ at whole numbers. Changed since compared.`);
+    // Every value equal yet Differs: rows were missing. It says the values were equal.
+    expect(receiptLineWords(`Differs from ${EDITED}, 2026-11-11: 4 of 4 values at whole numbers`)).toBe(`Differs from ${EDITED}, 2026-11-11: 4 of 4 values equal at whole numbers`);
+    expect(receiptLineWords(`Not proven against ${EDITED}, 2026-11-11: 3 of 5 values at whole numbers`)).toBe(`Not proven against ${EDITED}, 2026-11-11: 3 of 5 values equal at whole numbers`);
+    // Lines in today's words, and matches, are left alone.
+    expect(receiptLineWords(MATCH)).toBe(MATCH);
+    expect(receiptLineWords(`Differs from ${EDITED}, 2026-11-15: 1 of 5 values differs (in WINS) at whole numbers`)).toBe(`Differs from ${EDITED}, 2026-11-15: 1 of 5 values differs (in WINS) at whole numbers`);
+    // With nothing rebuilt, the old line is still the receipt's, in today's count.
+    const html = lines(certificationReportView(certification, { match: { verdict: 'differs', words: `Differs from ${EDITED}, 2026-11-11: 1 of 5 values differs at whole numbers`, report: EDITED, comparedAt: '2026-11-11T16:35:00.000Z' } }));
+    expect(html).toContain('1 of 5 values differs');
+    expect(html).not.toContain('4 of 5 values');
+  });
+
+  it('one differing comparison reads with one count: the result, "Last compared" and "since certified"', () => {
+    // 15 Nov: a certified query compared with the edited copy.
+    const comparedAt = '2026-11-15T18:20:00.000Z';
+    const words = `Differs from ${EDITED}, 2026-11-15: 1 of 5 values differs (in WINS) at whole numbers`;
+    const fresh = comparisonVerdictLine({
+      verdict: 'differs',
+      rows: { inFile: 5, inBoth: 5, onlyInFile: 0, onlyInZLens: 0, emptySetAside: 0, totalsSetAside: 0 },
+      values: { compared: 5, equal: 4 },
+      numbers: [{ column: 'WINS', name: 'WINS', precision: 'whole numbers' }],
+      differences: [{ key: ['2016'], column: 'WINS', old: '66', zlens: 67 }],
+      onlyInFile: [], onlyInZLens: [], missing: [], reasons: [], notes: [],
+    });
+    expect(fresh).toBe('Differs: 1 of 5 values (row 2016, WINS). 5 of 5 rows found.');
+    const status: ReportQueryMatch = { match: { verdict: 'differs', words, report: EDITED, comparedAt } };
+    const stored = reportCheckStatusWords(status, true);
+    const since = certificationReportView({ ...receipt, certifiedAt: '2026-11-13T15:00:00.000Z', checks: ['run', MATCH] }, status).since!.words;
+    for (const line of [fresh, stored, since]) {
+      expect(line).toContain('1 of 5 values');
+      expect(line).toContain('WINS');
+      expect(line).not.toContain('4 of 5');
+    }
   });
 });

@@ -278,12 +278,20 @@ a named person compared a named file. It can't prove the file came from Tableau,
 and it never certifies anything. `--no-record` compares without keeping one.
 
 A record holds a hash of the compiled query, so a draft shows **Changed since
-compared** when its definition, or a part of it, moves on. The newest comparison
-with each report counts, but a narrower look at the same query, such as fewer rows
-or `--file-rows`, does not clear a difference. With several reports, the worst
-stands. Certifying a saved query adds that comparison to the receipt: as a passed
-check when it matches every row and the query is unchanged (`Matches <report> ·
-every value compared`), otherwise as a warning. A match is not required to certify.
+compared** when its definition, or a part of it, moves on. For a metric, the newest
+comparison with each report counts, and with several reports the worst stands: each
+report asks it a different question. For a saved query, the last comparison counts,
+whichever file it was with; earlier ones are history. In both, a narrower look at the
+same query, such as fewer rows or `--file-rows`, does not clear a difference.
+Certifying a saved query adds the comparison in effect then, the last one before it,
+to the receipt: as a passed check when it matches every row and the query is
+unchanged (`Matches <report> · every value compared`), otherwise as a warning. A
+match is not required to certify.
+
+A comparison reads the same on its result, on the saved query's page and on the
+receipt. A Differs counts the values that differ and names the first one's column:
+`Differs from <report>, 2026-11-15: 1 of 5 values differs (in WINS) at whole numbers`.
+The record keeps the column, not the row: a row's key is a value.
 Renaming a saved query keeps its comparisons: they move to the new name, and a
 comparison of exactly the same SQL counts under any name.
 

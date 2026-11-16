@@ -36,7 +36,8 @@ const result = (input: ReportComparison, recording: 'with-compare' | 'separate' 
 describe('reading a comparison on the screen', () => {
   it('says the verdict, the filters, each difference and the rows on one side', () => {
     const html = result(comparison(), 'with-compare', true);
-    expect(html).toContain('Differs: 1 of 3 values (row West, Total Sales). 3 of 3 rows found, with ordered_at &gt;= 2026-01-01.');
+    // A row only ZLens has is said in the verdict line, as on the record.
+    expect(html).toContain('Differs: 1 of 3 values (row West, Total Sales). 3 of 3 rows found, 1 more in ZLens, with ordered_at &gt;= 2026-01-01.');
     expect(html).toContain('200.004');
     expect(html).toContain('Only in ZLens: Central');
     expect(html).toContain('1 total row set aside.');
@@ -120,7 +121,7 @@ describe('metric drafts beside their comparison', () => {
 });
 
 describe('V2: the verdict line says what differs, then what was found', () => {
-  const base = comparison().comparison;
+  const base = { ...comparison().comparison, rows: { ...comparison().comparison.rows, onlyInZLens: 0 }, onlyInZLens: [] };
   it('names the one value that differs and says every row was found', () => {
     const differs = { ...base, rows: { ...base.rows, inFile: 5, inBoth: 5 }, values: { compared: 5, equal: 4 }, differences: [{ key: ['FRANCE'], column: 'Order revenue', old: '10', zlens: 11 }] };
     expect(comparisonVerdictLine(differs)).toBe('Differs: 1 of 5 values (row FRANCE, Order revenue). 5 of 5 rows found.');
@@ -142,6 +143,11 @@ describe('V2: the verdict line says what differs, then what was found', () => {
     const matches = { ...base, verdict: 'matches' as const, rows: { ...base.rows, inFile: 5, inBoth: 5 }, values: { compared: 5, equal: 5 }, differences: [] };
     expect(comparisonVerdictLine(matches)).toBe('Matches: 5 of 5 rows, every value.');
     expect(comparisonVerdictLine({ ...matches, rows: { ...matches.rows, inFile: 1, inBoth: 1 }, values: { compared: 1, equal: 1 } })).toBe('Matches: 1 of 1 row, every value.');
+  });
+
+  it('says rows only ZLens has, so a Differs with every value equal never reads as a match', () => {
+    const extra = { ...base, rows: { ...base.rows, inFile: 5, inBoth: 5, onlyInZLens: 2 }, values: { compared: 5, equal: 5 }, differences: [] };
+    expect(comparisonVerdictLine(extra)).toBe('Differs: 5 of 5 rows found, 2 more in ZLens; all 5 values in them match.');
   });
 
   it('names the total when the difference is in it', () => {
