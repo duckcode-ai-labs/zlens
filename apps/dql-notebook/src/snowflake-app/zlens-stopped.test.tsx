@@ -5,8 +5,8 @@ import { followServerEvents, STREAM_FAILURES_BEFORE_STOPPED, STREAM_QUIET_MS, ST
 import { notePersonActive, type ServerEventFrame } from '../api/server-auth';
 import { operationsPollMs } from '../operations/OperationsProvider';
 import { setSnowflakeApp } from './snowflake-app-mode';
-import { isZLensStopped, markZLensStopped, QUIET_AFTER_MS, resetZLensStoppedForTests, snowflakeSaysNotRunning, startZLensAgain, stoppingNotice, watchForStoppedService, zlensStopped } from './zlens-stopped';
-import { GAVE_UP_WORDS, startingWords, ZLensStoppedNotice, zlensStoppedWords } from './ZLensStoppedNotice';
+import { isZLensStopped, markZLensStopped, QUIET_AFTER_MS, resetZLensStoppedForTests, snowflakeAnswered, snowflakeSaysNotRunning, startZLensAgain, stoppingNotice, watchForStoppedService, ZLENS_APP_HEADER, zlensStopped } from './zlens-stopped';
+import { GAVE_UP_WORDS, SIGN_IN_AFTER_MS, signInWords, startingWords, ZLensStoppedNotice, zlensStoppedWords } from './ZLensStoppedNotice';
 
 /**
  * V4 idle stop: after ZLens stopped in Snowflake, an open tab's stream reconnects woke the service 11 seconds
@@ -318,7 +318,8 @@ describe('streams the Snowflake ingress ends or drops (V4 release check)', () =>
     expect(isZLensStopped()).toBe(false);
     const answer = await fetch('/api/host/ui');
     expect(answer.status).toBe(503);
-    expect(zlensStopped()).toEqual({ reason: 'stopped' });
+    // That request has started ZLens again (V17 tester: the page said it "will not start" while it was starting).
+    expect(zlensStopped()).toEqual({ reason: 'stopped', startNow: true });
     let answered = false;
     void fetch('/api/operations?limit=50').then(() => { answered = true; }, () => { answered = true; });
     await settle();
@@ -418,7 +419,7 @@ describe('a page nobody touched goes quiet (V4 release check)', () => {
     expect(zlensStopped()).toEqual({ reason: 'stopped', startNow: true });
     expect(zlensStoppedWords({ reason: 'stopped', startNow: true })).toEqual({
       title: 'ZLens is starting',
-      detail: 'ZLens had stopped while no one was using it. It is starting again now.',
+      detail: 'ZLens had stopped. It is starting again now.',
       start: 'This takes about 2 to 3 minutes, longer right after an install or update.',
     });
   });
@@ -430,5 +431,44 @@ describe('a page nobody touched goes quiet (V4 release check)', () => {
     await vi.advanceTimersByTimeAsync(QUIET_AFTER_MS * 5);
     await fetch('/api/host/ui');
     expect(calls).toEqual(['/api/host/ui']);
+  });
+});
+
+describe("telling Snowflake's answers from ZLens's (V17 tester)", () => {
+  // The tester's page did not recognise Snowflake's 503 answers by their text: it said ZLens "will not start it again
+  // by itself" while its own request had started it, and kept saying so once ZLens ran. ZLens now marks its answers.
+  const marked = (status: number, body = '{}') => new Response(body, { status, headers: { [ZLENS_APP_HEADER]: '1' } });
+
+  it('once ZLens\'s mark was seen, an unmarked 5xx is Snowflake\'s whatever its text; a marked one is ZLens\'s own', async () => {
+    expect(await snowflakeAnswered(marked(200))).toBe(false);
+    expect(await snowflakeAnswered(marked(503, '{"error":"Cortex is busy"}'))).toBe(false);
+    expect(await snowflakeAnswered(new Response('<html>Service temporarily unavailable</html>', { status: 503 }))).toBe(true);
+    expect(await snowflakeAnswered(new Response('', { status: 504 }))).toBe(true);
+    expect(await snowflakeAnswered(new Response('{}', { status: 404 }))).toBe(false);
+  });
+
+  it('before any mark was seen (should Snowflake strip it), Snowflake\'s answer is told by its text', async () => {
+    expect(await snowflakeAnswered(new Response('{"responseType":"ERROR_SERVICE_UNAVAILABLE"}', { status: 503 }))).toBe(true);
+    expect(await snowflakeAnswered(new Response('Service ZLENS not reachable (serviceStatus=PENDING)', { status: 503 }))).toBe(true);
+    expect(await snowflakeAnswered(new Response('{"error":"Cortex is busy"}', { status: 503 }))).toBe(false);
+  });
+
+  it('a page that saw the mark, then gets an unmarked answer, says ZLens is starting', async () => {
+    setSnowflakeApp(true);
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => (calls += 1) === 1 ? marked(200) : new Response('upstream unavailable', { status: 503 })));
+    notePersonActive();
+    watchForStoppedService();
+    await fetch('/api/host/ui');
+    expect(isZLensStopped()).toBe(false);
+    await fetch('/api/host/ui');
+    expect(zlensStopped()).toEqual({ reason: 'stopped', startNow: true });
+  });
+
+  it('says why it is sending the person to sign in, and waits until ZLens has usually started', () => {
+    expect(SIGN_IN_AFTER_MS).toBe(90_000);
+    expect(signInWords(0)).toBe('After a stop, Snowflake asks you to sign in again. This page takes you there in 90 s, when ZLens is usually ready.');
+    expect(signInWords(80_200)).toBe('After a stop, Snowflake asks you to sign in again. This page takes you there in 10 s, when ZLens is usually ready.');
+    expect(signInWords(120_000)).toContain('in 0 s');
   });
 });

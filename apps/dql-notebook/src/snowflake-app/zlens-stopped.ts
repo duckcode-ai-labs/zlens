@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { isBackgroundNow, lastPersonActivity, onPersonActive } from '../api/server-auth';
+import { lastPersonActivity, onPersonActive } from '../api/server-auth';
 
 /**
  * The ZLens app for Snowflake stopped: by itself after its quiet spell, or because it was stopped
@@ -113,7 +113,27 @@ function holdRequestsToZLens(): void {
 
 /** Snowflake's own answer for a service that is not running: `503 {"responseType":"ERROR_SERVICE_UNAVAILABLE", …}`. */
 export function snowflakeSaysNotRunning(status: number, body: string): boolean {
-  return status === 503 && /ERROR_SERVICE_UNAVAILABLE|service is not yet running/i.test(body);
+  return status >= 502 && status <= 504 && /ERROR_SERVICE_UNAVAILABLE|service is not yet running|not reachable|serviceStatus=/i.test(body);
+}
+
+/** Inside Snowflake, ZLens marks every answer it sends with this header. */
+export const ZLENS_APP_HEADER = 'x-zlens-app';
+let zlensMarkSeen = false;
+
+/**
+ * Whether Snowflake, not ZLens, answered: a stopped or starting app (Snowflake starts it on this request). Once the
+ * page has seen ZLens's mark on any answer, an unmarked 5xx is Snowflake's, whatever its text: the V17 tester's
+ * page did not recognise Snowflake's answers by their text and said ZLens "will not start" while it was starting.
+ * Until then (should the mark not pass through), Snowflake's answer is recognised by its text.
+ */
+export async function snowflakeAnswered(response: Response): Promise<boolean> {
+  if (response.headers.get(ZLENS_APP_HEADER) === '1') {
+    zlensMarkSeen = true;
+    return false;
+  }
+  if (response.type === 'opaqueredirect' || response.status < 500) return false;
+  if (zlensMarkSeen) return true;
+  return snowflakeSaysNotRunning(response.status, await response.clone().text().catch(() => ''));
 }
 
 let unwatchedFetch: typeof fetch | undefined;
@@ -161,7 +181,7 @@ async function resumeQuietPage(send: typeof fetch): Promise<void> {
     let notRunning = false;
     try {
       const response = await send('/api/health', { cache: 'no-store', credentials: 'same-origin', redirect: 'manual' });
-      notRunning = response.status === 503 && snowflakeSaysNotRunning(response.status, await response.clone().text().catch(() => ''));
+      notRunning = await snowflakeAnswered(response);
     } catch {
       // Unreachable for now: what waited goes and fails, or succeeds, as it would have.
     }
@@ -204,14 +224,9 @@ export function watchForStoppedService(): void {
       });
     }
     const response = await send(input, init);
-    if (response.status === 503 && !stopped && reachesZLens(input)) {
-      try {
-        // A request the person just made has started ZLens again: the page starts it and opens it when ready.
-        if (snowflakeSaysNotRunning(response.status, await response.clone().text())) markZLensStopped(isBackgroundNow() ? { reason: 'stopped' } : { reason: 'stopped', startNow: true });
-      } catch {
-        // An answer that cannot be read says nothing about ZLens stopping.
-      }
-    }
+    // Snowflake answered for ZLens: this request has started it again (a quiet page sends nothing by itself, so the
+    // person was here moments ago). The page says it is starting and opens it when ready.
+    if (!stopped && reachesZLens(input) && await snowflakeAnswered(response)) markZLensStopped({ reason: 'stopped', startNow: true });
     return response;
   }) as typeof fetch;
 }
@@ -248,7 +263,10 @@ export async function startZLensAgain(options: {
     try {
       const response = await send('/api/health', { cache: 'no-store', credentials: 'same-origin', redirect: 'manual' });
       if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) return 'sign-in';
-      if (response.ok) return 'ready';
+      if (response.ok) {
+        void snowflakeAnswered(response);
+        return 'ready';
+      }
       // 503 from Snowflake: the service is still starting.
     } catch {
       // Not reachable yet.
@@ -265,6 +283,7 @@ export function resetZLensStoppedForTests(): void {
   pageFetch = undefined;
   if (unwatchedFetch) globalThis.fetch = unwatchedFetch;
   unwatchedFetch = undefined;
+  zlensMarkSeen = false;
   stopActivityWatch?.();
   stopActivityWatch = undefined;
   waiting.splice(0);

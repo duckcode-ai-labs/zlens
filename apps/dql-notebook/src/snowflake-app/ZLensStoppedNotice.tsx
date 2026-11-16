@@ -9,7 +9,7 @@ export function zlensStoppedWords(stopped: ZLensStopped): { title: string; detai
   if (stopped.startNow) {
     return {
       title: 'ZLens is starting',
-      detail: 'ZLens had stopped while no one was using it. It is starting again now.',
+      detail: 'ZLens had stopped. It is starting again now.',
       start: 'This takes about 2 to 3 minutes, longer right after an install or update.',
     };
   }
@@ -34,7 +34,24 @@ export function startingWords(elapsedMs: number): string {
 
 export const GAVE_UP_WORDS = `ZLens has not started after ${Math.round(START_GIVE_UP_MS / 60_000)} minutes. Check again in a few minutes.`;
 
-type StartState = { phase: 'waiting' } | { phase: 'starting'; since: number } | { phase: 'gave-up' };
+/**
+ * After a stop, Snowflake asks the person to sign in again before it lets them back in, even minutes after the last
+ * sign-in (V17 tester: 5 times in a day). A page that sends the person to sign in at once has them back before ZLens
+ * is ready; so it waits until ZLens has usually started (restarts took 1 to 2.5 minutes) and says why.
+ */
+export const SIGN_IN_AFTER_MS = 90_000;
+
+/** The line while the page waits to send the person to Snowflake's sign-in. */
+export function signInWords(elapsedMs: number): string {
+  const left = Math.max(0, Math.ceil((SIGN_IN_AFTER_MS - elapsedMs) / 1000));
+  return `After a stop, Snowflake asks you to sign in again. This page takes you there in ${left} s, when ZLens is usually ready.`;
+}
+
+type StartState =
+  | { phase: 'waiting' }
+  | { phase: 'starting'; since: number }
+  | { phase: 'sign-in'; since: number }
+  | { phase: 'gave-up' };
 
 /**
  * The app for Snowflake stopped (zlens-stopped.ts): say so over the page, and start it again only when the
@@ -56,15 +73,22 @@ export function ZLensStoppedNotice() {
     setState({ phase: 'starting', since });
     void startZLensAgain().then((outcome) => {
       if (outcome === 'gave-up') setState({ phase: 'gave-up' });
+      else if (outcome === 'sign-in') setState({ phase: 'sign-in', since });
       else window.location.reload();
     });
   };
   useEffect(() => {
-    if (state.phase !== 'starting') return undefined;
+    if (state.phase !== 'starting' && state.phase !== 'sign-in') return undefined;
     // A clock on the page only: it sends nothing.
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [state.phase]);
+  useEffect(() => {
+    if (state.phase !== 'sign-in') return undefined;
+    // Off to Snowflake's sign-in once ZLens has usually started; it comes back to ZLens after the sign-in.
+    const timer = setTimeout(() => window.location.reload(), Math.max(0, state.since + SIGN_IN_AFTER_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [state]);
   useEffect(() => {
     // The person is here and ZLens has already been asked to start (their request woke it): no need to ask them.
     if (stopped?.startNow && state.phase === 'waiting') start();
@@ -90,14 +114,15 @@ export function ZLensStoppedNotice() {
         {state.phase === 'gave-up' ? <p role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: t.textSecondary }}>{GAVE_UP_WORDS}</p> : null}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }}>
           {state.phase === 'starting' ? <span role="status" style={{ fontSize: 12.5, color: t.textSecondary }}>{startingWords(now - state.since)}</span> : null}
+          {state.phase === 'sign-in' ? <span role="status" style={{ fontSize: 12.5, lineHeight: 1.5, color: t.textSecondary }}>{signInWords(now - state.since)}</span> : null}
           <button
             type="button"
             autoFocus
-            onClick={start}
+            onClick={state.phase === 'sign-in' ? () => window.location.reload() : start}
             disabled={starting}
             style={{ fontSize: 13, padding: '7px 14px', borderRadius: 6, border: 'none', background: t.accent, color: '#fff', cursor: starting ? 'default' : 'pointer', opacity: starting ? 0.6 : 1 }}
           >
-            {state.phase === 'gave-up' ? 'Check again' : 'Start ZLens again'}
+            {state.phase === 'gave-up' ? 'Check again' : state.phase === 'sign-in' ? 'Sign in now' : 'Start ZLens again'}
           </button>
         </div>
       </div>

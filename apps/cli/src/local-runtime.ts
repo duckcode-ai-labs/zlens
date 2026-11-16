@@ -15519,6 +15519,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     res = withCompression(req, res);
     // Every answer of a hosted server says it is hosted, its refusals and failures too (RFC 0010 HH-9).
     if (hostIdentity) res.setHeader('X-DQL-Hosted', '1');
+    // Inside Snowflake every answer says it came from ZLens, so the page can tell Snowflake's own answer for a
+    // stopped or starting app (a 503 from the ingress) from one of ZLens's, whatever its text (V17 tester).
+    if (snowflakeIngress) res.setHeader('X-ZLens-App', '1');
     const requestUrl = req.url || '/';
     const url = new URL(requestUrl, 'http://127.0.0.1');
     const path = url.pathname || '/';
