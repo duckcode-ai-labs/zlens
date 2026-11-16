@@ -1309,15 +1309,18 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(drafts.map((dispatch) => [dispatch.label, dispatch.outcome])).toEqual([['draft', 'declined'], ['widen', 'sql']]);
     });
 
-    it('says the game types in the names the rule gives them, with the code beside them (V9 retest)', async () => {
+    it('says the game types in the names the rule gives them, without the column detail (V9 retest, V3 tester retest)', async () => {
       const namedRule = "Every GAME_ID in LOCAL_TEAM_GAME_FACTS has 8 characters, and the first one takes 4 values: 1 (preseason games, 3,288 rows), 2 (regular-season games, 45,948 rows), 4 (playoff games, 3,356 rows), 5 (play-in games, 26 rows).";
       const manifest = { ...nba, modeling: { rules: { ...nba.modeling.rules, 'nba.game_id_first_character': { ...nba.modeling.rules['nba.game_id_first_character'], expression: namedRule } } } };
       const playoffs = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '4%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
       const one = await askNba('Which team won the most playoff games in 2015?', playoffs, 'NO_SQL: No column identifies playoff games.', manifest);
-      expect(one.result.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
+      expect(one.result.answer).toContain('It counts only playoff games.');
+      // The reading names the kind, never the column that codes it; the SQL keeps the filter.
+      expect(one.result.answer).not.toMatch(/GAME_ID starting with|starts with 4/);
       const every = 'SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 GROUP BY team_name ORDER BY wins DESC LIMIT 1';
       const all = await askNba('Which team won the most games in 2015?', every, every, manifest);
-      expect(all.result.answer).toContain('It counts every kind of game together: preseason, regular-season, playoff and play-in games (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+      expect(all.result.answer).toContain('It counts every kind of game together: preseason, regular-season, playoff and play-in games; to count one kind, name it in the question');
+      expect(all.result.answer).not.toContain('GAME_ID starting with');
     });
 
     it('a stated game type is applied by a statement that keeps that kind by its code (V10 retest)', async () => {
@@ -1327,7 +1330,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       // "Playoffs" is a value the question states; the statement keeps the playoffs by GAME_ID, not by that word.
       const kept = await askNba('Which team won the most games in the 2015 Playoffs?', playoffs, playoffs, manifest);
       expect(kept.result.status).toBe('completed');
-      expect(kept.result.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
+      expect(kept.result.answer).toContain('It counts only playoff games.');
       // Keeping another kind does not apply it.
       const regular = "SELECT team_name, SUM(win) AS wins FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%' GROUP BY team_name ORDER BY wins DESC LIMIT 1";
       const wrong = await askNba('Which team won the most games in the 2015 Playoffs?', regular, regular, manifest);
@@ -1344,7 +1347,7 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       expect(statements).toHaveLength(1);
       expect(statements[0]).toContain("CAST(game_id AS VARCHAR) LIKE '2%'");
       expect(result.status).toBe('completed');
-      expect(result.answer).toContain('It counts only regular-season games (GAME_ID starting with 2)');
+      expect(result.answer).toContain('It counts only regular-season games.');
       // A statement that keeps the kind on one table and reads a total of every kind beside it is drafted again too (V12 gate, N4).
       const mixed = "SELECT g.team_name, SUM(g.win) AS wins, MAX(s.wins) AS season_wins FROM nba.local_team_game_facts g JOIN nba.local_team_season_facts s ON s.team_name = g.team_name WHERE g.season = 2015 AND CAST(g.game_id AS VARCHAR) LIKE '2%' GROUP BY g.team_name";
       const both = await askNba('Which of those had the most wins?', oneKind, mixed, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 regular season had the most wins.' });
@@ -1401,12 +1404,12 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const ask = (question: string) => route({ runId: 'run:kinds-beside-reading', request: { question, requestedMode: 'ask' } as AgentRunRequest, route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {} });
       const first = await ask('Which team won the most playoff games in 2015?');
       expect(calls.filter((call) => call === 'name')).toHaveLength(1);
-      expect(first.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
+      expect(first.answer).toContain('It counts only playoff games.');
       // Named once for this connection: the next run, on any snapshot, does not ask again.
       calls.length = 0;
       const second = await ask('Which team won the most postseason games in 2015?');
       expect(calls).not.toContain('name');
-      expect(second.answer).toContain('It counts only playoff games (GAME_ID starting with 4)');
+      expect(second.answer).toContain('It counts only playoff games.');
     });
 
     it('a name matched by either of its parts is matched by both when one part alone picks other rows (V12 gate, G3)', async () => {

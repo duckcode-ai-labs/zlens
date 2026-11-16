@@ -10,7 +10,8 @@
 import type { AskTraceDataV1 } from '../../api/client';
 
 export type RunStepKind = 'read' | 'certified' | 'semantic' | 'relational' | 'ai_sql' | 'checks' | 'warehouse' | 'answer' | 'gap' | 'clarify' | 'failed' | 'conversation';
-export type RunStepOutcome = 'done' | 'refused' | 'skipped' | 'failed' | 'not_reached';
+/** `not_found`: the step looked and the data does not hold what was asked ("Not in this data"), a correct finding. */
+export type RunStepOutcome = 'done' | 'refused' | 'skipped' | 'failed' | 'not_reached' | 'not_found';
 export type RunEnding = 'answered' | 'gap' | 'clarify' | 'failed' | 'conversation';
 
 export interface RunAiCall {
@@ -84,7 +85,7 @@ export interface ExplainAskRunInput {
 }
 
 /** An outcome in the reader's words. */
-export const OUTCOME_WORDS: Record<RunStepOutcome, string> = { done: 'Done', refused: 'Not used', skipped: 'Skipped', failed: 'Failed', not_reached: 'Not reached' };
+export const OUTCOME_WORDS: Record<RunStepOutcome, string> = { done: 'Done', refused: 'Not used', skipped: 'Skipped', failed: 'Failed', not_reached: 'Not reached', not_found: 'Not in this data' };
 
 /** A row-count range (a trace read by someone other than the asker) in words: "No rows", "1 row", "About 2-10 rows". */
 export function rowCountWords(bucket: string): string {
@@ -251,6 +252,8 @@ const CALL_LABELS: Record<string, string> = {
   correct: 'Corrected its reading',
   reread: 'Read it again with what the tiers found',
   draft: 'Drafted SQL',
+  // A drafting call that wrote no SQL: the AI looked at the tables and found nothing that answers the question.
+  looked: 'Looked for the data',
   redraft: 'Redrafted after a warehouse error',
   fix: 'Fixed a failed check',
   retry_empty: 'Redrafted after an empty result',
@@ -265,8 +268,9 @@ function aiCallOf(value: unknown): RunAiCall | undefined {
   if (!call || !purpose) return undefined;
   const label = str(call.label) ?? (purpose === 'intent:resolve' ? 'read' : purpose === 'intent:correct' ? 'correct' : purpose === 'intent:repair' ? 'reread' : purpose === 'intent:draft' ? 'draft' : purpose);
   const outcome = call.outcome === 'sql' || call.outcome === 'declined' || call.outcome === 'rejected' || call.outcome === 'error' || call.outcome === 'accepted' || call.outcome === 'revise' ? call.outcome : undefined;
+  const shown = label === 'draft' && outcome === 'declined' ? 'looked' : label;
   return {
-    label: CALL_LABELS[label] ?? label.replace(/^intent:/, '').replace(/_/g, ' '),
+    label: CALL_LABELS[shown] ?? shown.replace(/^intent:/, '').replace(/_/g, ' '),
     ...(num(call.ms) !== undefined ? { ms: num(call.ms) } : {}),
     ...(num(call.promptChars) !== undefined ? { promptChars: num(call.promptChars) } : {}),
     ...(str(call.reply) ? { reply: str(call.reply) } : {}),
@@ -328,6 +332,18 @@ const SOURCE_WORDS: Record<string, string> = {
   exploratory: 'SQL written by AI from the tables (review before relying on it)',
   relational: 'governed tables',
 };
+
+/**
+ * A gap that is a finding about the data (no payroll in these tables), not a stop: the same test as the
+ * answer card's "Not in this data". A failed check, a time-out, a policy or a missing AI model is not one.
+ * A gap recorded without its kind is one when the AI looked at the tables and found nothing.
+ */
+function isDataGap(gap: Rec | undefined, payload: Rec, declined: boolean): boolean {
+  const kind = str(gap?.kind);
+  if (payload.providerMissing === true || (kind ? kind !== 'not_modeled' && kind !== 'not_retrieved' : !declined)) return false;
+  const words = [payload.text, payload.answer, gap?.message].map(str).filter(Boolean).join(' ');
+  return !/failed a check|ran out of time|time-?out|policy|no AI model/i.test(words);
+}
 
 /** The explanation of one Ask pipeline run, or undefined when the run is not one. */
 export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undefined {
@@ -391,7 +407,7 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
     const aiRefusal = [...refusals].reverse().find((refusal) => refusal.tier === 'exploratory');
     if (!readFailed) {
       if (governedRounds.length === 0 && aiLaneActivity) {
-        // On a "Not in this data" answer the AI looked and wrote no SQL; step 3 says "Not used" (V2, listing retake F9).
+        // On a "Not in this data" answer the AI looked and wrote no SQL; step 3 says so (V2, listing retake F9).
         const declined = str(aiRefusal?.code) === 'exploration_declined' && executedTier !== 'exploratory';
         push({ id: 'governed', kind: 'semantic', title: 'Certified saved queries and semantic layer', outcome: 'skipped', reason: declined ? 'The question is not about a certified saved query or a semantic metric, so the AI looked for it in the tables.' : 'The question is not about a certified saved query or a semantic metric, so the AI wrote the SQL.' });
       }
@@ -428,18 +444,21 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
       }
     }
 
-    // 3. AI-written SQL.
+    // 3. AI-written SQL. Its title says what happened: a step that wrote no SQL is never "AI wrote SQL" (V3 tester
+    // retest: "What was our payroll in 1997?" showed "AI wrote SQL · Not used" above "No answer · Not used").
     if (aiLaneActivity || aiRefusal?.code === 'exploration_not_opted_in' && ending !== 'answered') {
       const code = str(aiRefusal?.code);
       const outcome: RunStepOutcome = executedTier === 'exploratory' ? 'done'
         : code === 'exploration_not_opted_in' ? 'skipped'
-        : code === 'exploration_declined' ? 'refused'
+        : code === 'exploration_declined' ? 'not_found'
         : code ? 'failed' : draftCalls.length ? 'done' : 'not_reached';
+      const wroteSql = executedTier === 'exploratory' || draftCalls.some((call) => call.outcome === 'sql' || call.outcome === 'rejected');
+      const title = outcome === 'not_found' ? 'Looked for the data' : wroteSql || outcome === 'done' ? 'AI wrote SQL' : 'AI-written SQL';
       const tables = arr(context?.used && rec(context.used)?.relations).map(str).filter((name): name is string => Boolean(name)).map((name) => name.replace(/"/g, ''));
       const redrafts = draftCalls.length - 1;
       const drafting = (num(timings.schema_draft) ?? 0) + (num(timings.schema_redraft) ?? 0);
       push({
-        id: 'ai-sql', kind: 'ai_sql', title: 'AI wrote SQL', outcome,
+        id: 'ai-sql', kind: 'ai_sql', title, outcome,
         ...(drafting ? { ms: drafting } : {}),
         reason: outcome === 'done'
           ? `Wrote one read-only statement${tables.length ? ` over ${tables.join(', ')}` : ''}${redrafts > 0 ? `, redrafted ${redrafts === 1 ? 'once' : `${redrafts} times`}` : ''}.`
@@ -501,7 +520,10 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
     if (ending === 'answered') {
       push({ id: 'answer', kind: 'answer', title: 'Answer', outcome: 'done', reason: `Answered from ${SOURCE_WORDS[executedTier ?? ''] ?? 'the data'}.` });
     } else if (ending === 'gap') {
-      push({ id: 'gap', kind: 'gap', title: 'No answer', outcome: 'refused', reason: withoutSearchList(plainRefs(str(gap?.message) ?? str(payload.text) ?? 'Nothing in this project answers the question.')) });
+      // The last step says how it ended: "Not in this data" is a correct answer about the data; any other gap is a
+      // stop. Never "No answer · Not used" (V3 tester retest).
+      const dataGap = isDataGap(gap, payload, str(aiRefusal?.code) === 'exploration_declined');
+      push({ id: 'gap', kind: 'gap', title: dataGap ? 'Answer' : 'No answer', outcome: dataGap ? 'not_found' : 'failed', reason: withoutSearchList(plainRefs(str(gap?.message) ?? str(payload.text) ?? 'Nothing in this project answers the question.')) });
     } else if (ending === 'clarify') {
       push({ id: 'clarify', kind: 'clarify', title: 'Asked which you meant', outcome: 'done', reason: plainRefs(str(payload.question) ?? str(payload.text) ?? str(payload.answer) ?? 'The question has more than one meaning.') });
     } else {
@@ -516,7 +538,7 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
   const aiMs = calls.reduce((sum, { call }) => sum + (call.ms ?? 0), 0);
   const end = steps[steps.length - 1]!;
   const headline = ending === 'answered' ? end.reason
-    : ending === 'gap' ? `No answer: ${briefly(end.reason)}`
+    : ending === 'gap' ? `${end.outcome === 'not_found' ? 'Not in this data' : 'No answer'}: ${briefly(end.reason)}`
     : ending === 'clarify' ? `Asked which you meant: ${end.reason}`
     : ending === 'failed' ? end.reason
     : 'Replied without querying data.';

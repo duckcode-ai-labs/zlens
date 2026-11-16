@@ -70,6 +70,7 @@ import { canBackgroundRepairNotebookCell, notebookRepairErrorMessage } from '../
 import { DQL_CELL_EXAMPLE, dqlCellHoldsPlainSql, queryCellKindLabel } from '../../utils/dql-cell-content';
 import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { queryTargetWords } from '../../snowflake-app/snowflake-app-words';
+import { BLOCK_BINDING_WORDS, boundQueryName } from './block-binding-words';
 
 interface CellProps {
   cell: Cell;
@@ -548,10 +549,8 @@ function BlockBindingChip({
 }) {
   const isForked = binding.state === 'forked';
   const accent = isForked ? t.warning : t.success;
-  const label = isForked ? 'FORKED' : 'BOUND';
-  const helpText = isForked
-    ? 'Local edits have diverged from the saved query file — Revert to discard, or Save as saved query to promote as a new version.'
-    : 'This cell mirrors the saved query file. Edit to fork locally.';
+  const label = isForked ? BLOCK_BINDING_WORDS.editedLabel : BLOCK_BINDING_WORDS.boundLabel;
+  const helpText = isForked ? BLOCK_BINDING_WORDS.editedHelp : BLOCK_BINDING_WORDS.boundHelp;
   return (
     <div
       title={helpText}
@@ -580,10 +579,10 @@ function BlockBindingChip({
       >
         {label}
       </span>
-      <span style={{ color: t.textSecondary }}>{binding.path}</span>
+      <span style={{ color: t.textSecondary }}>{boundQueryName(binding)}</span>
       {binding.version && <span style={{ color: t.textMuted }}>· v{binding.version}</span>}
       {!isForked && (
-        <span title="Bound cells track the saved query file — edits fork locally" style={{ color: t.textMuted }}>
+        <span title={BLOCK_BINDING_WORDS.lockTitle} style={{ color: t.textMuted }}>
           🔒
         </span>
       )}
@@ -591,7 +590,7 @@ function BlockBindingChip({
       {isForked && (
         <button
           onClick={onRevert}
-          title="Discard local edits and restore the saved query file body"
+          title={BLOCK_BINDING_WORDS.revertTitle}
           style={binderBtnStyle(t, accent)}
         >
           Revert
@@ -600,7 +599,7 @@ function BlockBindingChip({
       {!isForked && (
         <button
           onClick={onCustomize}
-          title="Load the saved query source into this notebook and customize a local copy"
+          title={BLOCK_BINDING_WORDS.customizeTitle}
           style={binderBtnStyle(t, accent)}
         >
           Customize copy
@@ -608,7 +607,7 @@ function BlockBindingChip({
       )}
       <button
         onClick={onUnbind}
-        title="Detach this cell from the saved query file"
+        title={BLOCK_BINDING_WORDS.unbindTitle}
         style={binderBtnStyle(t, t.btnBorder)}
       >
         Unbind

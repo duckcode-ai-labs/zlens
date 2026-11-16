@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yaml from 'js-yaml';
@@ -144,7 +144,7 @@ describe('the app package for Snowflake', () => {
   it('V2: the launcher page calls only the app\'s own procedures, and pins a Streamlit with link_button', () => {
     const page = read('launcher/launcher.py');
     const calls = [...page.matchAll(/session\.sql\("([^"]+)"\)/g)].map((match) => match[1]);
-    expect(calls).toEqual(['CALL app_public.launcher_status()', 'CALL app_public.launcher_start()', 'SELECT CURRENT_DATABASE()']);
+    expect(calls).toEqual(['CALL app_public.launcher_status()', 'SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()', 'CALL app_public.launcher_start()']);
     expect(page).not.toMatch(/requests|urllib|http\.client|socket|components\.html/);
     expect(page).toContain('st.link_button("Open ZLens", status["url"]');
     // The address is offered only once READY, with a copy of it in case the browser blocks the tab.
@@ -155,6 +155,97 @@ describe('the app package for Snowflake', () => {
     const pin = env.dependencies.find((dep) => dep.startsWith('streamlit='));
     const [major, minor] = pin!.slice('streamlit='.length).split('.').map(Number);
     expect(major! > 1 || (major === 1 && minor! >= 27)).toBe(true);
+  });
+
+  /** The body of one branch of the launcher page: from its `if` line to the next line that starts a top-level block. */
+  const branch = (page: string, start: string) => {
+    const from = page.indexOf(start);
+    expect(from).toBeGreaterThan(-1);
+    const rest = page.slice(from + start.length);
+    const end = rest.search(/\n(?:if |# |state\.|elapsed|st\.progress)/);
+    return rest.slice(0, end === -1 ? undefined : end);
+  };
+
+  it('V3: once ready, the launcher checks again every minute for 10 minutes, then stops and offers Check again', () => {
+    const page = read('launcher/launcher.py');
+    const constant = (name: string) => Number(new RegExp(`^${name} = (\\d+)$`, 'm').exec(page)?.[1]);
+    expect(constant('RECHECK_SECONDS')).toBe(60);
+    expect(constant('RECHECK_FOR_SECONDS')).toBe(600);
+    const ready = branch(page, 'if name == "READY" and status["url"]:');
+    // The quiet re-check sleeps only inside the window, then reruns; after it, no sleep and no rerun of its own.
+    expect(ready).toMatch(/left = RECHECK_FOR_SECONDS - \(now - state\["ready_since"\]\)\n\s+if left > 0:\n[^\n]*\n\s+time\.sleep\(RECHECK_SECONDS\)\n\s+st\.rerun\(\)/);
+    expect(ready.match(/time\.sleep\(/g)).toHaveLength(1);
+    const after = ready.slice(ready.indexOf('time.sleep(RECHECK_SECONDS)'));
+    expect(after).toContain('This page has stopped checking, so its warehouse can suspend.');
+    expect(after).toMatch(/if st\.button\("Check again"\):\n\s+state\["ready_since"\] = time\.time\(\)\n\s+st\.rerun\(\)\n\s+st\.stop\(\)/);
+    // A start that never finishes is not checked forever either.
+    expect(constant('STOP_WAITING_SECONDS')).toBeLessThanOrEqual(1800);
+    expect(page).toMatch(/if elapsed > STOP_WAITING_SECONDS:[\s\S]*?st\.stop\(\)[\s\S]*?time\.sleep\(POLL_SECONDS\)/);
+    // Every sleep in the page is one of the two bounded waits.
+    expect([...page.matchAll(/time\.sleep\((\w+)\)/g)].map((match) => match[1])).toEqual(['RECHECK_SECONDS', 'POLL_SECONDS']);
+  });
+
+  it('V3: a re-check that finds ZLens stopped or restarting shows it starting, and starts a stopped one', () => {
+    const page = read('launcher/launcher.py');
+    // Leaving READY starts a new start, timed from now, and forgets the ready window.
+    expect(page).toMatch(/if name != "READY":\n\s+state\.pop\("ready_since", None\)\n\s+if state\.get\("last_status"\) == "READY":\n\s+state\["started_at"\] = now\n\s+state\.pop\("start_sent_at", None\)\n\s+state\.pop\("started_in", None\)\nstate\["last_status"\] = name/);
+    expect(page).toMatch(/if name == "SUSPENDED" and now - state\.get\("start_sent_at", 0\) > RESEND_START_SECONDS:\n\s+start\(\)/);
+    // "Started in" is measured once, when READY is first seen, not again on every re-check.
+    expect(page).toContain('state["started_in"] = minutes(now - state["started_at"])');
+    expect(page).not.toMatch(/Started in \{minutes\(time\.time\(\)/);
+  });
+
+  it('V3: every state of the launcher says when it was checked, with the time zone', () => {
+    const page = read('launcher/launcher.py');
+    // The time comes from Snowflake (the session's time zone), in the same query as the app's name.
+    expect(page).toContain('session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()")');
+    expect(page).toMatch(/def clock\(moment, later_seconds=0\):[\s\S]*?moment\.tzname\(\)[\s\S]*?return f"\{moment:%H:%M\} \{zone\}"/);
+    expect(page).toContain('st.success(f"ZLens is ready. Checked at {checked}.")');
+    for (const start of ['if status["error"]:', 'if name in ("FAILED", "INTERNAL_ERROR"):']) {
+      expect(branch(page, start)).toContain('st.caption(f"Checked at {checked}.")');
+    }
+    expect(page).toContain('st.caption(f"{minutes(elapsed)} so far. Your projects are kept. Checked at {checked}.")');
+  });
+
+  it('V3: the launcher shows the ZLens logo from a small PNG uploaded with the page', () => {
+    const page = read('launcher/launcher.py');
+    expect(page).toContain('LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zlens-logo.png")');
+    expect(page).toMatch(/def show_title\(\):[\s\S]*?st\.image\(image\.read\(\), width=56\)[\s\S]*?except Exception:[\s\S]*?st\.title\("ZLens"\)/);
+    expect(page.indexOf('show_title()\n\nif status["error"]')).toBeGreaterThan(-1);
+    const logo = readFileSync(join(APP, 'launcher', 'zlens-logo.png'));
+    expect(logo.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    // IHDR: width and height, big-endian, after the signature and the chunk header.
+    expect([logo.readUInt32BE(16), logo.readUInt32BE(20)]).toEqual([128, 128]);
+    expect(statSync(join(APP, 'launcher', 'zlens-logo.png')).size).toBeLessThan(8_192);
+    // The package uploads everything under app/, the launcher folder with it.
+    const project = yaml.load(readFileSync(join(APP, '..', 'snowflake.yml'), 'utf8')) as { entities: Record<string, { artifacts?: Array<{ src: string }> }> };
+    for (const entity of ['zlens_package', 'zlens_release']) expect(project.entities[entity]!.artifacts!.map((artifact) => artifact.src)).toContain('app/*');
+  });
+
+  it('V3: the readme, Help and the launcher say which warehouse to pick when Snowsight asks for one', () => {
+    const firstOpen = readme.slice(readme.indexOf('## The first open'), readme.indexOf('## What ZLens does first'));
+    expect(firstOpen).toContain('**If Snowsight asks you to select a warehouse**');
+    expect(firstOpen).toContain('pick `ZLENS_APP_WH` (your\n  app\'s name followed by `_WH`), the app\'s own warehouse');
+    expect(firstOpen).toContain('missing a default warehouse');
+    // The warehouse the launcher runs on is that one.
+    expect(setup).toContain("QUERY_WAREHOUSE = ' || CURRENT_DATABASE() || '_WH'");
+    expect(setup).not.toContain('so no one is\n-- asked to pick one');
+    const help = readFileSync(join(__dirname, '..', '..', 'dql-notebook', 'src', 'components', 'help', 'HelpDocsPage.tsx'), 'utf8');
+    expect(help).toContain('If Snowsight asks you to select a warehouse before that page opens, pick <span style={inlineCode}>ZLENS_APP_WH</span>');
+    expect(help).toContain("troubleCard('Snowsight asks for a warehouse'");
+    const page = read('launcher/launcher.py');
+    expect(branch(page, 'if not status["zlens_user"]:')).toContain('If Snowsight asks you to select a warehouse before this page opens, pick {warehouse}, ');
+    expect(page).toContain('warehouse = f"{app}_WH"');
+  });
+
+  it('V3: the readme explains the Snowflake pages ZLens cannot change: the cached page, a late sign-in, a blocked pop-up', () => {
+    const firstOpen = readme.slice(readme.indexOf('## The first open'), readme.indexOf('## What ZLens does first'));
+    expect(firstOpen).toMatch(/\*\*Reopening the page\*\* from the app can first show Snowsight's cached copy of it for a few\s+seconds/);
+    expect(firstOpen).toMatch(/\*\*The page says when it last checked\*\*/);
+    expect(firstOpen).toMatch(/a sign-in that finishes\s+after ZLens has stopped itself/);
+    expect(firstOpen).toMatch(/A browser that blocks pop-ups blocks Open ZLens too: copy the address\s+from the page instead\./);
+    // "service is not yet running" is explained in one place only.
+    expect(readme.match(/service is not yet running/g)).toHaveLength(1);
   });
 
   it('V2: the readme and Help send people to Launch app, with app_url() as the SQL route', () => {

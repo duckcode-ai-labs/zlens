@@ -402,6 +402,7 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
           <p style={para}>After 60 minutes with no one using it, ZLens stops by itself, and its projects are kept. Starting it again takes about 2 to 3 minutes.</p>
           <p style={para}>After a stop, press <strong>Launch app</strong> on the app's page in Snowsight. Its page starts ZLens, shows the time so far, and offers <strong>Open ZLens</strong> once ZLens is ready. In a worksheet, this does the same and then gives the address:</p>
           <pre style={codeBlock}>{'CALL ZLENS_APP.app_public.app_url();'}</pre>
+          <p style={para}>If Snowsight asks you to select a warehouse before that page opens, pick <span style={inlineCode}>ZLENS_APP_WH</span> (your app's name followed by <span style={inlineCode}>_WH</span>), the app's own warehouse: the page runs on it. The page says when it last checked; a copy Snowsight shows from its cache for a few seconds carries an older time.</p>
           <p style={para}>The address on its own (a bookmark or a shared link) does not wait: opened while ZLens starts, Snowflake shows a short message that the service is not yet running, and each reload sends you back to Snowflake's sign-in. Start from <strong>Launch app</strong> instead.</p>
           <p style={para}>Before a meeting, an admin can start it a few minutes ahead:</p>
           <pre style={codeBlock}>{'CALL ZLENS_APP.app_public.start_app();'}</pre>
@@ -415,6 +416,7 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
         <>
           <div style={{ margin: '14px 0 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
             {troubleCard('“Service is not yet running”', <>ZLens is starting: about 2 to 3 minutes. Close that tab and press <strong>Launch app</strong> in Snowsight: it waits until ZLens is ready, then offers <strong>Open ZLens</strong>. Or <span style={inlineCode}>CALL ZLENS_APP.app_public.app_url();</span> in a worksheet.</>)}
+            {troubleCard('Snowsight asks for a warehouse', <>Pick <span style={inlineCode}>ZLENS_APP_WH</span> (your app's name followed by <span style={inlineCode}>_WH</span>): the page that starts ZLens runs on it. A note that you are missing a default warehouse is about your own Snowflake user's settings, not ZLens.</>)}
             {troubleCard('“This ZLens app is set up for one person”', <>Only the user named on the app's Configurations tab can open it. Your Snowflake admin can change that name there.</>)}
             {troubleCard('Ask cannot reach Claude', <>Your Snowflake admin grants <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> to the app. Then <strong>Settings » AI provider » Test</strong>.</>)}
             {troubleCard('A table is missing', <>Grant it to the app (see <strong>Add more data</strong>), then <strong>Settings » Database » Apply and synchronize</strong>.</>)}

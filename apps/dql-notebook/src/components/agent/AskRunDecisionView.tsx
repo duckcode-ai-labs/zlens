@@ -15,7 +15,7 @@ import { AiCallList, AskRunChecks, AskRunDataUsed } from './AskRunFlow';
 
 const nodeColor = (node: Pick<DecisionNode, 'outcome' | 'kind' | 'subtitle'>, t: Theme): string => {
   if (node.outcome === 'failed') return t.error;
-  if (node.kind === 'end') return node.subtitle === 'No answer' ? t.warning : t.accent;
+  if (node.kind === 'end') return node.subtitle === 'No answer' || node.outcome === 'not_found' ? t.warning : t.accent;
   if (node.outcome === 'done') return t.success;
   return t.textMuted;
 };
@@ -50,7 +50,7 @@ export type DecisionNodeData = { node: DecisionNode; t: Theme };
 function DecisionFlowNode({ data, selected }: NodeProps): JSX.Element {
   const { node, t } = data as DecisionNodeData;
   const color = nodeColor(node, t);
-  const muted = node.outcome === 'skipped' || node.outcome === 'not_reached' || node.outcome === 'refused';
+  const muted = node.outcome === 'skipped' || node.outcome === 'not_reached' || node.outcome === 'refused' || (node.outcome === 'not_found' && node.kind !== 'end');
   return (
     <div style={{ width: DECISION_NODE_WIDTH, height: DECISION_NODE_HEIGHT, boxSizing: 'border-box', background: t.cellBg, border: `${selected ? 2.5 : 1.5}px ${muted ? 'dashed' : 'solid'} ${selected ? t.accent : color}`, borderRadius: 9, padding: '7px 9px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 3, cursor: 'pointer', boxShadow: selected ? `0 0 0 3px ${t.accent}22` : 'none' }}>
       <Handle type="target" position={Position.Left} style={{ width: 6, height: 6, background: color, border: 'none' }} />

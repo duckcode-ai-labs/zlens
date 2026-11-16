@@ -40,7 +40,7 @@ function sentSize(chars: number | undefined): string {
   return chars >= 1_000 ? `${Math.round(chars / 1_000)}k characters sent` : `${chars} characters sent`;
 }
 
-const CALL_OUTCOME_WORDS: Record<NonNullable<RunAiCall['outcome']>, string> = { sql: 'Wrote SQL', declined: 'Declined', rejected: 'Rejected', error: 'Error', accepted: 'Answers it', revise: 'Asked for a revision' };
+const CALL_OUTCOME_WORDS: Record<NonNullable<RunAiCall['outcome']>, string> = { sql: 'Wrote SQL', declined: 'Found nothing', rejected: 'Rejected', error: 'Error', accepted: 'Answers it', revise: 'Asked for a revision' };
 
 /** AI calls with what each was for, how long it took, how much was sent and what came back. */
 export function AiCallList({ calls, t, openReplies = false }: { calls: RunAiCall[]; t: Theme; openReplies?: boolean }): JSX.Element {

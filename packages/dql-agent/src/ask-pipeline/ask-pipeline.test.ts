@@ -3380,11 +3380,11 @@ describe('the answer reads the reading the host corrected, and a winning margin 
   const run = (proof: string[]) => runAskPipeline({ question: 'How many playoff games did the Warriors win in 2016?', vocabulary, provider, explorationAuto: true, clauseCoverage: false, prepareDeps: { draftSql: async () => ({ sql: "SELECT SUM(CASE WHEN team_won THEN 1 ELSE 0 END) AS playoff_wins FROM nba.team_game_facts WHERE CAST(game_id AS VARCHAR) LIKE '4%'", relations: ['nba.team_game_facts'], proof }) }, executeDeps: { run: async () => ({ columns: ['playoff_wins'], rows: [{ playoff_wins: 16 }], rowCount: 1, executionTimeMs: 1 }) } });
 
   it('a reading the host corrected is the one the answer and the receipt carry', async () => {
-    const outcome = await run(['reading: Playoff games the Warriors won in 2016', 'caveat: it counts only playoff games (GAME_ID starting with 4)']);
+    const outcome = await run(['reading: Playoff games the Warriors won in 2016', 'caveat: it counts only playoff games']);
     expect(outcome.kind).toBe('answered');
     expect(outcome.text).toContain('I read this as: Playoff games the Warriors won in 2016.');
     expect(outcome.text).not.toContain('cannot be applied');
-    expect(outcome.text).toContain('I read this as: Playoff games the Warriors won in 2016. It counts only playoff games (GAME_ID starting with 4).');
+    expect(outcome.text).toContain('I read this as: Playoff games the Warriors won in 2016. It counts only playoff games.');
     expect(outcome.receipt.reading).toBe('Playoff games the Warriors won in 2016');
   });
 

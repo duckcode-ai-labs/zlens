@@ -13,7 +13,7 @@ import { BlockStatusBadge, blockDisplayStatus } from '../blocks/BlockStatusBadge
 import { SemanticTreeView } from './CatalogTree';
 import { blockDomains, filterBlocksForDomain } from './block-domain-filter';
 import { buildNotebookSemanticBlock } from './semantic-notebook-source';
-import { blockFolderLabel, buildBlockLibraryTree, type BlockLibraryTreeNode } from './block-library-tree';
+import { blockFolderLabel, blockRowMeta, buildBlockLibraryTree, type BlockLibraryTreeNode } from './block-library-tree';
 import { buildFileLibraryTree, type FileLibraryTreeNode } from './file-library-tree';
 import { DomainScopeSelect } from './DomainScopeSelect';
 import { filterNotebookFiles, notebookDomains } from './notebook-sidebar';
@@ -1074,7 +1074,7 @@ export function BlockRow({ block, depth = 0, t, onOpen, onDelete, onPublish, pub
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           {/* The whole name, wrapped: cut at the edge, two drafts read the same ("many_points_did_lebron_james_sc…" twice). */}
           <span style={{ fontSize: 12, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{block.name}</span>
-          <span style={{ fontSize: 10.5, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[block.domain, editsCertified ? 'draft · edits to the certified saved query' : status === 'proposed' ? 'certification proposed' : status, status === 'deprecated' && (block.replacement?.name ?? block.replacedBy) ? `replaced by ${block.replacement?.name ?? block.replacedBy}` : null].filter(Boolean).join(' · ')}</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{blockRowMeta(block.domain, editsCertified ? 'draft · edits to the certified saved query' : status === 'proposed' ? 'certification proposed' : status, status === 'deprecated' ? block.replacement?.name ?? block.replacedBy : undefined)}</span>
         </span>
       </button>
       {isPrivate ? (

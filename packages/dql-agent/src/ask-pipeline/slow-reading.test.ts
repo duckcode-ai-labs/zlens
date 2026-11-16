@@ -170,10 +170,10 @@ describe('the answer reads as one answer sentence, the reading, and one source l
       columns: ['PLAYER_ID', 'PLAYER_NAME', 'PLAYOFF_POINTS_2016'],
       rows: [{ PLAYER_ID: 2544, PLAYER_NAME: 'LeBron James', PLAYOFF_POINTS_2016: 591 }, { PLAYER_ID: 201939, PLAYER_NAME: 'Stephen Curry', PLAYOFF_POINTS_2016: 477 }],
       rowCount: 2, executionTimeMs: 1,
-    }, vocabulary, 'review_required', { scope: ['it counts only playoff games (GAME_ID starting with 4)'], source: 'SQL written by AI from the LOCAL_PLAYER_GAME_FACTS table, because no certified saved query or metric answers this; review it before relying on the numbers' });
+    }, vocabulary, 'review_required', { scope: ['it counts only playoff games'], source: 'SQL written by AI from the LOCAL_PLAYER_GAME_FACTS table, because no certified saved query or metric answers this; review it before relying on the numbers' });
     expect(text).toBe([
       '2 rows, starting with LeBron James · 591; Stephen Curry · 477.',
-      'I read this as: Who were the top scorers in the 2016 playoffs, matching the certified saved query for this ranking? It counts only playoff games (GAME_ID starting with 4).',
+      'I read this as: Who were the top scorers in the 2016 playoffs, matching the certified saved query for this ranking? It counts only playoff games.',
       'Source: SQL written by AI from the LOCAL_PLAYER_GAME_FACTS table, because no certified saved query or metric answers this; review it before relying on the numbers.',
     ].join('\n\n'));
     expect(text).not.toMatch(/2544|201939|\?\.|certified block/);

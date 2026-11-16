@@ -111,7 +111,7 @@ export interface RunAskPipelineInput {
   reviewResult?: (input: { question: string; sql: string; result: { columns?: Array<string | { name: string }>; rows: Array<Record<string, unknown>>; rowCount: number } }) => Promise<{ revise: string } | undefined>;
   /**
    * What a governed answer (a certified block, a metric) counts of the kinds a coded key tells apart, in words:
-   * "it counts only regular-season games (GAME_ID starting with 2)". The host reads it from the statement it ran;
+   * "it counts only regular-season games", in the names a reader uses (no column detail). The host reads it from the statement it ran;
    * absent or undefined, nothing is said. An AI-drafted answer says it through its own caveats.
    */
   kindsNote?: (candidate: { sql: string; relations: string[] }) => string | undefined;

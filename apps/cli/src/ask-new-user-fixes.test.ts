@@ -212,9 +212,9 @@ describe('game types in plain words, and a reading that agrees with its answer (
     expect(joinKindNames(['regular-season games', 'playoff games'])).toBe('regular-season and playoff games');
     expect(joinKindNames(['preseason games', 'regular-season games', 'playoff games', 'play-in games'])).toBe('preseason, regular-season, playoff and play-in games');
     expect(joinKindNames(['returns', 'exchanges'])).toBe('returns and exchanges');
-    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: true, kinds: ['4'] })).toBe('it counts only playoff games (GAME_ID starting with 4)');
-    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: true, kinds: ['4', '2'] })).toBe('it counts only regular-season and playoff games (GAME_ID starting with 2 or 4)');
-    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: false, kinds: [] })).toBe('it counts every kind of game together: preseason, regular-season, playoff and play-in games (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');
+    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: true, kinds: ['4'] })).toBe('it counts only playoff games');
+    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: true, kinds: ['4', '2'] })).toBe('it counts only regular-season and playoff games');
+    expect(kindsAnswerLine(named, 'GAME_ID', { filtered: false, kinds: [] })).toBe('it counts every kind of game together: preseason, regular-season, playoff and play-in games; to count one kind, name it in the question');
     // Without names, the code says it, as before.
     expect(kindsAnswerLine(kinds, 'GAME_ID', { filtered: true, kinds: ['4'] })).toBe('it counts only games whose GAME_ID starts with 4, one kind of game');
     expect(kindsAnswerLine(kinds, 'GAME_ID', { filtered: false, kinds: [] })).toBe('it counts every kind of game together (GAME_ID starting with 1, 2, 4 or 5); to count one kind, name it in the question');

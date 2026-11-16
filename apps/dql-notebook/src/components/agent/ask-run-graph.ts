@@ -33,13 +33,14 @@ export const DECISION_NODE_HEIGHT = 62;
 const END_KINDS = new Set(['answer', 'gap', 'clarify', 'failed', 'conversation']);
 const TIER_KINDS = new Set(['certified', 'semantic', 'relational']);
 const END_WORDS: Record<string, string> = { answer: 'Answered', gap: 'No answer', clarify: 'Asked which you meant', failed: 'Stopped', conversation: 'Replied' };
-const SEVERITY: Record<RunStepOutcome, number> = { done: 0, skipped: 1, not_reached: 1, refused: 2, failed: 3 };
+const SEVERITY: Record<RunStepOutcome, number> = { done: 0, skipped: 1, not_reached: 1, not_found: 2, refused: 2, failed: 3 };
 
-const callOutcome = (call: RunAiCall): RunStepOutcome => (call.outcome === 'declined' ? 'refused' : call.outcome === 'error' || call.outcome === 'rejected' ? 'failed' : 'done');
+// A drafting call that wrote no SQL found nothing in the data that answers the question.
+const callOutcome = (call: RunAiCall): RunStepOutcome => (call.outcome === 'declined' ? 'not_found' : call.outcome === 'error' || call.outcome === 'rejected' ? 'failed' : 'done');
 
 function stepNode(step: RunStep): DecisionNode {
   const kind: DecisionNodeKind = END_KINDS.has(step.kind) ? 'end' : TIER_KINDS.has(step.kind) ? 'tier' : step.kind === 'warehouse' ? 'warehouse' : 'step';
-  const subtitle = kind === 'end' ? END_WORDS[step.kind]
+  const subtitle = kind === 'end' ? (step.outcome === 'not_found' ? OUTCOME_WORDS.not_found : END_WORDS[step.kind])
     : step.kind === 'warehouse' && step.rows !== undefined ? `${step.rows} row${step.rows === 1 ? '' : 's'}`
     : OUTCOME_WORDS[step.outcome];
   return { id: step.id, kind, stepId: step.id, title: step.title, subtitle, outcome: step.outcome, ...(step.ms !== undefined ? { ms: step.ms } : {}) };
@@ -107,7 +108,7 @@ export function decisionFlowGraph(explanation: RunExplanation): DecisionFlow {
       continue;
     }
     step.aiCalls.forEach((call, index) => {
-      const subtitle = [formatRunMs(call.ms), call.outcome === 'declined' ? 'declined' : call.outcome === 'error' ? 'error' : ''].filter(Boolean).join(' · ');
+      const subtitle = [formatRunMs(call.ms), call.outcome === 'declined' ? 'found nothing' : call.outcome === 'error' ? 'error' : ''].filter(Boolean).join(' · ');
       nodes.push({
         id: `${step.id}-call-${index + 1}`,
         kind: 'call',
