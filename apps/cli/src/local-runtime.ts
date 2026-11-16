@@ -1344,7 +1344,7 @@ export interface LocalServerOptions {
     request: AgentRunRequest;
   }) => AgentProvider | null | Promise<AgentProvider | null>;
   /**
-   * How often a quiet Ask stream sends a keep-alive line (default 15 s, from
+   * How often a quiet event stream (Ask, `/api/watch`, `/api/operations/events`) sends a keep-alive line (default 15 s, from
    * `SSE_KEEP_ALIVE_MS`). A proxy in front of ZLens, such as the Snowflake
    * ingress (90 s), ends a connection that carries no bytes for too long.
    * Tests set a short one; 0 turns it off.
@@ -15794,6 +15794,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         res.write(`event: operation\ndata: ${serializeJSON(operation)}\n\n`);
       }
       req.on('close', () => operationSseClients.delete(res as unknown as ServerResponse));
+      // A quiet stream is ended by the Snowflake ingress after 90 s with no bytes; the page would then miss the
+      // `stopping` event and wake ZLens again (V4 release check). The keep-alive line keeps it open.
+      keepSseStreamAlive(res as unknown as ServerResponse, opts.agentRunStreamKeepAliveMs);
       return;
     }
 
@@ -26771,6 +26774,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
         sseClients.add(res as unknown as ServerResponse);
         req.on('close', () => { sseClients.delete(res as unknown as ServerResponse); });
+        // Kept open past the Snowflake ingress's 90 s idle cut, as /api/operations/events is.
+        keepSseStreamAlive(res as unknown as ServerResponse, opts.agentRunStreamKeepAliveMs);
       return;
     }
 

@@ -135,7 +135,7 @@ afterEach(async () => {
 
 const USER = { 'Sf-Context-Current-User': 'JSMITH' };
 
-async function startApp() {
+async function startApp(extra: { agentRunStreamKeepAliveMs?: number } = {}) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-sf-idle-stop-'));
   roots.push(projectRoot);
   writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'sf', connections: { default: { driver: 'sqlite', filepath: 'main.sqlite' } } }));
@@ -152,6 +152,7 @@ async function startApp() {
     },
     snowflakeIdleSuspend: { minutes: 60, service: 'ZLENS_APP.CORE.ZLENS', now: () => clock.now, capture: (created) => { idle = created; } },
     captureServer: (created) => { servers.push(created); },
+    ...extra,
   });
   if (!idle) throw new Error('The idle stop is not on.');
   const call = (path: string, headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${port}${path}`, { headers: { ...USER, ...headers } });
@@ -280,5 +281,23 @@ describe('the app for Snowflake, with a ZLens tab open', () => {
     server.closeAllConnections?.();
     await new Promise<void>((done) => server.close(() => done()));
     expect(process.listenerCount('SIGTERM')).toBe(before);
+  });
+});
+
+describe('the event streams through the Snowflake ingress', () => {
+  // The ingress ends a connection that carries no bytes for 90 s. These streams were silent between events, so
+  // the ingress ended them; the page stopped following them and missed `stopping` (V4 release check: a tab left
+  // untouched woke ZLens 1 minute after it stopped by itself). Each now writes a keep-alive line while quiet.
+  it('both streams write a keep-alive line while they have nothing else to say', async () => {
+    const app = await startApp({ agentRunStreamKeepAliveMs: 40 });
+    const operations = await openStream(app.call, '/api/operations/events');
+    const watch = await openStream(app.call, '/api/watch');
+    expect((await operations.until(': keep-alive')).text).toContain(': keep-alive');
+    expect((await watch.until(': keep-alive')).text).toContain(': keep-alive');
+    // Keep-alive lines are not use: the stop still comes after the quiet spell.
+    app.clock.now += 60 * 60_000 + 1;
+    expect(await app.idle.check()).toBe(true);
+    await operations.cancel();
+    await watch.cancel();
   });
 });

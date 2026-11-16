@@ -106,6 +106,36 @@ function holdRequestsToZLens(): void {
   }) as typeof fetch;
 }
 
+/** Snowflake's own answer for a service that is not running: `503 {"responseType":"ERROR_SERVICE_UNAVAILABLE", …}`. */
+export function snowflakeSaysNotRunning(status: number, body: string): boolean {
+  return status === 503 && /ERROR_SERVICE_UNAVAILABLE|service is not yet running/i.test(body);
+}
+
+let unwatchedFetch: typeof fetch | undefined;
+
+/**
+ * In the app for Snowflake: a request that Snowflake answers with "service is not running" means ZLens stopped
+ * without this page hearing `stopping` (a dropped event stream; V4 release check). That request has started it
+ * again, so the page now takes ZLens as stopped and sends nothing more: it stops by itself after its quiet spell,
+ * and a missed event costs one quiet spell, not every hour the tab stays open.
+ */
+export function watchForStoppedService(): void {
+  if (unwatchedFetch || typeof globalThis.fetch !== 'function') return;
+  const send = globalThis.fetch;
+  unwatchedFetch = send;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await send(input, init);
+    if (response.status === 503 && !stopped && reachesZLens(input)) {
+      try {
+        if (snowflakeSaysNotRunning(response.status, await response.clone().text())) markZLensStopped({ reason: 'stopped' });
+      } catch {
+        // An answer that cannot be read says nothing about ZLens stopping.
+      }
+    }
+    return response;
+  }) as typeof fetch;
+}
+
 /** How starting ZLens again ended: ZLens answers, Snowflake wants the person to sign in, or it did not start in time. */
 export type StartOutcome = 'ready' | 'sign-in' | 'gave-up';
 
@@ -153,5 +183,7 @@ export function resetZLensStoppedForTests(): void {
   stopped = null;
   if (pageFetch) globalThis.fetch = pageFetch;
   pageFetch = undefined;
+  if (unwatchedFetch) globalThis.fetch = unwatchedFetch;
+  unwatchedFetch = undefined;
   for (const listener of listeners) listener();
 }
