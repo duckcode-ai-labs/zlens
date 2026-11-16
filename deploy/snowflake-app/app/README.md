@@ -226,8 +226,12 @@ The app is free. Snowflake bills your account for what it uses:
 
 - its compute pool: one `CPU_X64_XS` node while ZLens runs (Snowflake's rate is about 0.06 credits an
   hour), and nothing once it has stopped and the pool has suspended;
-- its warehouse: extra-small, and it suspends after 60 seconds with no queries;
-- Cortex: the questions asked, and search by meaning.
+- its warehouse: extra-small, and it suspends after 60 seconds with no queries. The launcher page
+  runs on it too: an open launcher keeps it running while it checks (up to 10 minutes once ZLens is
+  ready) and for about 15 minutes after that, so close the launcher tab once ZLens is open;
+- Cortex: the questions asked, and search by meaning;
+- storage: the app's 10Gi block volume, the daily snapshots ZLens keeps of it (the newest 7), and
+  any backups you copy to your own stage, all billed as Snowflake storage.
 
 ## Privileges
 
