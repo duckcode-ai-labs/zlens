@@ -45827,6 +45827,8 @@ export function saveBlockStudioArtifacts(
     lineage: options.lineage,
     importMeta: options.importMeta,
     ...(certification ? { certification } : {}),
+    // Where the block's own path says its companion is (`blocks/<slug>.dql` → `semantic-layer/blocks/<slug>.yaml`).
+    companionRelativePath: blockCompanionRelativePath(projectRoot, targetRelativePath) ?? undefined,
   });
 
   if (previousPath && previousPath !== targetRelativePath) {
@@ -46131,6 +46133,12 @@ function canonicalBlockRelativePath(
   previousPath: string | null,
 ): string {
   const folder = safeFolderPath ? `${safeFolderPath}/` : '';
+  // A saved query with no domain that Save as saved query wrote straight into `blocks/` stays there when it is saved
+  // again with no domain (the builder sends "Global / cross-domain" as `uncategorized`). Moving it to
+  // `blocks/uncategorized/` on its first builder save made an SQL edit a move, and History called it a rename.
+  if (safeDomain === 'uncategorized' && !folder && previousPath && /^blocks\/[^/]+\.dql$/.test(previousPath) && !isDraftBlockPath(previousPath)) {
+    return `blocks/${slug}.dql`;
+  }
   const packageRoot = loadDomainPackageRegistry(projectRoot).get(safeDomain)?.root;
   if (packageRoot) {
     const relativePackageRoot = relative(projectRoot, packageRoot).replaceAll('\\', '/');
@@ -49450,6 +49458,10 @@ export function createBlockArtifacts(
     gitMetadata: options.gitMetadata,
     gitPath: relativePath,
     visibility: options.visibility,
+    // The companion goes where the block's own path says, the place every reader looks. A block with no domain is
+    // written straight into `blocks/`, so its companion is `semantic-layer/blocks/<slug>.yaml`; the domain folder
+    // (`uncategorized`) stranded it where nothing found it, and History showed it as a semantic layer file of its own.
+    companionRelativePath: blockCompanionRelativePath(projectRoot, relativePath) ?? undefined,
   });
   return {
     path: relativePath,

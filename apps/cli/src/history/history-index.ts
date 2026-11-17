@@ -49,10 +49,12 @@ export interface IndexedCommit {
 
 /**
  * The saved index's format. 2 (V2): App Studio drafts are Apps' versions, and items have readable names. 3 (V3): an
- * App's text edit, a repeated Ask question and the welcome notebook are said in plain words. An index saved in an
- * older format is rebuilt from the commits on the next start, so what is already shown changes too.
+ * App's text edit, a repeated Ask question and the welcome notebook are said in plain words. 4 (V4): an item moved
+ * with the same name is edited, not renamed, and no line names a file path; the companion an older Save as saved
+ * query left under `semantic-layer/blocks/uncategorized/` is part of its saved query. An index saved in an older
+ * format is rebuilt from the commits on the next start, so what is already shown changes too.
  */
-const INDEX_FORMAT = 3;
+const INDEX_FORMAT = 4;
 
 interface IndexFile {
   format: typeof INDEX_FORMAT;
@@ -319,6 +321,10 @@ export class HistoryIndex {
       const name = withoutDraftEditName(now?.fields.name || old?.fields.name || state.previous?.name || fallbackName(ref.key));
       let kind = this.changeKind(commit, state, certified, Boolean(state.previous?.certified));
       let detail: string | undefined;
+      // A saved query whose file moved but kept its name was edited, not renamed (V4 reviewer: an SQL edit read
+      // "renamed · Moved from blocks/<name>.dql"). History never names a file path.
+      const moved = kind === 'renamed' && sameName(old ? withoutDraftEditName(old.fields.name) : '', name);
+      if (moved) kind = 'edited';
       if (now && old && !now.draftEdit && old.draftEdit && kind !== 'certified' && kind !== 'restored' && kind !== 'removed') {
         // The draft edit beside a certified saved query went away without being certified.
         kind = 'edited';
@@ -331,10 +337,11 @@ export class HistoryIndex {
       } else if (kind === 'drafted' || (kind === 'created' && commit.author.kind === 'ai')) {
         detail = now?.fields.sourceQuestion ? `From Ask: "${now.fields.sourceQuestion}"` : 'From Ask';
       } else if (kind === 'renamed') {
-        const oldName = old ? withoutDraftEditName(old.fields.name) : '';
-        detail = oldName && oldName !== name ? `Was "${oldName}"` : `Moved from ${state.from}`;
+        detail = `Was "${withoutDraftEditName(old!.fields.name)}"`;
       } else if (kind === 'edited') {
-        const words = savedQueryEditWords(old?.fields ?? null, now?.fields ?? null);
+        const changed = savedQueryEditWords(old?.fields ?? null, now?.fields ?? null);
+        // Moved with nothing in it changed: only its folder did.
+        const words = moved && (!changed || changed === 'Settings changed') ? MOVED_WORDS : changed;
         detail = now?.draftEdit && !old?.draftEdit && state.previous?.certified
           ? `Draft edit of certified v${state.previous.version}${words ? `. ${words}` : ''}`
           : words;
@@ -358,10 +365,20 @@ export class HistoryIndex {
     const name = ref.kind === 'notebook'
       ? (await this.itemName(ref, files)) || state.previous?.name || fallbackName(ref.key)
       : await this.fileLabel(ref.key, files);
-    const kind = this.changeKind(commit, state, false, false);
+    let kind = this.changeKind(commit, state, false, false);
     let detail: string | undefined;
-    if (kind === 'renamed') detail = `Moved from ${state.from}`;
-    else if (kind === 'restored') detail = this.restoredWords(commit, ref, state);
+    if (kind === 'renamed') {
+      // A notebook renamed says its old name; one moved with the same name was edited (never a file path).
+      const oldName = ref.kind === 'notebook' && state.from
+        ? (await this.itemName({ key: state.from, kind: 'notebook' }, state.before)) || fallbackName(state.from)
+        : '';
+      if (sameName(oldName, name)) {
+        kind = 'edited';
+        detail = MOVED_WORDS;
+      } else {
+        detail = `Was "${oldName}"`;
+      }
+    } else if (kind === 'restored') detail = this.restoredWords(commit, ref, state);
     else if (kind === 'removed') detail = removedWords(commit);
     return { name, change: kind, certified: false, ...(detail ? { detail } : {}) };
   }
@@ -420,7 +437,13 @@ export class HistoryIndex {
       else if (now?.published) detail = `Published: ${tilesWords(now.published)}`;
     } else if (kind === 'renamed') {
       const oldName = nameOf(old);
-      detail = oldName && oldName !== name ? `Was "${oldName}"` : `Moved from ${state.from}`;
+      if (oldName && !sameName(oldName, name)) {
+        detail = `Was "${oldName}"`;
+      } else {
+        // Moved with the same name: an edit, never a file path.
+        kind = 'edited';
+        detail = MOVED_WORDS;
+      }
     } else if (kind === 'edited' && now && old) {
       const publishedChanged = Boolean(now.published) && (!old.published || old.published.content !== now.published!.content || old.published.settings !== now.published!.settings || old.published.name !== now.published!.name);
       if (now.published && !now.draft && (old.draft || !old.published) && publishedChanged) {
@@ -537,6 +560,14 @@ export class HistoryIndex {
     this.appIdCache = { commits: this.commits.length, ids: [...ids] };
     return this.appIdCache.ids;
   }
+}
+
+/** What History says of an item moved to another folder with nothing else changed (never the file paths). */
+const MOVED_WORDS = 'Moved to another folder';
+
+/** No old name, or the same one: a move, not a rename. */
+function sameName(oldName: string | undefined, name: string): boolean {
+  return !oldName || oldName === name;
 }
 
 /** The name a saved query keeps: a draft edit's copy is named `<name> (draft edit)`. */
