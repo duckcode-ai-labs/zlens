@@ -12,6 +12,7 @@ import type { Theme } from '../../themes/notebook-theme';
 import { OUTCOME_WORDS, formatRunMs, rowCountWords, type RunExplanation } from './ask-run-explanation';
 import { DECISION_NODE_HEIGHT, DECISION_NODE_WIDTH, decisionFlowGraph, layoutDecisionFlow, type DecisionNode } from './ask-run-graph';
 import { AiCallList, AskRunChecks, AskRunDataUsed } from './AskRunFlow';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 const nodeColor = (node: Pick<DecisionNode, 'outcome' | 'kind' | 'subtitle'>, t: Theme): string => {
   if (node.outcome === 'failed') return t.error;
@@ -103,10 +104,13 @@ function RowsSample({ answer, t }: { answer: NonNullable<AskTraceDataV1['runtime
 }
 
 function DecisionNodeDetail({ node, explanation, answer, t }: { node: DecisionNode | undefined; explanation: RunExplanation; answer: AskTraceDataV1['runtimeAnswerV1']; t: Theme }): JSX.Element {
+  const snowflakeApp = useSnowflakeApp();
   if (!node) return <section style={{ padding: 18, border: `1px solid ${t.cellBorder}`, borderRadius: 11, background: t.cellBg, color: t.textMuted, fontSize: 12 }}>Select a step in the flow to see what happened there.</section>;
   const step = explanation.steps.find((entry) => entry.id === node.stepId);
   const color = nodeColor(node, t);
   const showAnswer = node.kind === 'warehouse' || node.kind === 'end';
+  // The answer's saved query source is ZLens's own file: the app for Snowflake shows the SQL that ran only (V4 review).
+  const showDql = showAnswer && !snowflakeApp;
   return (
     <section aria-label="Step details" style={{ padding: '16px 18px', minWidth: 0, border: `1px solid ${t.cellBorder}`, borderRadius: 11, background: t.cellBg }}>
       {step && step.title !== node.title ? <div style={{ fontSize: 11, color: t.textMuted }}>{step.n}. {step.title}</div> : null}
@@ -118,7 +122,7 @@ function DecisionNodeDetail({ node, explanation, answer, t }: { node: DecisionNo
       {step ? <p style={{ margin: '10px 0 0', fontSize: 12.5, lineHeight: 1.5, color: t.textSecondary }}>{step.reason}</p> : null}
       {node.calls?.length ? (<><div style={detailLabel(t)}>{node.calls.length === 1 ? 'AI call' : 'AI calls'}</div><AiCallList calls={node.calls} t={t} openReplies={node.calls.length === 1} /></>) : null}
       {node.checks?.length ? (<><div style={detailLabel(t)}>Checks</div><AskRunChecks checks={node.checks} t={t} /></>) : null}
-      {showAnswer && answer?.dqlArtifact?.source ? (<><div style={detailLabel(t)}>DQL</div><pre style={detailCode(t)}>{answer.dqlArtifact.source}</pre></>) : null}
+      {showDql && answer?.dqlArtifact?.source ? (<><div style={detailLabel(t)}>DQL</div><pre style={detailCode(t)}>{answer.dqlArtifact.source}</pre></>) : null}
       {showAnswer && answer?.sql ? (<><div style={detailLabel(t)}>{answer.sqlLiteralsMasked ? 'SQL that ran (its values shown as ?)' : 'SQL that ran'}</div><pre style={detailCode(t)}>{answer.sql}</pre></>) : null}
       {node.kind === 'warehouse' && answer?.rowCountBucket && !answer.rowsSample ? <p style={{ margin: '10px 0 0', fontSize: 12, color: t.textMuted }}>{rowCountWords(answer.rowCountBucket)}; the rows are the asker's to see.</p> : null}
       {node.kind === 'warehouse' && answer ? <RowsSample answer={answer} t={t} /> : null}

@@ -74,7 +74,7 @@ import type { Theme, ThemeMode } from '../../themes/notebook-theme';
 import { ReportComparePanel, verdictTone } from './ReportComparePanel';
 import { CertificationReportLines, certificationReportView, DiffersSinceCertifiedBadge, reportMatchReceipt, SavedQueryReportCheck, useQueryReportMatch } from './SavedQueryReportCheck';
 import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { editedSavedQueryTags, importAddSqlStep, importContextHint, importEmptyMessage, importHelpLine, importSourceModes, importStartDetail, savedQueryFolderWords, savedQueryTagsShown, semanticLayerName, sourceEditorWords, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
+import { builderQueryWords, editedSavedQueryTags, importAddSqlStep, importContextHint, importDraftWords, importEmptyMessage, importHelpLine, importSourceModes, importStartDetail, noDomainLabel, savedQueryDomainWords, savedQueryFolderWords, savedQueryTagsShown, semanticLayerName, sourceEditorWords, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
 import { SQLCellEditor } from '../cells/SQLCellEditor';
 import { ChartOutput, CHART_TYPE_OPTIONS, resolveChartType } from '../output/ChartOutput';
 import { MiniLineageGraph } from '../lineage/MiniLineageGraph';
@@ -1790,7 +1790,7 @@ export function BlockStudio() {
                 {repairing ? <Loader2 size={13} style={{ animation: 'dql-agent-run-spin 0.8s linear infinite' }} /> : <Sparkles size={13} />}
                 {repairing ? 'Fixing & running…' : 'Fix with AI & run'}
               </button>
-              <button type="button" onClick={() => setEditorMode('source')} style={secondaryImportButtonStyle(t)}>Edit DQL</button>
+              <button type="button" onClick={() => setEditorMode('source')} style={secondaryImportButtonStyle(t)}>{builderQueryWords(snowflakeApp).editSource}</button>
               <button
                 type="button"
                 onClick={() => openAskAi({ kind: 'edit', initialInput: `Help me fix this saved query error without changing its intended grain, parameters, or trust state: ${recoveryError} ` })}
@@ -2624,6 +2624,7 @@ function BlockIdentityDialog({
   onConfirm: (identity: { name: string; owner: string; domain?: string }) => void;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const [name, setName] = useState(metadata.name);
   const [owner, setOwner] = useState(metadata.owner);
   const [domain, setDomain] = useState('');
@@ -2642,10 +2643,10 @@ function BlockIdentityDialog({
           <FieldLabel label="Domain" t={t}>
             <select aria-label="Certify into domain" value={domain} onChange={(event) => setDomain(event.target.value)} style={importInputStyle(t)}>
               <option value="">Select domain…</option>
-              <option value={GLOBAL_BLOCK_DOMAIN}>Global / cross-domain</option>
+              <option value={GLOBAL_BLOCK_DOMAIN}>{noDomainLabel(snowflakeApp)}</option>
               {domainOptions.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
             </select>
-            <div style={{ fontSize: 10, lineHeight: 1.45, color: t.textMuted }}>This draft came from an AI answer and is not in a Domain yet. Pick the Domain it belongs to, or Global / cross-domain.</div>
+            <div style={{ fontSize: 10, lineHeight: 1.45, color: t.textMuted }}>This draft came from an AI answer and is not in a Domain yet. Pick the Domain it belongs to, or {noDomainLabel(snowflakeApp)}.</div>
           </FieldLabel>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -3373,6 +3374,14 @@ export function certificationReceiptTechnical(receipt: NonNullable<BlockStudioMe
   ].filter(Boolean).join(' · ');
 }
 
+/** A saved query's SQL as written, without the indentation its block adds to the lines after the first. */
+export function dedentSql(sql: string): string {
+  const lines = sql.split('\n');
+  const indents = lines.slice(1).filter((line) => line.trim()).map((line) => /^\s*/.exec(line)![0].length);
+  const cut = indents.length ? Math.min(...indents) : 0;
+  return [lines[0]!, ...lines.slice(1).map((line) => line.slice(Math.min(cut, /^\s*/.exec(line)![0].length)))].join('\n');
+}
+
 export function BlockDetailView({
   metadata,
   source,
@@ -3462,7 +3471,7 @@ export function BlockDetailView({
               ) : null}
             </div>
             <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4 }}>
-              {[metadata?.domain, savedQueryFolderWords(metadata?.folderPath, snowflakeApp), metadata?.owner, savedQueryTagsShown(metadata?.tags, snowflakeApp).join(', ')].filter(Boolean).join(' · ') || 'Unsaved draft'}
+              {[savedQueryDomainWords(metadata?.domain, snowflakeApp), savedQueryFolderWords(metadata?.folderPath, snowflakeApp), metadata?.owner, savedQueryTagsShown(metadata?.tags, snowflakeApp).join(', ')].filter(Boolean).join(' · ') || 'Unsaved draft'}
             </div>
             {certified ? (
               <div data-testid="block-certification-receipt" style={{ fontSize: 11.5, color: t.textMuted, marginTop: 4 }}>
@@ -3557,7 +3566,16 @@ export function BlockDetailView({
           </div>
         </div>
 
-        {/* DQL source */}
+        {/* DQL source. In the app for Snowflake (V4 review) the page shows the SQL the saved query runs instead: the
+            saved query's own source (`block "…" {`, its tags, the format line) is ZLens's file, not the reviewer's. */}
+        {snowflakeApp ? (
+          queryBody ? (
+            <div data-testid="saved-query-sql">
+              <div style={sectionLabel}>SQL</div>
+              <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{dedentSql(queryBody)}</pre>
+            </div>
+          ) : null
+        ) : (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ ...sectionLabel, marginBottom: 0 }}>{sourceEditorWords(snowflakeApp).section}</span>
@@ -3567,6 +3585,7 @@ export function BlockDetailView({
           </div>
           <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{source.trim() || 'Open the builder to author this saved query.'}</pre>
         </div>
+        )}
 
         {/* tests + lineage */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
@@ -3632,6 +3651,7 @@ function SemanticBlockBuilder({
   fillingCertification: boolean;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const parsedValues = parseSemanticVisualFields(source);
   const values = { ...parsedValues, filters: parsedValues.requestedFilters };
   const [compatibleDimensions, setCompatibleDimensions] = useState<SemanticDimension[]>([]);
@@ -3743,7 +3763,7 @@ function SemanticBlockBuilder({
         onTagsChange={(tags) => { onMetadataChange({ tags }); onChange(setBlockTags(source, tags)); }}
         t={t}
       />
-        <PanelBox title="Metric and grain" hint="Pick governed semantic objects — they compile to the DQL script." t={t}>
+        <PanelBox title="Metric and grain" hint={builderQueryWords(snowflakeApp).semanticHint} t={t}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 750, color: t.textSecondary }}>Governed metrics · {values.metrics.length} selected</span>
             {loadingCompatibility && <span style={{ fontSize: 10, color: t.textMuted }}>Checking compatibility…</span>}
@@ -3894,10 +3914,13 @@ function SemanticBlockBuilder({
       </PanelBox>
       <CertificationFieldsPanel source={source} onChange={onChange} onFill={onFillCertification} filling={fillingCertification} testPlaceholder={'assert row_count >= 1\nassert total_revenue >= 0'} t={t} />
 
+      {/* The saved query's whole source: open source only (the app for Snowflake shows the SQL above, V4 review). */}
+      {snowflakeApp ? null : (
       <details style={{ padding: '14px 0', color: t.textSecondary, fontFamily: t.font }}>
         <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 750 }}>Generated DQL preview</summary>
         <pre style={{ maxHeight: 240, overflow: 'auto', margin: '10px 0 0', whiteSpace: 'pre-wrap', color: t.textSecondary, fontSize: 11, lineHeight: 1.45, fontFamily: t.fontMono, border: '1px solid var(--border-subtle)', background: 'var(--bg-2)', borderRadius: 9, padding: '12px 14px' }}>{source}</pre>
       </details>
+      )}
     </div>
     </div>
   );
@@ -3934,7 +3957,7 @@ export function CompactBlockIdentity({
         </FieldLabel>
         <FieldLabel label="Domain" t={t}>
           <select aria-label="Saved query domain" value={blockDomainSelectValue(metadata?.domain)} onChange={(event) => onTextChange('domain', event.target.value || GLOBAL_BLOCK_DOMAIN)} style={input}>
-            <option value="">Global / cross-domain</option>
+            <option value="">{noDomainLabel(snowflakeApp)}</option>
             {options.map((domain) => (
               <option key={domain.value} value={domain.value} disabled={domain.disabled}>
                 {domain.label}
@@ -4124,6 +4147,7 @@ function EnterpriseSemanticPicker({
 // Query-authoring mode toggle (Semantic picker / Raw SQL) shown above the
 // visual builder, per the Block Studio prototype's Query section.
 function BuilderModeBar({ mode, onModeChange, t }: { mode: 'semantic' | 'custom'; onModeChange: (mode: 'semantic' | 'custom') => void; t: Theme }) {
+  const snowflakeApp = useSnowflakeApp();
   const options: Array<{ key: 'semantic' | 'custom'; label: string }> = [
     { key: 'semantic', label: 'Semantic picker' },
     { key: 'custom', label: 'Raw SQL' },
@@ -4148,7 +4172,7 @@ function BuilderModeBar({ mode, onModeChange, t }: { mode: 'semantic' | 'custom'
           })}
         </div>
         <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
-          {mode === 'semantic' ? 'Pick governed metrics & dimensions — they compile to DQL.' : 'Write SQL and convert it into a governed DQL script.'}
+          {mode === 'semantic' ? builderQueryWords(snowflakeApp).semanticModeHint : builderQueryWords(snowflakeApp).customModeHint}
         </span>
       </div>
     </div>
@@ -4204,7 +4228,7 @@ export function SqlBlockVisualBuilder({
         onTagsChange={(tags) => { onMetadataChange({ tags }); onChange(setBlockTags(source, tags)); }}
         t={t}
       />
-      <PanelBox title="Query" hint="Write raw SQL — it compiles into a governed DQL script." t={t}>
+      <PanelBox title="Query" hint={builderQueryWords(snowflakeApp).queryHint} t={t}>
         <textarea
           aria-label="Saved query SQL"
           rows={7}
@@ -4215,6 +4239,8 @@ export function SqlBlockVisualBuilder({
           placeholder={sqlPlaceholder(snowflakeApp)}
         />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {/* It opens the saved query's whole source: open source only (V4 review). */}
+          {snowflakeApp ? null : (
           <button
             type="button"
             onClick={onConvertToDql}
@@ -4223,6 +4249,7 @@ export function SqlBlockVisualBuilder({
           >
             Convert to DQL script
           </button>
+          )}
           <span style={{ fontSize: 10.5, color: t.textMuted, fontFamily: t.font }}>
             {sqlConvertHint(snowflakeApp).before}<span style={{ fontFamily: t.fontMono }}>{'${params}'}</span>{sqlConvertHint(snowflakeApp).after}
           </span>
@@ -4244,15 +4271,18 @@ export function SqlBlockVisualBuilder({
       </PanelBox>
       <PanelBox title="Business outputs" hint="What consumers see when this saved query answers a question." t={t}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
-          {outputs.length > 0 ? outputs.map((output) => <span key={output} style={selectionChipStyle(t, true)}>{businessLabel(output)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>Add aliases in {sourceEditorWords(snowflakeApp).tab} to expose business-friendly output names.</span>}
+          {outputs.length > 0 ? outputs.map((output) => <span key={output} style={selectionChipStyle(t, true)}>{businessLabel(output)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>{builderQueryWords(snowflakeApp).aliasHint}</span>}
         </div>
       </PanelBox>
       <VisualParameterEditor source={source} kind="custom" onChange={onChange} t={t} />
       <CertificationFieldsPanel source={source} onChange={onChange} onFill={onFillCertification} filling={fillingCertification} testPlaceholder={'assert row_count >= 1\nassert revenue >= 0'} t={t} />
+      {/* The saved query's whole source: open source only (the app for Snowflake shows the SQL above, V4 review). */}
+      {snowflakeApp ? null : (
       <details style={{ padding: '14px 0', color: t.textSecondary, fontFamily: t.font }}>
         <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 750 }}>Generated DQL preview</summary>
         <pre style={{ maxHeight: 240, overflow: 'auto', margin: '10px 0 0', whiteSpace: 'pre-wrap', color: t.textSecondary, fontSize: 11, lineHeight: 1.45, fontFamily: t.fontMono, border: '1px solid var(--border-subtle)', background: 'var(--bg-2)', borderRadius: 9, padding: '12px 14px' }}>{source}</pre>
       </details>
+      )}
     </div>
     </div>
   );
@@ -5078,7 +5108,7 @@ export function BlockStudioImportWorkspace({
             <Sparkles size={17} strokeWidth={2} aria-hidden="true" />
           </span>
           <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-            <span style={{ fontSize: 15, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>Import SQL to DQL</span>
+            <span style={{ fontSize: 15, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>{importDraftWords(snowflakeApp).title}</span>
             <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               SQL source to AI-grounded drafts to review and certify
             </span>
@@ -5086,7 +5116,7 @@ export function BlockStudioImportWorkspace({
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(130px, 1fr))', gap: 6, width: 'min(560px, 44vw)', minWidth: 390 }}>
           <ImportStep index={1} active={activeStep === 1} complete={Boolean(session)} title="Source" detail={mode === 'paste' ? 'Paste SQL' : mode === 'upload' ? 'Upload files' : 'Local path'} t={t} />
-          <ImportStep index={2} active={activeStep === 2} complete={smartCounts.ready > 0 || smartCounts.saved > 0} title="Draft" detail={session ? `${session.candidates.length} saved queries · ${readyCount} ready` : 'Generate DQL'} t={t} />
+          <ImportStep index={2} active={activeStep === 2} complete={smartCounts.ready > 0 || smartCounts.saved > 0} title="Draft" detail={session ? `${session.candidates.length} saved queries · ${readyCount} ready` : importDraftWords(snowflakeApp).generateStep} t={t} />
           <ImportStep index={3} active={activeStep === 3} complete={certifiedCount > 0} title="Review" detail={certifiedCount > 0 ? `${certifiedCount} certified` : draftSavedCount > 0 ? `${draftSavedCount} draft${draftSavedCount === 1 ? '' : 's'} saved · certify next` : 'Preview and certify'} t={t} />
         </div>
         <div style={{ flex: 1 }} />
@@ -5174,7 +5204,7 @@ export function BlockStudioImportWorkspace({
                   disabled={loading || !sourceReady}
                   style={{ ...primaryImportButtonStyle(t), padding: '8px 12px', opacity: loading || !sourceReady ? 0.65 : 1, cursor: loading || !sourceReady ? 'not-allowed' : 'pointer' }}
                 >
-                  {loading ? smartImportPhaseLabel(smartPhase) : 'Generate DQL drafts'}
+                  {loading ? smartImportPhaseLabel(smartPhase) : importDraftWords(snowflakeApp).generateButton}
                 </button>
                 <div style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, lineHeight: 1.45 }}>
                   {importContextHint(snowflakeApp)}
@@ -5489,6 +5519,7 @@ function SmartImportOverview({
   onSelectItem: (id: string) => void;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const total = items.length || session.candidates.length;
   const orderedItems = [...items].sort((left, right) => {
     const priority: Record<SmartImportItemStatus, number> = {
@@ -5513,8 +5544,8 @@ function SmartImportOverview({
       : counts.processing > 0
         ? 'ZLens is previewing SQL and keeping generated drafts saved.'
         : counts.ready > 0
-          ? 'Generated DQL drafts are saved under blocks/_drafts or domains/<domain>/blocks/_drafts. Open a candidate to review, preview, and certify.'
-          : 'Saved drafts stay drafts until someone clicks Certify; certified ones move to the main blocks/ folder.';
+          ? importDraftWords(snowflakeApp).readyDetail
+          : importDraftWords(snowflakeApp).savedDetail;
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
@@ -5625,6 +5656,7 @@ export function ImportCandidateDetail({
   initialContextOpen?: boolean;
   t: Theme;
 }) {
+  const snowflakeApp = useSnowflakeApp();
   const [name, setName] = useState(candidate.name);
   const [domain, setDomain] = useState(candidate.domain);
   const [owner, setOwner] = useState(candidate.owner);
@@ -5763,7 +5795,7 @@ export function ImportCandidateDetail({
         <button onClick={() => setContextOpen((open) => !open)} style={contextOpen ? primaryImportButtonStyle(t) : secondaryImportButtonStyle(t)}>
           {contextOpen ? 'Hide context' : `Show context${contextCount > 0 ? ` (${contextCount})` : ''}`}
         </button>
-        <button onClick={() => void withEditsApplied(onReviewInEditor)} style={primaryImportButtonStyle(t)}>Edit full DQL</button>
+        <button onClick={() => void withEditsApplied(onReviewInEditor)} style={primaryImportButtonStyle(t)}>{importDraftWords(snowflakeApp).editFull}</button>
         {/* Save writes a draft; Certify is the separate, explicit trust action. */}
         <button onClick={() => void withEditsApplied(onSave)} disabled={loading || trust === 'certified' || reuseRecommended} style={trust === 'draft_saved' && !editsPending ? secondaryImportButtonStyle(t) : primaryImportButtonStyle(t)}>{reuseRecommended ? 'Reuse existing' : trust === 'certified' ? 'Saved' : trust === 'draft_saved' ? 'Save draft again' : 'Save draft'}</button>
         {isAiGeneratedCandidate(candidate) && !reuseRecommended && (
@@ -5780,7 +5812,7 @@ export function ImportCandidateDetail({
 
       {editsPending && (
         <div role="status" style={{ fontSize: 12, color: t.textSecondary, background: `${t.accent}10`, border: `1px solid ${t.accent}40`, borderRadius: 8, padding: '8px 10px', lineHeight: 1.45 }}>
-          You changed the review details. Save draft, Certify and Edit full DQL use the values shown.
+          {importDraftWords(snowflakeApp).editsPending}
         </div>
       )}
       {candidate.savedPath && (
@@ -6597,7 +6629,7 @@ function BlockStudioParameterPanel({
   running: boolean;
   t: Theme;
 }) {
-  if (parameters.length === 0) return <EmptyPanel message={`This saved query has no runtime parameters. Add typed params in ${sourceEditorWords(isSnowflakeApp()).tab} when scope should be configurable.`} />;
+  if (parameters.length === 0) return <EmptyPanel message={builderQueryWords(isSnowflakeApp()).noParameters} />;
   return (
     <div style={{ padding: 14, display: 'grid', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -6679,6 +6711,7 @@ function BlockStudioRunErrorCard({
   onEdit: () => void;
 }) {
   const t = themes[useNotebookStore((state) => state.themeMode)];
+  const snowflakeApp = useSnowflakeApp();
   return (
     <div style={{ padding: 12 }}>
       <div style={{
@@ -6710,7 +6743,7 @@ function BlockStudioRunErrorCard({
               {repairing ? 'Fixing & running…' : 'Fix with AI & run'}
             </button>
           )}
-          <button type="button" onClick={onEdit} style={secondaryImportButtonStyle(t)}>Edit DQL</button>
+          <button type="button" onClick={onEdit} style={secondaryImportButtonStyle(t)}>{builderQueryWords(snowflakeApp).editSource}</button>
         </div>
         {!refused && technicalDetails && technicalDetails !== message && (
           <details style={{ borderTop: `1px solid ${t.headerBorder}`, paddingTop: 7 }}>

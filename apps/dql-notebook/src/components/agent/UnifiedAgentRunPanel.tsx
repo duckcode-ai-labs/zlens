@@ -2734,7 +2734,14 @@ export function askInspectorTabsForState(input: {
   hasChecks?: boolean;
   /** The run is a Research investigation: its programs replace the step-by-step flow. */
   investigation?: boolean;
+  /** The ZLens app for Snowflake: no DQL tab (V4 review). The answer's SQL is its own tab. */
+  snowflakeApp?: boolean;
 }): Array<{ id: AskInspectorTab; label: string }> {
+  const tabs = askInspectorTabsForEdition(input);
+  return input.snowflakeApp ? tabs.filter((tab) => tab.id !== 'dql') : tabs;
+}
+
+function askInspectorTabsForEdition(input: Parameters<typeof askInspectorTabsForState>[0]): Array<{ id: AskInspectorTab; label: string }> {
   const tabs: Array<{ id: AskInspectorTab; label: string }> = [];
   if (input.investigation) {
     tabs.push({ id: 'how', label: 'How it was researched' });
@@ -5162,6 +5169,7 @@ function AskInspector({
   onInsertDql?: (payload: InsertDqlPayload) => void;
 }) {
   const hostUiState = useHostUi();
+  const snowflakeApp = useSnowflakeApp();
   const payload = payloadOf(artifact);
   const dqlArtifact = answerDqlArtifactFromRun(run) ?? resolveArtifactDqlView(payload);
   const sqlEvidence = answerSqlEvidenceFromRun(run) ?? (typeof payload.sql === 'string' && payload.sql.trim() ? { sql: payload.sql, origin: 'compiled' as const } : undefined);
@@ -5202,6 +5210,7 @@ function AskInspector({
     pipeline: Boolean(explanation),
     hasChecks: Boolean(explanation?.checks.length),
     investigation: Boolean(investigationExplanation),
+    snowflakeApp,
   });
   const activeTab = tabs.some((x) => x.id === tab) ? tab : tabs[0].id;
 
