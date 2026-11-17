@@ -971,7 +971,9 @@ async function runAskPipelineOnce(input: RunAskPipelineInput): Promise<PipelineO
       // matches (the data ends in 2017, no such player): that is the answer.
       const declinedAgain = firstEmpty ? drafted.refusals.find((refusal) => refusal.code === 'exploration_declined') : undefined;
       if (firstEmpty && declinedAgain) {
-        const message = `the query ran and found nothing: ${declinedAgain.message.replace(/[.\s]+$/, '')}`;
+        // What ran is said as such: the first statement found no rows, the second look said why (V17 p6 tester:
+        // "the query ran and found nothing" read as if the reason were a result).
+        const message = `Ask's first query found no rows, and a second look found why: ${declinedAgain.message.replace(/[.\s]+$/, '')}`;
         receipt.intent = reading; receipt.reading = reading.reading;
         step('schema', 'The tables hold nothing for this', 'missed', { detail: declinedAgain.message });
         return { kind: 'gap', gap: 'not_retrieved', message, nearest: [], text: `No matching data: ${message}.`, receipt, intent: reading, offerExploration: false };

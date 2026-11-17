@@ -892,6 +892,7 @@ import {
   parseSemanticDimensionSelection,
 } from './semantic-runtime.js';
 import { createAskPipelineHost, type AskSemanticCompileContext } from './ask-pipeline-host/host.js';
+import { withWaitingDraftRules } from './ask-pipeline-host/draft-rules.js';
 import { modelingRelationshipEdges } from './ask-pipeline-host/join-relationships.js';
 import { createInvestigationExecutor } from './research/investigation-executor.js';
 import type { AnalyticalIntentV1 } from '@zlens/agent';
@@ -7931,9 +7932,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     autoExploration: readProjectAskAutoExploration(projectRoot),
     resolveConnection: resolveAgentRunExecutionConnection,
     getSemanticLayer: () => semanticLayer,
+    // The saved model, with the measured rules of the drafts waiting for review beside its rules (new-user test
+    // V17 p6: a fresh install's draft knew GAME_ID's first character is the kind of game; Ask did not).
     getManifest: () => {
       const snapshot = projectSnapshot();
-      return { manifest: snapshot.manifest, snapshotId: snapshot.snapshotId };
+      return { manifest: askManifestWithDraftRules(snapshot.manifest), snapshotId: snapshot.snapshotId };
     },
     selectProvider: selectAskProvider,
     // HH-5: a follow-up's earlier answer and the thread's memory reach the model only inside the privacy boundary.
@@ -8469,6 +8472,27 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
    */
   const waitingWarehouseDrafts = (): ContextAuthoringProposalV1[] =>
     contextProposalStore.list().filter((proposal) => proposal.origin === 'warehouse_discovery' && proposal.status === 'proposed');
+  /**
+   * The manifest Ask reads: the measured rules of the drafts waiting for review join the saved rules
+   * (draft-rules.ts). Ask reads the manifest many times a question, so the drafts are re-read only when a
+   * draft file changes.
+   */
+  let askDraftRulesState: { key: string; proposals: ContextAuthoringProposalV1[] } | undefined;
+  // A declaration, so Ask's deps above can call it; a call before the store exists falls back to the saved model.
+  function askManifestWithDraftRules(manifest: DQLManifest): DQLManifest {
+    try {
+      const key = readdirSync(contextProposalStore.directory)
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => `${name}:${statSync(join(contextProposalStore.directory, name)).mtimeMs}`)
+        .sort()
+        .join('|');
+      if (askDraftRulesState?.key !== key) askDraftRulesState = { key, proposals: waitingWarehouseDrafts() };
+      return withWaitingDraftRules(manifest, askDraftRulesState.proposals);
+    } catch {
+      // No draft folder yet, or one unreadable: the saved model alone.
+      return manifest;
+    }
+  }
   /** Close the waiting drafts: a newer draft, revision or save replaced them, or a person discarded them. */
   const closeWaitingWarehouseDrafts = (options: { supersededBy?: string } = {}): void => {
     const at = new Date().toISOString();

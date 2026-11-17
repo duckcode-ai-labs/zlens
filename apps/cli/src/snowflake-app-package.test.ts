@@ -162,7 +162,7 @@ describe('the app package for Snowflake', () => {
   it('V2: the launcher page calls only the app\'s own procedures, and pins a Streamlit with link_button', () => {
     const page = read('launcher/launcher.py');
     const calls = [...page.matchAll(/session\.sql\("([^"]+)"\)/g)].map((match) => match[1]);
-    expect(calls).toEqual(['CALL app_public.launcher_status()', 'SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP(), CURRENT_WAREHOUSE()', 'CALL app_public.launcher_start()']);
+    expect(calls).toEqual(['CALL app_public.launcher_status()', 'SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()', 'SELECT CURRENT_WAREHOUSE()', 'CALL app_public.launcher_start()']);
     expect(page).not.toMatch(/requests|urllib|http\.client|socket|components\.html/);
     expect(page).toContain('st.link_button("Open ZLens", status["url"]');
     // The address is offered only once READY, with a copy of it in case the browser blocks the tab.
@@ -199,8 +199,8 @@ describe('the app package for Snowflake', () => {
     // A start that never finishes is not checked forever either.
     expect(constant('STOP_WAITING_SECONDS')).toBeLessThanOrEqual(1800);
     expect(page).toMatch(/if elapsed > STOP_WAITING_SECONDS:[\s\S]*?st\.stop\(\)[\s\S]*?time\.sleep\(POLL_SECONDS\)/);
-    // Every sleep in the page is one of the two bounded waits.
-    expect([...page.matchAll(/time\.sleep\((\w+)\)/g)].map((match) => match[1])).toEqual(['RECHECK_SECONDS', 'POLL_SECONDS']);
+    // Every sleep in the page is one of the three bounded waits (set-up, ready, starting).
+    expect([...page.matchAll(/time\.sleep\((\w+)\)/g)].map((match) => match[1])).toEqual(['SETUP_RECHECK_SECONDS', 'RECHECK_SECONDS', 'POLL_SECONDS']);
   });
 
   it('V3: a re-check that finds ZLens stopped or restarting shows it starting, and starts a stopped one', () => {
@@ -215,8 +215,11 @@ describe('the app package for Snowflake', () => {
 
   it('V3: every state of the launcher says when it was checked, with the time zone', () => {
     const page = read('launcher/launcher.py');
-    // The time comes from Snowflake (the session's time zone), in the same query as the app's name.
-    expect(page).toContain('session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP(), CURRENT_WAREHOUSE()")');
+    // The time comes from Snowflake (the session's time zone), in the same query as the app's name, and in a
+    // query of their own: with CURRENT_WAREHOUSE() beside them the query failed in the installed app, and the page
+    // said "<this app>" and UTC (V17 and V17 p6 testers).
+    expect(page).toContain('session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()")');
+    expect(page).not.toMatch(/CURRENT_TIMESTAMP\(\), CURRENT_WAREHOUSE\(\)/);
     expect(page).toMatch(/def clock\(moment, later_seconds=0\):[\s\S]*?moment\.tzname\(\)[\s\S]*?return f"\{moment:%H:%M\} \{zone\}"/);
     expect(page).toContain('st.success(f"ZLens is ready. Checked at {checked}.")');
     for (const start of ['if status["error"]:', 'if name in ("FAILED", "INTERNAL_ERROR"):']) {
@@ -283,14 +286,34 @@ describe('the app package for Snowflake', () => {
   it('V4: the ready page names the warehouse it really runs on, in plain words when Snowflake does not say', () => {
     const page = read('launcher/launcher.py');
     // Snowsight runs the page on the warehouse the person picked, which need not be the app's <app>_WH.
-    expect(page).toMatch(/def read_context\(\):[\s\S]*?CURRENT_WAREHOUSE\(\)"\)\.collect\(\)\[0\]\n\s+return str\(row\[0\] or ""\), row\[1\], str\(row\[2\] or ""\)\n\s+except Exception:[^\n]*\n\s+return "", None, ""/);
-    expect(page).toContain('app, moment, page_warehouse = read_context()');
+    // Read on its own, once per page session: a failure there costs only the warehouse's name. Without it, the
+    // app's own <app>_WH, the page's QUERY_WAREHOUSE (V17 query history: the page ran there).
+    expect(page).toMatch(/def page_warehouse_name\(\):[\s\S]*?if "page_warehouse" not in st\.session_state:\n\s+try:\n\s+st\.session_state\["page_warehouse"\] = str\(session\.sql\("SELECT CURRENT_WAREHOUSE\(\)"\)\.collect\(\)\[0\]\[0\] or ""\)\n\s+except Exception:[^\n]*\n\s+st\.session_state\["page_warehouse"\] = ""/);
+    expect(page).toContain('app, moment = read_context()');
+    expect(page).toContain('page_warehouse = page_warehouse_name() or (warehouse if app != "<this app>" else "")');
     const ready = branch(page, 'if name == "READY" and status["url"]:');
     expect(ready).toContain('keeps = f"this page\'s warehouse, {page_warehouse}, running" if page_warehouse else "this page\'s warehouse running"');
     expect(ready).toContain('f"while it stays open it keeps {keeps}. "');
     // The ready page no longer names the app's own warehouse as the one it keeps running.
     expect(ready).not.toContain('{warehouse}');
     expect(readme).toMatch(/reads the\s+app's name, the time and the name of the warehouse it runs on; it reads none of your data\./);
+  });
+
+  it('V17 p7: before the user is saved, the launcher says the missing step and checks again until it is saved', () => {
+    const page = read('launcher/launcher.py');
+    const constant = (name: string) => Number(new RegExp(`^${name} = (\\d+)$`, 'm').exec(page)?.[1]);
+    expect(constant('SETUP_RECHECK_SECONDS')).toBe(10);
+    expect(constant('SETUP_RECHECK_FOR_SECONDS')).toBe(600);
+    const setUp = branch(page, 'if not status["zlens_user"]:');
+    // The step that is missing, first, with what a saved user looks like on the Configurations tab.
+    expect(setUp).toContain('**One step is missing: name the Snowflake user who uses ZLens.**');
+    expect(setUp).toContain('green "\n        "**Configured** badge');
+    expect(setUp).toContain('st.code(f"ALTER APPLICATION {app} SET CONFIGURATION ZLENS_USER VALUE = \'THEIR_USER\';", language="sql")');
+    // It checks again by itself for a while (V17 p6 tester: after the save, the page kept its old frame until a
+    // browser reload), then stops so its warehouse can suspend, and offers Check again.
+    expect(setUp).toMatch(/left = SETUP_RECHECK_FOR_SECONDS - \(now - state\["setup_since"\]\)\n\s+if left > 0:\n[\s\S]*?time\.sleep\(SETUP_RECHECK_SECONDS\)\n\s+st\.rerun\(\)/);
+    expect(setUp).toMatch(/This page has stopped checking, so its warehouse can suspend\.[\s\S]*?if st\.button\("Check again"\):\n\s+state\["setup_since"\] = time\.time\(\)\n\s+st\.rerun\(\)\n\s+st\.stop\(\)/);
+    expect(page).toContain('\nstate.pop("setup_since", None)\n');
   });
 
   it('V4: the cost section says an open ZLens tab does not keep ZLens running', () => {

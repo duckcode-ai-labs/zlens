@@ -105,6 +105,8 @@ describe('"Not in this data" says what is missing in plain words (V2, listing re
     expect(plainDeclineReason('Which season do you mean? (Ask looked through every table it can read, and no other table has a column for it)'))
       .toBe('Which season do you mean? Ask looked through every table it can read, and no other table has a column for it');
     expect(plainDeclineReason('No column in any listed table captures player salary or payroll data')).toBe('None of the tables Ask can read has player salary or payroll data');
+    // "tables or columns" is one phrase, not "the tables Ask can read or columns" (V17 p6 tester, the payroll answer).
+    expect(plainDeclineReason('None of the listed tables or columns hold payroll or salary data')).toBe('None of the tables Ask can read has payroll or salary data');
     // A sentence that reads plainly keeps its words; "relations" is said as tables.
     expect(plainDeclineReason('The data ends in 2017, so there are no 2019 games')).toBe('The data ends in 2017, so there are no 2019 games');
     expect(plainDeclineReason('Ticket prices are not in these relations')).toBe('Ticket prices are not in the tables Ask can read');

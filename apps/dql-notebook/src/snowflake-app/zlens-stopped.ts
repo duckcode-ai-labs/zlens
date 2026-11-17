@@ -211,6 +211,27 @@ async function resumeQuietPage(send: typeof fetch): Promise<void> {
   }
 }
 
+let confirming: Promise<boolean> | undefined;
+
+/**
+ * Whether ZLens itself answers its health check now. One check at a time, shared by every request that asks: a
+ * burst of polls that met the same gateway answer costs one check. A stopped ZLens is started by this check too,
+ * as by the request before it.
+ */
+function zlensAnswersNow(send: typeof fetch): Promise<boolean> {
+  confirming ??= (async () => {
+    try {
+      const response = await send('/api/health', { cache: 'no-store', credentials: 'same-origin', redirect: 'manual' });
+      if (!response.ok) return false;
+      void snowflakeAnswered(response);
+      return true;
+    } catch {
+      return false;
+    }
+  })().finally(() => { confirming = undefined; });
+  return confirming;
+}
+
 /**
  * In the app for Snowflake: a request that Snowflake answers with "service is not running" means ZLens stopped
  * without this page hearing `stopping` (a dropped event stream; V4 release check). That request has started it
@@ -239,8 +260,12 @@ export function watchForStoppedService(): void {
     }
     const response = await send(input, init);
     // Snowflake answered for ZLens: this request has started it again (a quiet page sends nothing by itself, so the
-    // person was here moments ago). The page says it is starting and opens it when ready.
-    if (!stopped && reachesZLens(input) && await snowflakeAnswered(response)) markZLensStopped({ reason: 'stopped', startNow: true });
+    // person was here moments ago). The page says it is starting and opens it when ready. Unless ZLens answers its
+    // health check at once: then it was one passing gateway answer, and the caller sees it as any failed request
+    // (V17 p6 tester: one poll met a 503 mid-Ask while ZLens ran, and the page reloaded itself).
+    if (!stopped && reachesZLens(input) && await snowflakeAnswered(response) && !(await zlensAnswersNow(send))) {
+      markZLensStopped({ reason: 'stopped', startNow: true });
+    }
     return response;
   }) as typeof fetch;
 }
@@ -298,6 +323,7 @@ export function resetZLensStoppedForTests(): void {
   if (unwatchedFetch) globalThis.fetch = unwatchedFetch;
   unwatchedFetch = undefined;
   zlensMarkSeen = false;
+  confirming = undefined;
   stopActivityWatch?.();
   stopActivityWatch = undefined;
   waiting.splice(0);
