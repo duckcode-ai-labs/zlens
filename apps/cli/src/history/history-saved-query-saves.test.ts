@@ -78,7 +78,7 @@ describe('a saved query saved from Ask, then from the builder', () => {
     expect(openBlockStudioDocument(root, again).companionPath).toBe(COMPANION);
   });
 
-  it('is one History line per save: created, then edited with "SQL changed"; never a rename, a path or a semantic layer line', async () => {
+  it('is one History line per save: created, edited with "SQL changed", certified; never a rename, a path or a semantic layer line', async () => {
     const root = project();
     const history = await open(root);
     const path = saveFromAsk(root);
@@ -94,13 +94,31 @@ describe('a saved query saved from Ask, then from the builder', () => {
     expect(edited[0]!.changes[0]).toMatchObject({ item: PATH, kind: 'saved_query', change: 'edited', name: NAME, version: 2 });
     expect(edited[0]!.changes[0]!.detail).toMatch(/^SQL changed/);
 
+    // Certify: it stays where it is, its receipt in its own companion, and History says certified.
+    const opened = openBlockStudioDocument(root, path);
+    const certifiedSource = opened.source.replace('status = "draft"', 'status = "certified"');
+    expect(saveBlockStudioArtifacts(root, {
+      currentPath: path,
+      source: certifiedSource,
+      name: opened.metadata.name,
+      domain: opened.metadata.domain,
+      owner: opened.metadata.owner,
+      tags: opened.metadata.tags,
+      certification: { certifiedBy: 'TEST_ADMIN', certifiedAt: '2026-11-16T10:00:00.000Z', via: 'block-studio', rules: 'oss', sourceSha256: '' },
+    })).toBe(PATH);
+    expect(openBlockStudioDocument(root, PATH).metadata).toMatchObject({ reviewStatus: 'certified', certification: expect.objectContaining({ certifiedBy: 'TEST_ADMIN' }) });
+    const certified = (await history.afterRequest({ user: 'TEST_ADMIN', method: 'POST', path: '/api/block-studio/certifications', status: 202 })) ?? [];
+    expect(certified[0]!.changes).toEqual([expect.objectContaining({ item: PATH, change: 'certified', certified: true, version: 3 })]);
+
     const lines = history.feed().entries.filter((entry) => entry.change !== 'started');
     expect(lines.map((line) => [line.change, line.kind, line.items.map((item) => item.name)])).toEqual([
+      ['certified', 'saved_query', [NAME]],
       ['edited', 'saved_query', [NAME]],
       ['created', 'saved_query', [NAME]],
     ]);
     for (const line of lines) expect(line.detail ?? '').not.toMatch(/\.dql\b|Moved from|blocks\//);
     // The SQL view app_public.history is fed from the same changes.
     expect(history.index.commits.flatMap((commit) => commit.changes).filter((change) => change.kind === 'semantic')).toEqual([]);
+    expect(existsSync(join(root, 'blocks/uncategorized'))).toBe(false);
   });
 });
