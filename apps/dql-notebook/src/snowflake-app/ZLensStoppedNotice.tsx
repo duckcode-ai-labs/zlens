@@ -39,12 +39,12 @@ export const GAVE_UP_WORDS = `ZLens has not started after ${Math.round(START_GIV
  * sign-in (V17 tester: 5 times in a day). A page that sends the person to sign in at once has them back before ZLens
  * is ready; so it waits until ZLens has usually started (restarts took 1 to 2.5 minutes) and says why.
  */
-export const SIGN_IN_AFTER_MS = 90_000;
+export const SIGN_IN_AFTER_MS = 120_000;
 
 /** The line while the page waits to send the person to Snowflake's sign-in. */
 export function signInWords(elapsedMs: number): string {
   const left = Math.max(0, Math.ceil((SIGN_IN_AFTER_MS - elapsedMs) / 1000));
-  return `After a stop, Snowflake asks you to sign in again. This page takes you there in ${left} s, when ZLens is usually ready.`;
+  return `After a stop, Snowflake asks you to sign in again. This page takes you there in ${left} s. If Snowflake then says the service is not yet running, ZLens needs a little longer: reload that page in a minute.`;
 }
 
 type StartState =
@@ -97,7 +97,9 @@ export function ZLensStoppedNotice() {
   }, [stopped, state.phase]);
   if (!stopped) return null;
   const t = themes[themeMode];
-  const words = zlensStoppedWords(stopped);
+  // Once ZLens is starting, the notice says so, whatever stopped it (V17 patch 4 tester: the countdown showed under
+  // "ZLens stopped … will not start it again by itself").
+  const words = zlensStoppedWords(state.phase === 'starting' || state.phase === 'sign-in' ? { ...stopped, startNow: true } : stopped);
   const starting = state.phase === 'starting';
   return (
     <div data-testid="zlens-stopped" style={{ position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: t.modalOverlay }}>
