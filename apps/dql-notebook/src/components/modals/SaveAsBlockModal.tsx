@@ -5,6 +5,8 @@ import { api } from '../../api/client';
 import type { Cell } from '../../store/types';
 import { authoredDomainOptionsWithCurrent } from '../domains/authored-domain-options';
 import { savedBlockGitPath } from './artifact-location';
+import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
+import { noDomainLabel } from '../../snowflake-app/snowflake-app-words';
 
 interface SaveAsBlockModalProps {
   cell: Cell;
@@ -50,6 +52,9 @@ export function SaveAsBlockModal({
   const { state, dispatch } = useNotebook();
   const t = themes[state.themeMode];
   const nameRef = useRef<HTMLInputElement>(null);
+  // The app for Snowflake (V4 review): no file path, no raw saved query source, no agent-facing metadata. The
+  // reviewer saves an answer by its name, Domain, owner, tags and description; the SQL is the answer's own.
+  const snowflakeApp = useSnowflakeApp();
 
   const [name, setName] = useState(initialName || cell.name || 'new_block');
   const [domain, setDomain] = useState(initialDomain ?? '');
@@ -73,7 +78,8 @@ export function SaveAsBlockModal({
     { id: 'has-description', label: 'Description', severity: 'warning', passed: !!description.trim() },
     { id: 'has-domain', label: 'Domain', severity: 'warning', passed: !!domain.trim() },
     { id: 'has-tags', label: 'Has at least one tag', severity: 'warning', passed: tagList.length > 0 },
-    { id: 'has-llm-context', label: 'Has LLM context (for agents)', severity: 'warning', passed: !!llmContext.trim() },
+    // Only where the dialog has the section that fills it in.
+    ...(snowflakeApp ? [] : [{ id: 'has-llm-context', label: 'Has LLM context (for agents)', severity: 'warning' as const, passed: !!llmContext.trim() }]),
   ];
 
   const hasErrors = ruleResults.some((r) => r.severity === 'error' && !r.passed);
@@ -231,7 +237,7 @@ export function SaveAsBlockModal({
                 onChange={(e) => setDomain(e.target.value)}
                 style={inputStyle}
               >
-                <option value="">Global / cross-domain</option>
+                <option value="">{noDomainLabel(snowflakeApp)}</option>
                 {knownDomains.map((option) => (
                   <option key={option.value} value={option.value} disabled={option.disabled}>
                     {option.label}
@@ -266,6 +272,7 @@ export function SaveAsBlockModal({
             <input value={description} onChange={(e) => setDescription(e.target.value)} style={inputStyle} />
           </div>
 
+          {snowflakeApp ? null : (
           <details style={{ border: `1px solid ${t.cellBorder}`, borderRadius: 6, padding: '8px 12px' }}>
             <summary style={{ fontSize: 12, fontWeight: 600, color: t.textSecondary, fontFamily: t.font, cursor: 'pointer' }}>
               Agent-facing metadata (optional — helps AI tools ground answers on this block)
@@ -360,6 +367,7 @@ export function SaveAsBlockModal({
               </div>
             </div>
           </details>
+          )}
 
           <div
             style={{
@@ -404,33 +412,37 @@ export function SaveAsBlockModal({
             </div>
           </div>
 
-          <div
-            style={{
-              fontSize: 12,
-              color: t.textMuted,
-              fontFamily: t.fontMono,
-              padding: '8px 12px',
-              background: t.pillBg,
-              borderRadius: 6,
-            }}
-          >
-            {blockPath}
-          </div>
+          {snowflakeApp ? null : (
+            <>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: t.textMuted,
+                  fontFamily: t.fontMono,
+                  padding: '8px 12px',
+                  background: t.pillBg,
+                  borderRadius: 6,
+                }}
+              >
+                {blockPath}
+              </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <label style={{ fontSize: 12, color: t.textSecondary, fontFamily: t.font }}>Content Preview</label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              style={{
-                ...inputStyle,
-                minHeight: 220,
-                resize: 'vertical',
-                fontFamily: t.fontMono,
-                lineHeight: 1.5,
-              }}
-            />
-          </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <label style={{ fontSize: 12, color: t.textSecondary, fontFamily: t.font }}>Content Preview</label>
+                <textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  style={{
+                    ...inputStyle,
+                    minHeight: 220,
+                    resize: 'vertical',
+                    fontFamily: t.fontMono,
+                    lineHeight: 1.5,
+                  }}
+                />
+              </div>
+            </>
+          )}
 
           {semanticRefs.length > 0 && (
             <div

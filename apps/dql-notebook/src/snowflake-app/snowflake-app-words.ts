@@ -86,7 +86,7 @@ export function importStartDetail(snowflakeApp: boolean): string {
 /** Under the saved query builder's SQL box. */
 export function sqlConvertHint(snowflakeApp: boolean): { before: string; after: string } {
   return snowflakeApp
-    ? { before: 'Detects ', after: ' and checks each table against the tables ZLens reads. Open the Source editor for the full script.' }
+    ? { before: 'Detects ', after: ' and checks each table against the tables ZLens reads.' }
     : { before: 'Detects ', after: ' and grounds tables against dbt. Open the DQL Source editor for the full script.' };
 }
 
@@ -228,4 +228,103 @@ export function clarificationChoiceWords(
 ): { label: string; description?: string } {
   if (!snowflakeApp || option.kind === 'member') return { label: option.label, ...(option.description ? { description: option.description } : {}) };
   return { label: readablePhrase(option.label), ...(option.description ? { description: readablePhrase(option.description) } : {}) };
+}
+
+// ── V4 review: the reviewer's path (Ask, Save as saved query, the builder, Certify, History) ─────────────
+
+/** The Domain choice for a saved query that belongs to no Domain page. */
+export function noDomainLabel(snowflakeApp: boolean): string {
+  return snowflakeApp ? 'No domain' : 'Global / cross-domain';
+}
+
+/**
+ * A saved query's domain where its page names it: in the app for Snowflake a saved query in no Domain says
+ * "No domain", never the stored value ("uncategorized"). The open-source edition shows the stored value as before.
+ */
+export function savedQueryDomainWords(domain: string | null | undefined, snowflakeApp: boolean): string | undefined {
+  if (!snowflakeApp) return domain ?? undefined;
+  const value = domain?.trim() ?? '';
+  return value === '' || ['uncategorized', 'global'].includes(value.toLowerCase()) ? 'No domain' : value;
+}
+
+/** The saved query builder's lines about its query: they name DQL and the Source editor on the laptop, only the SQL in the app for Snowflake. */
+export function builderQueryWords(snowflakeApp: boolean): {
+  queryHint: string;
+  semanticHint: string;
+  semanticModeHint: string;
+  customModeHint: string;
+  aliasHint: string;
+  noParameters: string;
+  editSource: string;
+} {
+  if (snowflakeApp) {
+    return {
+      queryHint: 'Write the SQL this saved query runs.',
+      semanticHint: 'Pick governed semantic objects for this saved query.',
+      semanticModeHint: 'Pick governed metrics and dimensions.',
+      customModeHint: 'Write the SQL this saved query runs.',
+      aliasHint: 'Name each column with AS in the SQL to give it a business-friendly output name.',
+      noParameters: 'This saved query has no runtime parameters.',
+      editSource: 'Edit in Source',
+    };
+  }
+  const tab = sourceEditorWords(false).tab;
+  return {
+    queryHint: 'Write raw SQL — it compiles into a governed DQL script.',
+    semanticHint: 'Pick governed semantic objects — they compile to the DQL script.',
+    semanticModeHint: 'Pick governed metrics & dimensions — they compile to DQL.',
+    customModeHint: 'Write SQL and convert it into a governed DQL script.',
+    aliasHint: `Add aliases in ${tab} to expose business-friendly output names.`,
+    noParameters: `This saved query has no runtime parameters. Add typed params in ${tab} when scope should be configurable.`,
+    editSource: 'Edit DQL',
+  };
+}
+
+/** Import SQL's lines that name DQL, a drafts folder or `blocks/`: said plainly in the app for Snowflake. */
+export function importDraftWords(snowflakeApp: boolean): {
+  title: string;
+  generateStep: string;
+  generateButton: string;
+  readyDetail: string;
+  savedDetail: string;
+  editFull: string;
+  editsPending: string;
+} {
+  return snowflakeApp
+    ? {
+        title: 'Import SQL',
+        generateStep: 'Generate drafts',
+        generateButton: 'Generate drafts',
+        readyDetail: 'The drafts are saved as drafts. Open one to review, preview, and certify.',
+        savedDetail: 'Saved drafts stay drafts until someone clicks Certify.',
+        editFull: 'Edit in Source',
+        editsPending: 'You changed the review details. Save draft, Certify and Edit in Source use the values shown.',
+      }
+    : {
+        title: 'Import SQL to DQL',
+        generateStep: 'Generate DQL',
+        generateButton: 'Generate DQL drafts',
+        readyDetail: 'Generated DQL drafts are saved under blocks/_drafts or domains/<domain>/blocks/_drafts. Open a candidate to review, preview, and certify.',
+        savedDetail: 'Saved drafts stay drafts until someone clicks Certify; certified ones move to the main blocks/ folder.',
+        editFull: 'Edit full DQL',
+        editsPending: 'You changed the review details. Save draft, Certify and Edit full DQL use the values shown.',
+      };
+}
+
+/** The Modeling page's "Draft from your warehouse" card. */
+export function warehouseDraftDetail(tables: number, snowflakeApp: boolean): string {
+  const who = snowflakeApp ? 'ZLens' : 'DQL';
+  return `${tables} table${tables === 1 ? '' : 's'} synced. ${who} drafts models from their keys and joins from declared foreign keys, view SQL and column names, checks each join on the warehouse, and shows you every change to review.`;
+}
+
+/** A modeled table with no business context yet, in the Modeling inspector. */
+export function businessContextPrompt(localId: string, snowflakeApp: boolean): string {
+  return snowflakeApp
+    ? `Add the business context for ${localId}.`
+    : `Add the DQL-owned business context for ${localId}. dbt descriptions remain physical-source documentation.`;
+}
+
+/** The search box above a Build sidebar tab: "Search blocks…" on the laptop's Saved queries tab, "Search saved queries…" in the app for Snowflake. */
+export function buildSearchPlaceholder(tab: string, snowflakeApp: boolean): string {
+  return snowflakeApp && tab === 'blocks' ? 'Search saved queries…' : `Search ${tab}…`;
 }

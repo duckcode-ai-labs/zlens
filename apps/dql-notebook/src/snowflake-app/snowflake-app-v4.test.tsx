@@ -48,7 +48,8 @@ describe('open-source words, said plainly in the app for Snowflake', () => {
     expect(notebookWriteWords(false)).toBe('write SQL/DQL');
     expect(generateGapLabel(true)).toBe('Generate a draft');
     expect(generateGapLabel(false)).toBe('Generate draft DQL');
-    expect(sqlConvertHint(true).after).toContain('Open the Source editor');
+    // V4 review: no hint points to the Source editor in the app for Snowflake.
+    expect(sqlConvertHint(true).after).not.toContain('Source editor');
     expect(sqlConvertHint(false).after).toContain('Open the DQL Source editor');
     for (const words of [appLibraryWords(false, true).loadingDetail, sourceEditorWords(true).open, semanticLayerName(true), notebookWriteWords(true), generateGapLabel(true), sqlConvertHint(true).after]) {
       expect(words).not.toMatch(/\bDQL\b|\blocal\b|_drafts|\.dql\b/);
@@ -60,7 +61,7 @@ describe('open-source words, said plainly in the app for Snowflake', () => {
     expect(buildCatalogFooter({ provider: 'dql', metrics: 9 })).toBe('DQL semantic layer synced · 9 metrics');
   });
 
-  it('names the saved query page\'s source "Source"', () => {
+  it('shows no source panel on the saved query page in the app for Snowflake (V4 review), and "DQL source" in open source', () => {
     const page = () => renderToStaticMarkup(
       <BlockDetailView
         metadata={{ name: 'wins', domain: 'nba', owner: 'TEST_ADMIN', reviewStatus: 'draft' } as never}
@@ -79,7 +80,8 @@ describe('open-source words, said plainly in the app for Snowflake', () => {
     );
     setSnowflakeApp(true);
     const snowflake = page();
-    expect(snowflake).toContain('Open in Source');
+    expect(snowflake).not.toContain('Open in Source');
+    expect(snowflake).toContain('SELECT 1');
     expect(snowflake).not.toContain('DQL source');
     expect(snowflake).not.toContain('DQL Source');
     setSnowflakeApp(false);

@@ -20,7 +20,7 @@ import { filterNotebookFiles, notebookDomains } from './notebook-sidebar';
 import { authoredDomainOptions } from '../domains/authored-domain-options';
 import { DbtDatabaseList } from './DbtDatabaseList';
 import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { notebookRowTooltip } from '../../snowflake-app/snowflake-app-words';
+import { buildSearchPlaceholder, notebookRowTooltip } from '../../snowflake-app/snowflake-app-words';
 import {
   buildSemanticTreeFromLayer,
   scopeSemanticTreeForComposition,
@@ -77,6 +77,7 @@ export function BuildSidebar({ defaultTab, onOpenFile, tabs, onInsertText, onSem
 }) {
   const { state, dispatch } = useNotebook();
   const readOnlyFiles = hostReadOnly(useHostUi(), 'files');
+  const snowflakeApp = useSnowflakeApp();
   const t = themes[state.themeMode];
   // Respect the host's tab order (the prototype puts Blocks first in Block Studio).
   const visibleTabs = tabs
@@ -165,7 +166,7 @@ export function BuildSidebar({ defaultTab, onOpenFile, tabs, onInsertText, onSem
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={`Search ${tab}…`}
+              placeholder={buildSearchPlaceholder(tab, snowflakeApp)}
               style={{
                 width: '100%', boxSizing: 'border-box', background: t.inputBg, border: `1px solid ${t.inputBorder}`,
                 borderRadius: 6, color: t.textPrimary, fontSize: 12, fontFamily: t.font, padding: '6px 8px 6px 26px', outline: 'none',

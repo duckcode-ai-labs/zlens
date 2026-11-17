@@ -30,7 +30,7 @@ import { domainStudioUnavailableState, type DomainStudioUnavailableState } from 
 import type { ModelingSearchOption } from './modeling-search';
 import { Modal, SearchPicker, iconButtonStyle, inputStyle, linkButton } from './modeling-controls';
 import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { modelingEmptyWords } from '../../snowflake-app/snowflake-app-words';
+import { businessContextPrompt, modelingEmptyWords, warehouseDraftDetail } from '../../snowflake-app/snowflake-app-words';
 import { RELATIONSHIP_LEGEND, relationshipDraftFromJoin, relationshipProfileLines, relationshipSentence, relationshipStatusView } from './relationship-builder-model';
 
 type Theme = (typeof themes)['dark'];
@@ -1398,7 +1398,7 @@ function ModelingEmptyWorkspace({ t, connectedModels, warehouse, onDbt, onYaml, 
     // RFC 0007: a warehouse-first project starts from its own tables.
     // RFC 0012: a dbt project drafts the whole model from dbt and its warehouse.
     ...(warehouse?.fromDbt ? [{ icon: <Boxes size={20} />, title: warehouse.drafting ? 'Drafting the model…' : 'Draft the whole model', detail: `ZLens reads your ${warehouse.tables} dbt model${warehouse.tables === 1 ? '' : 's'} and the warehouse they build: one table per business thing, what one row is, the joins, and the traps measured as rules. You review every change.`, action: warehouse.onDraft }] : []),
-    ...(warehouse && !warehouse.fromDbt ? [{ icon: <Boxes size={20} />, title: warehouse.drafting ? 'Drafting from the warehouse…' : 'Draft from your warehouse', detail: warehouse.tables > 0 ? `${warehouse.tables} table${warehouse.tables === 1 ? '' : 's'} synced. DQL drafts models from their keys and joins from declared foreign keys, view SQL and column names, checks each join on the warehouse, and shows you every change to review.` : 'Sync schema in Settings → Connections first, so ZLens can read your tables, keys and comments.', action: warehouse.onDraft }] : []),
+    ...(warehouse && !warehouse.fromDbt ? [{ icon: <Boxes size={20} />, title: warehouse.drafting ? 'Drafting from the warehouse…' : 'Draft from your warehouse', detail: warehouse.tables > 0 ? warehouseDraftDetail(warehouse.tables, snowflakeApp) : 'Sync schema in Settings → Connections first, so ZLens can read your tables, keys and comments.', action: warehouse.onDraft }] : []),
     { icon: <Boxes size={20} />, title: pickTables ? 'Pick tables' : 'Use connected dbt', detail: snowflakeApp ? `${connectedModels} table${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.` : warehouse && !warehouse.fromDbt ? `${connectedModels} table${connectedModels === 1 ? '' : 's'} or model${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.` : `${connectedModels} model${connectedModels === 1 ? '' : 's'} available. Search, multi-select, confirm where they belong, then review the bindings.`, action: onDbt },
     { icon: <FileSearch size={20} />, title: 'Import modeling YAML', detail: words.yamlDetail, action: onYaml },
     { icon: <Plus size={20} />, title: 'Add one model by hand', detail: words.manualDetail, action: onManual },
@@ -1695,6 +1695,7 @@ function AiCapability({ icon, title, detail, t, action }: { icon: React.ReactNod
 // description, dbt-binding mono box, columns with PK/FK glyphs, relationship
 // click-through list, and an Edit entity action.
 function EntityInspector({ entity, detail, relationships = [], t, readOnly = false, onEdit, onEditDbtSource, onSelectRelationship, onDelete }: { entity: ManifestModelEntity; detail: DbtNodeAuthoringDetail | null; relationships?: ManifestModelRelationship[]; t: Theme; readOnly?: boolean; onEdit: () => void; onEditDbtSource: () => void; onSelectRelationship?: (relationship: ManifestModelRelationship) => void; onDelete?: () => void }) {
+  const snowflakeApp = useSnowflakeApp();
   const kindColor = entityKindColor(entity.analyticalRole);
   const keys = new Set(entity.keys.length ? entity.keys : (detail?.dqlMeta?.keys ?? []));
   const heading: React.CSSProperties = { fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: t.textMuted, margin: '0 0 5px' };
@@ -1706,7 +1707,7 @@ function EntityInspector({ entity, detail, relationships = [], t, readOnly = fal
         <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, color: t.textPrimary, fontFamily: t.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entity.businessName || entity.localId}</span>
         <span style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: kindColor }}>{entity.analyticalRole ?? 'entity'}</span>
       </div>
-      <p style={{ margin: '0 0 12px', color: t.textSecondary, fontSize: 12, lineHeight: 1.6 }}>{entity.businessContext || `Add the DQL-owned business context for ${entity.localId}. dbt descriptions remain physical-source documentation.`}</p>
+      <p style={{ margin: '0 0 12px', color: t.textSecondary, fontSize: 12, lineHeight: 1.6 }}>{entity.businessContext || businessContextPrompt(entity.localId, snowflakeApp)}</p>
       <div style={{ marginBottom: 12 }}>
         <div style={heading}>dbt binding</div>
         <div style={{ fontSize: 11, fontFamily: t.fontMono, color: t.textPrimary, background: 'var(--bg-1)', border: '1px solid var(--border-subtle)', borderRadius: 7, padding: '7px 9px', overflowWrap: 'anywhere' }}>

@@ -162,6 +162,13 @@ export class HistoryItemMapper {
       if (isDraftPath(path)) drafts.push(path);
       else canonicalBySuffix.set(besideSuffix(path), path);
     }
+    // Before V4, Save as saved query wrote the companion of a saved query with no domain (`blocks/<name>.dql`) under
+    // `semantic-layer/blocks/uncategorized/<name>.yaml`. It is that saved query's, unless a saved query there owns it.
+    for (const path of [...companionOwner.values()]) {
+      const legacy = /^blocks\/([^/]+)\.dql$/.exec(path);
+      const companion = legacy ? `semantic-layer/blocks/uncategorized/${legacy[1]}.yaml` : undefined;
+      if (companion && !companionOwner.has(companion)) companionOwner.set(companion, path);
+    }
     const besideOf = new Map<string, string>();
     for (const draft of drafts.sort()) {
       const canonical = canonicalBySuffix.get(besideSuffixOf(draft) ?? '');

@@ -377,6 +377,71 @@ describe('certified versions, draft edits and restore', () => {
   });
 });
 
+describe('a file moved, and a companion left where an older release put it (V4 reviewer)', () => {
+  const TOP = 'blocks/top-nations-by-order-revenue-1997.dql';
+  const MOVED = 'blocks/uncategorized/top-nations-by-order-revenue-1997.dql';
+  const STRAY = 'semantic-layer/blocks/uncategorized/top-nations-by-order-revenue-1997.yaml';
+  const top = (sql: string, name = 'Top nations by order revenue, 1997') => `block "${name}" {\n  domain = "uncategorized"\n  type = "custom"\n  status = "draft"\n  owner = "TEST_ADMIN"\n  query = """\n    ${sql}\n  """\n}\n`;
+  const companion = 'name: top-nations-by-order-revenue-1997\nblock: top-nations-by-order-revenue-1997\ndomain: uncategorized\nreviewStatus: draft\n';
+
+  it('says a saved query saved with its companion under "uncategorized" was created, in one line, and no semantic layer line', async () => {
+    const root = project();
+    const history = await open(root, { sqlLog: { appName: 'ZLENS_APP', warehouse: () => 'WH', query: async () => [] } });
+    put(root, TOP, top(SQL_2018));
+    put(root, STRAY, companion);
+    const made = await save(history, 'TEST_ADMIN', '/api/blocks/save-from-cell');
+    expect(made[0]!.changes).toEqual([expect.objectContaining({ item: TOP, kind: 'saved_query', change: 'created', files: [TOP, STRAY] })]);
+    expect(history.feed().entries.filter((entry) => entry.kind === 'semantic')).toEqual([]);
+    expect(history.pendingSqlRows().filter((row) => row.kind === 'semantic')).toEqual([]);
+  });
+
+  it('says an SQL edit that also moved the file "edited · SQL changed", never "renamed" or a path, in History and the SQL log', async () => {
+    const root = project();
+    const history = await open(root, { sqlLog: { appName: 'ZLENS_APP', warehouse: () => 'WH', query: async () => [] } });
+    put(root, TOP, top(SQL_2018));
+    put(root, STRAY, companion);
+    await save(history, 'TEST_ADMIN', '/api/blocks/save-from-cell');
+    // What the builder's save did before V4: the same saved query, its SQL changed, written to blocks/uncategorized/.
+    unlinkSync(join(root, TOP));
+    put(root, MOVED, top(SQL_2019));
+    const made = await save(history, 'TEST_ADMIN');
+    expect(made[0]!.changes).toEqual([expect.objectContaining({ item: MOVED, from: TOP, change: 'edited', version: 2, detail: 'SQL changed' })]);
+    const [line] = history.feed().entries;
+    expect(line).toMatchObject({ change: 'edited', kind: 'saved_query', detail: 'SQL changed', items: [expect.objectContaining({ name: 'Top nations by order revenue, 1997' })] });
+    expect(JSON.stringify(history.feed().entries.map((entry) => entry.detail ?? ''))).not.toMatch(/\.dql|Moved from|blocks\//);
+    expect(history.pendingSqlRows().map((row) => [row.item, row.kind, row.version, row.change])).toEqual([
+      ['Top nations by order revenue, 1997', 'saved_query', 1, 'created'],
+      ['Top nations by order revenue, 1997', 'saved_query', 2, 'edited'],
+    ]);
+    // Its versions follow it to the new place.
+    expect(history.item(MOVED).versions.map((row) => [row.version, row.change])).toEqual([[2, 'edited'], [1, 'created']]);
+  });
+
+  it('says a move with nothing else changed "Moved to another folder", and a real rename what it was called', async () => {
+    const root = project();
+    put(root, TOP, top(SQL_2018));
+    const history = await open(root);
+    unlinkSync(join(root, TOP));
+    put(root, MOVED, top(SQL_2018));
+    expect((await save(history))[0]!.changes[0]).toMatchObject({ change: 'edited', detail: 'Moved to another folder' });
+    unlinkSync(join(root, MOVED));
+    put(root, 'blocks/uncategorized/top-nations-1997.dql', top(SQL_2018, 'Top nations 1997'));
+    expect((await save(history))[0]!.changes[0]).toMatchObject({ change: 'renamed', detail: 'Was "Top nations by order revenue, 1997"' });
+  });
+
+  it('says a notebook moved with its title "Moved to another folder", and one renamed what it was called', async () => {
+    const root = project();
+    put(root, 'notebooks/sales.dqlnb', '{"title":"Sales review","cells":[]}');
+    const history = await open(root);
+    unlinkSync(join(root, 'notebooks/sales.dqlnb'));
+    put(root, 'notebooks/team/sales.dqlnb', '{"title":"Sales review","cells":[]}');
+    expect((await save(history))[0]!.changes[0]).toMatchObject({ change: 'edited', detail: 'Moved to another folder' });
+    unlinkSync(join(root, 'notebooks/team/sales.dqlnb'));
+    put(root, 'notebooks/team/q4.dqlnb', '{"title":"Q4 review","cells":[]}');
+    expect((await save(history))[0]!.changes[0]).toMatchObject({ change: 'renamed', detail: 'Was "Sales review"' });
+  });
+});
+
 describe('Compare: the result, run now', () => {
   it('lines rows up by their text columns and marks new rows', () => {
     const aligned = alignResults(
