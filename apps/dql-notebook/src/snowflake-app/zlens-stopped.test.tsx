@@ -447,10 +447,12 @@ describe("telling Snowflake's answers from ZLens's (V17 tester)", () => {
     expect(await snowflakeAnswered(new Response('{}', { status: 404 }))).toBe(false);
   });
 
-  it('before any mark was seen (should Snowflake strip it), Snowflake\'s answer is told by its text', async () => {
+  it('an unmarked 502, 503 or 504 is Snowflake\'s whatever its text, even before any mark was seen (V17 patch 4 tester)', async () => {
     expect(await snowflakeAnswered(new Response('{"responseType":"ERROR_SERVICE_UNAVAILABLE"}', { status: 503 }))).toBe(true);
-    expect(await snowflakeAnswered(new Response('Service ZLENS not reachable (serviceStatus=PENDING)', { status: 503 }))).toBe(true);
-    expect(await snowflakeAnswered(new Response('{"error":"Cortex is busy"}', { status: 503 }))).toBe(false);
+    expect(await snowflakeAnswered(new Response('<html>Service temporarily unavailable</html>', { status: 503 }))).toBe(true);
+    expect(await snowflakeAnswered(new Response('', { status: 502 }))).toBe(true);
+    // Before a mark was seen, another 5xx is not taken for Snowflake's.
+    expect(await snowflakeAnswered(new Response('{"error":"boom"}', { status: 500 }))).toBe(false);
   });
 
   it('a page that saw the mark, then gets an unmarked answer, says ZLens is starting', async () => {
@@ -466,9 +468,58 @@ describe("telling Snowflake's answers from ZLens's (V17 tester)", () => {
   });
 
   it('says why it is sending the person to sign in, and waits until ZLens has usually started', () => {
-    expect(SIGN_IN_AFTER_MS).toBe(90_000);
-    expect(signInWords(0)).toBe('After a stop, Snowflake asks you to sign in again. This page takes you there in 90 s, when ZLens is usually ready.');
-    expect(signInWords(80_200)).toBe('After a stop, Snowflake asks you to sign in again. This page takes you there in 10 s, when ZLens is usually ready.');
-    expect(signInWords(120_000)).toContain('in 0 s');
+    expect(SIGN_IN_AFTER_MS).toBe(120_000);
+    expect(signInWords(0)).toBe('After a stop, Snowflake asks you to sign in again. This page takes you there in 120 s. If Snowflake then says the service is not yet running, ZLens needs a little longer: reload that page in a minute.');
+    expect(signInWords(110_200)).toContain('takes you there in 10 s.');
+    expect(signInWords(150_000)).toContain('in 0 s');
+  });
+});
+
+describe('coming back to a quiet page, whatever Snowflake answers (V17 patch 4 tester)', () => {
+  // After the idle stop, a mouse move started ZLens, but the page let its waiting requests go, they met Snowflake's
+  // 503s, and the page said ZLens "will not start it again by itself" while it was starting and then running.
+  const quietPage = async (health: () => Promise<Response>) => {
+    setSnowflakeApp(true);
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return String(input) === '/api/health' ? health() : new Response('{}', { status: 200, headers: { [ZLENS_APP_HEADER]: '1' } });
+    }));
+    notePersonActive();
+    watchForStoppedService();
+    await vi.advanceTimersByTimeAsync(QUIET_AFTER_MS + 1);
+    void fetch('/api/host/ui');
+    await settle();
+    notePersonActive();
+    await settle();
+    return calls;
+  };
+
+  it('a check that cannot reach ZLens means it is starting: nothing that waited is sent', async () => {
+    const calls = await quietPage(async () => { throw new TypeError('net::ERR_HTTP2_PROTOCOL_ERROR'); });
+    expect(calls).toEqual(['/api/health']);
+    expect(zlensStopped()).toEqual({ reason: 'idle', startNow: true });
+  });
+
+  it('a check that Snowflake redirects to its sign-in means the same', async () => {
+    const calls = await quietPage(async () => ({ type: 'opaqueredirect', status: 0, ok: false, headers: new Headers() }) as unknown as Response);
+    expect(calls).toEqual(['/api/health']);
+    expect(zlensStopped()).toEqual({ reason: 'idle', startNow: true });
+  });
+
+  it('only a check ZLens answers lets what waited go', async () => {
+    const calls = await quietPage(async () => new Response('{}', { status: 200, headers: { [ZLENS_APP_HEADER]: '1' } }));
+    expect(calls).toEqual(['/api/health', '/api/host/ui']);
+    expect(isZLensStopped()).toBe(false);
+  });
+
+  it('a page that already said "stopped" says "starting" once it learns ZLens is starting', () => {
+    markZLensStopped({ reason: 'lost' });
+    markZLensStopped({ reason: 'stopped', startNow: true });
+    expect(zlensStopped()).toEqual({ reason: 'lost', startNow: true });
+    expect(zlensStoppedWords(zlensStopped()!).title).toBe('ZLens is starting');
+    // News without startNow changes nothing.
+    markZLensStopped({ reason: 'idle', idleMinutes: 60 });
+    expect(zlensStopped()).toEqual({ reason: 'lost', startNow: true });
   });
 });

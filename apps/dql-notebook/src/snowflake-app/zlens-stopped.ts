@@ -39,7 +39,15 @@ export function isZLensStopped(): boolean {
 
 /** ZLens stopped: hold every request to it from now on and tell the page. The first reason given stays. */
 export function markZLensStopped(next: ZLensStopped): void {
-  if (stopped) return;
+  if (stopped) {
+    // Already stopped: news that ZLens is starting (the person's own request woke it) still changes what the page
+    // says (V17 patch 4 tester: "will not start it again by itself" while it was starting). Nothing else changes.
+    if (next.startNow && !stopped.startNow) {
+      stopped = { ...stopped, startNow: true };
+      for (const listener of listeners) listener();
+    }
+    return;
+  }
   stopped = next;
   holdRequestsToZLens();
   for (const listener of listeners) listener();
@@ -131,9 +139,12 @@ export async function snowflakeAnswered(response: Response): Promise<boolean> {
     zlensMarkSeen = true;
     return false;
   }
-  if (response.type === 'opaqueredirect' || response.status < 500) return false;
-  if (zlensMarkSeen) return true;
-  return snowflakeSaysNotRunning(response.status, await response.clone().text().catch(() => ''));
+  if (response.type === 'opaqueredirect') return false;
+  // A gateway answer without ZLens's mark is Snowflake's, whatever its text (V17 patch 4 tester: 24 of them in a
+  // row were not recognised). ZLens marks its own 503s.
+  if (response.status >= 502 && response.status <= 504) return true;
+  if (response.status < 500 || !zlensMarkSeen) return false;
+  return true;
 }
 
 let unwatchedFetch: typeof fetch | undefined;
@@ -178,16 +189,19 @@ async function resumeQuietPage(send: typeof fetch): Promise<void> {
   if (resuming || stopped || waiting.length === 0) return;
   resuming = true;
   try {
-    let notRunning = false;
+    let running = false;
     try {
       const response = await send('/api/health', { cache: 'no-store', credentials: 'same-origin', redirect: 'manual' });
-      notRunning = await snowflakeAnswered(response);
+      running = response.ok;
+      if (running) void snowflakeAnswered(response);
     } catch {
-      // Unreachable for now: what waited goes and fails, or succeeds, as it would have.
+      // Unreachable: not running as far as this page can tell.
     }
-    if (notRunning) {
-      // ZLens stopped while the page was quiet. That check has already started it again, and the person is back,
-      // so the page starts it and opens it when it is ready. Nothing that waited is sent.
+    if (!running) {
+      // ZLens did not answer for itself: Snowflake did (it stopped while the page was quiet, and that check has
+      // started it again), or Snowflake wants a sign-in, or it could not be reached. The person is back, so the page
+      // starts it and opens it when it is ready. Nothing that waited is sent (V17 patch 4 tester: requests let go
+      // here met Snowflake's 503s and the page said ZLens "will not start" while it was starting).
       markZLensStopped({ reason: 'idle', startNow: true });
       return;
     }
