@@ -33,8 +33,8 @@ const LISTED = String.raw`(?:listed|provided|given|available|supplied|described|
 const TABLES = String.raw`(?:relations?|tables?|schemas?|columns?|fields?|data ?sets?)`;
 /** "No column in the listed relations holds payroll/employee expense data". */
 const NO_COLUMN_HOLDS = new RegExp(String.raw`^(?:there (?:is|are) )?no (?:${TABLES})(?: or (?:${TABLES}))? (?:in|among|across|of|from) (?:the |any of the |any )?(?:${LISTED} )?${TABLES}(?: (?:listed|provided|given|above))? ${HOLDS} (?:any )?(.+)$`, 'i');
-/** "None of the listed tables contain payroll data", "The provided relations do not include payroll". */
-const NONE_HOLDS = new RegExp(String.raw`^(?:none of the|the) (?:${LISTED} )?${TABLES}(?: (?:listed|provided|given|above))? (?:(?:do|does) not |don't |doesn't )?${HOLDS} (?:any )?(.+)$`, 'i');
+/** "None of the listed tables contain payroll data", "The provided relations do not include payroll", "None of the listed tables or columns hold payroll". */
+const NONE_HOLDS = new RegExp(String.raw`^(?:none of the|the) (?:${LISTED} )?${TABLES}(?: or (?:${TABLES}))?(?: (?:listed|provided|given|above))? (?:(?:do|does) not |don't |doesn't )?${HOLDS} (?:any )?(.+)$`, 'i');
 /** What the host adds after a decline: how far Ask looked. */
 const LOOKED = /\s*\((Ask looked through (every table it can read|the tables it chose), and no other table has a column for it|Ask also looked in the tables that have a column named for it)\)\s*$/;
 

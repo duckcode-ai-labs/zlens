@@ -34,6 +34,11 @@ STOP_WAITING_SECONDS = 1800
 # Once ZLens is ready: check again every minute, for 10 minutes, then stop.
 RECHECK_SECONDS = 60
 RECHECK_FOR_SECONDS = 600
+# Before the user is saved: check every 10 seconds, for 10 minutes, so the page moves on by itself once the
+# admin saves it (V17 p6 tester: after the save, Launch app kept showing the old "Set up ZLens first" until a
+# browser reload; the page had stopped and Snowsight showed its last frame).
+SETUP_RECHECK_SECONDS = 10
+SETUP_RECHECK_FOR_SECONDS = 600
 # The ZLens mark (paper Z and the green certified dot on a dark tile), drawn inline. An image file
 # shown with st.image does not load in a Native App's Streamlit page (V16 release check: a broken
 # image), so the mark is SVG markup in the page itself, with nothing to fetch.
@@ -66,17 +71,31 @@ def read_status():
 
 
 def read_context():
-    """The app's name, the time of this check (in the Snowflake session's time zone) and the
-    warehouse this page runs on, in one query.
+    """The app's name and the time of this check, in the Snowflake session's time zone.
 
-    The warehouse is the session's own: Snowsight runs the page on the one the person picked when it
-    asked for one, which need not be the app's <app>_WH. Empty when Snowflake does not say.
+    One query, as V16 had it. V17 added CURRENT_WAREHOUSE() to it, and in the installed app the whole query
+    failed: the page then named the app "<this app>" and told the time in UTC (V17 and V17 p6 testers). The
+    warehouse is read on its own (page_warehouse), so a failure there costs only the warehouse's name.
     """
     try:
-        row = session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP(), CURRENT_WAREHOUSE()").collect()[0]
-        return str(row[0] or ""), row[1], str(row[2] or "")
+        row = session.sql("SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()").collect()[0]
+        return str(row[0] or ""), row[1]
     except Exception:  # noqa: BLE001 - the page still works; the time then comes from this runtime
-        return "", None, ""
+        return "", None
+
+
+def page_warehouse_name():
+    """The warehouse this page runs on, read once per page session; empty when Snowflake does not say.
+
+    The query history of the V17 test showed the page running on the app's <app>_WH (its QUERY_WAREHOUSE),
+    whichever warehouse the person picked in Snowsight's prompt. The page names that one when this read fails.
+    """
+    if "page_warehouse" not in st.session_state:
+        try:
+            st.session_state["page_warehouse"] = str(session.sql("SELECT CURRENT_WAREHOUSE()").collect()[0][0] or "")
+        except Exception:  # noqa: BLE001 - only the warehouse's name is lost
+            st.session_state["page_warehouse"] = ""
+    return st.session_state["page_warehouse"]
 
 
 def start():
@@ -134,9 +153,10 @@ def show_title():
 state = st.session_state
 status = read_status()
 name = status["status"]
-app, moment, page_warehouse = read_context()
+app, moment = read_context()
 app = app or "<this app>"
 warehouse = f"{app}_WH"
+page_warehouse = page_warehouse_name() or (warehouse if app != "<this app>" else "")
 checked = clock(moment)
 now = time.time()
 
@@ -158,15 +178,23 @@ if status["error"]:
         st.rerun()
     st.stop()
 
-# Not set up yet: the free app serves one named Snowflake user.
+# Not set up yet: the free app serves one named Snowflake user. The page says the step that is missing, and
+# checks again by itself, so it moves on once the admin saves the user (V17 p6 tester).
 if not status["zlens_user"]:
+    state.setdefault("setup_since", now)
     st.subheader("Set up ZLens first")
     st.write(
-        "An admin names the one Snowflake user who uses ZLens, grants it one database, "
-        "and grants it Cortex for Ask. Run these as a role that owns the app (replace the names):"
+        "**One step is missing: name the Snowflake user who uses ZLens.** On the app's **Configurations** tab, "
+        "set **Snowflake user who uses ZLens** and press **Save**. When it is saved, the tab shows a green "
+        "**Configured** badge with the name; if it still shows **Review**, open Review and Save again. "
+        "Or run this as a role that owns the app:"
+    )
+    st.code(f"ALTER APPLICATION {app} SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';", language="sql")
+    st.write(
+        "If you have not yet granted it a database and Cortex (the README's steps 2 to 4), run these too, "
+        "with your database and schema names. Run each line, or press Run all:"
     )
     st.code(
-        f"ALTER APPLICATION {app} SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';\n"
         f"GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};\n"
         f"GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
         f"GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
@@ -174,12 +202,24 @@ if not status["zlens_user"]:
         f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};",
         language="sql",
     )
-    st.caption("The app's README has the same steps. Then open this page again.")
     st.caption(
         f"If Snowsight asks you to select a warehouse before this page opens, pick {warehouse}, "
         "the app's own warehouse: this page runs on it."
     )
+    left = SETUP_RECHECK_FOR_SECONDS - (now - state["setup_since"])
+    if left > 0:
+        st.caption(
+            f"Checked at {checked}. This page checks again every 10 seconds until {clock(moment, left)}, "
+            "and moves on by itself once the user is saved."
+        )
+        time.sleep(SETUP_RECHECK_SECONDS)
+        st.rerun()
+    st.caption(f"Checked at {checked}. This page has stopped checking, so its warehouse can suspend.")
+    if st.button("Check again"):
+        state["setup_since"] = time.time()
+        st.rerun()
     st.stop()
+state.pop("setup_since", None)
 
 # Someone else: ZLens would refuse them after the start, so say so first.
 signed_in = viewer()
@@ -204,8 +244,8 @@ if name == "READY" and status["url"]:
         "If your browser blocks it, copy the address:"
     )
     st.code(status["url"], language=None)
-    # The warehouse the page really runs on, not the one it was created with (V4 tester: the page
-    # named the app's warehouse while Snowsight ran it on the one the person picked).
+    # The warehouse the page runs on: read from Snowflake, else the app's own <app>_WH, the page's
+    # QUERY_WAREHOUSE (V17 query history: the page ran there whichever warehouse the person picked).
     keeps = f"this page's warehouse, {page_warehouse}, running" if page_warehouse else "this page's warehouse running"
     st.caption(
         f"ZLens serves {status['zlens_user']}. You can close this tab once ZLens is open: "

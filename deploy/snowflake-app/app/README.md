@@ -13,11 +13,15 @@ app's name filled in.
 
 ## Quick start
 
-Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app.
+Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app. Where a step shows
+several lines, run each line, or select them all and press **Run**: Snowsight's Run runs only the
+statement at the cursor.
 
 1. **Name the person who uses ZLens.** Open **Apps** in Snowsight's left menu, then this app, then its
    **Configurations** tab. Pick a warehouse at the top of the page first (Snowsight needs one to save),
-   then select **Review**, enter that person's Snowflake user name, and **Save**. Or in SQL:
+   then select **Review**, enter that person's Snowflake user name, and **Save**. When it is saved, the
+   tab shows a green **Configured** badge with the name. If it still shows **Review**, open Review and
+   Save again. Or in SQL:
 
    ```sql
    ALTER APPLICATION ZLENS_APP SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';
@@ -64,6 +68,9 @@ Run these in Snowsight as ACCOUNTADMIN, or as the role that installed the app.
   zone). Once ZLens is ready it checks again every minute for 10 minutes, so a ZLens that stops or
   restarts shows as it is, and a stopped one is started again. Then it stops checking, so its
   warehouse can suspend; **Check again** checks once more.
+- **If the page says "Set up ZLens first"**, it names the step that is missing and checks again every
+  10 seconds for 10 minutes, so it moves on by itself once you save the user. After that, press
+  **Check again**.
 - **If the page looks greyed out** with a **Start** button at the top, Snowsight has put it to
   sleep: press **Start**, then **Check again**.
 - **Reopening the page** from the app can first show Snowsight's cached copy of it for a few

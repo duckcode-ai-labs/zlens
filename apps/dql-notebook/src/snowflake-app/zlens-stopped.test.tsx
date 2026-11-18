@@ -307,9 +307,12 @@ describe('streams the Snowflake ingress ends or drops (V4 release check)', () =>
   it("Snowflake's \"service is not running\" answer to any request means ZLens stopped: the page then sends nothing more", async () => {
     setSnowflakeApp(true);
     const snowflake503 = '{"requestId":"r","responseType":"ERROR_SERVICE_UNAVAILABLE","detail":"Service ZLENS not reachable: service is not yet running (serviceStatus=PENDING)."}';
-    const send = vi.fn(async (input: RequestInfo | URL) => String(input).includes('host/ui')
-      ? new Response(snowflake503, { status: 503 })
-      : new Response('{}', { status: 200 }));
+    // ZLens stopped after the first request: Snowflake answers the next ones, its health check too.
+    let first = true;
+    const send = vi.fn(async (_input: RequestInfo | URL) => {
+      if (first) { first = false; return new Response('{}', { status: 200 }); }
+      return new Response(snowflake503, { status: 503 });
+    });
     vi.stubGlobal('fetch', send);
     // Background work: the person last touched the page a minute ago (still under the 2-minute quiet mark).
     notePersonActive(Date.now() - 60_000);
@@ -324,7 +327,27 @@ describe('streams the Snowflake ingress ends or drops (V4 release check)', () =>
     void fetch('/api/operations?limit=50').then(() => { answered = true; }, () => { answered = true; });
     await settle();
     expect(answered).toBe(false);
-    expect(send).toHaveBeenCalledTimes(2);
+    // The poll, the request Snowflake answered, and the one health check that confirmed it.
+    expect(send.mock.calls.map(([input]) => String(input))).toEqual(['/api/operations?limit=50', '/api/host/ui', '/api/health']);
+  });
+
+  it('one passing gateway answer while ZLens answers its health check is not a stop: no notice, nothing held (V17 p6 tester)', async () => {
+    setSnowflakeApp(true);
+    const calls: string[] = [];
+    let polls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      if (String(input).startsWith('/api/operations') && (polls += 1) === 1) return new Response('upstream unavailable', { status: 503 });
+      return new Response('{}', { status: 200, headers: { [ZLENS_APP_HEADER]: '1' } });
+    }));
+    notePersonActive();
+    watchForStoppedService();
+    const first = await fetch('/api/operations/run-1');
+    expect(first.status).toBe(503);
+    expect(isZLensStopped()).toBe(false);
+    const next = await fetch('/api/operations/run-1');
+    expect(next.status).toBe(200);
+    expect(calls).toEqual(['/api/operations/run-1', '/api/health', '/api/operations/run-1']);
   });
 
   it('reads only Snowflake\'s own not-running answer that way', () => {
