@@ -40,7 +40,10 @@ describe('the app package for Snowflake', () => {
   it('puts every SQL step of the readme in a code block', () => {
     const prose = readme.replace(/```sql[\s\S]*?```/g, '');
     // Inline code may name a function or a role, but never a statement to run.
+    // A privilege's name is not a statement (the Privileges section names Snowflake's Future upgrades list).
+    const privilege = /^`(?:CREATE (?:WAREHOUSE|COMPUTE POOL|DATABASE|EXTERNAL ACCESS INTEGRATION|SECURITY INTEGRATION|SHARE|LISTING)|EXECUTE (?:MANAGED )?TASK|BIND SERVICE ENDPOINT)`$/;
     for (const inline of prose.match(/`[^`\n]+`/g) ?? []) {
+      if (privilege.test(inline)) continue;
       expect(inline).not.toMatch(/^`\s*(CALL|GRANT|ALTER|CREATE|DROP|REVOKE|SELECT)\b/i);
     }
     for (const line of prose.split('\n')) expect(line.trim()).not.toMatch(/^(CALL|GRANT|ALTER|CREATE|REVOKE)\s/);
@@ -48,7 +51,7 @@ describe('the app package for Snowflake', () => {
 
   it('documents every procedure the app gives the customer, and names the Cortex model', () => {
     const procedures = [...setup.matchAll(/CREATE OR REPLACE PROCEDURE app_public\.(\w+)\(/g)].map((match) => match[1]!);
-    expect(procedures).toEqual(['start_app', 'stop_app', 'app_url', 'backups', 'back_up_now', 'restore_backup', 'launcher_status', 'launcher_start']);
+    expect(procedures).toEqual(['start_app', 'stop_app', 'app_url', 'backups', 'back_up_now', 'restore_backup', 'launcher_status', 'launcher_start', 'launcher_data']);
     for (const name of procedures) expect(readme).toMatch(new RegExp('```sql\\n[^`]*app_public\\.' + name + '\\('));
     expect(readme).toContain(`\`${CORTEX_DEFAULT_MODEL}\``);
     expect(readme).toContain('AI_COMPLETE');
@@ -162,7 +165,7 @@ describe('the app package for Snowflake', () => {
   it('V2: the launcher page calls only the app\'s own procedures, and pins a Streamlit with link_button', () => {
     const page = read('launcher/launcher.py');
     const calls = [...page.matchAll(/session\.sql\("([^"]+)"\)/g)].map((match) => match[1]);
-    expect(calls).toEqual(['CALL app_public.launcher_status()', 'SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()', 'SELECT CURRENT_WAREHOUSE()', 'CALL app_public.launcher_start()']);
+    expect(calls).toEqual(['CALL app_public.launcher_status()', 'SELECT CURRENT_DATABASE(), CURRENT_TIMESTAMP()', 'SELECT CURRENT_WAREHOUSE()', 'CALL app_public.launcher_data()', 'CALL app_public.launcher_start()']);
     expect(page).not.toMatch(/requests|urllib|http\.client|socket|components\.html/);
     expect(page).toContain('st.link_button("Open ZLens", status["url"]');
     // The address is offered only once READY, with a copy of it in case the browser blocks the tab.
@@ -191,7 +194,7 @@ describe('the app package for Snowflake', () => {
     expect(constant('RECHECK_FOR_SECONDS')).toBe(600);
     const ready = branch(page, 'if name == "READY" and status["url"]:');
     // The quiet re-check sleeps only inside the window, then reruns; after it, no sleep and no rerun of its own.
-    expect(ready).toMatch(/left = RECHECK_FOR_SECONDS - \(now - state\["ready_since"\]\)\n\s+if left > 0:\n[^\n]*\n\s+time\.sleep\(RECHECK_SECONDS\)\n\s+st\.rerun\(\)/);
+    expect(ready).toMatch(/left = RECHECK_FOR_SECONDS - \(now - state\["ready_since"\]\)\n\s+if left > 0:\n[^\n]*\n\s+clear_leftovers\(\)\n\s+time\.sleep\(RECHECK_SECONDS\)\n\s+st\.rerun\(\)/);
     expect(ready.match(/time\.sleep\(/g)).toHaveLength(1);
     const after = ready.slice(ready.indexOf('time.sleep(RECHECK_SECONDS)'));
     expect(after).toContain('This page has stopped checking, so its warehouse can suspend.');
@@ -292,11 +295,12 @@ describe('the app package for Snowflake', () => {
     expect(page).toContain('app, moment = read_context()');
     expect(page).toContain('page_warehouse = page_warehouse_name() or (warehouse if app != "<this app>" else "")');
     const ready = branch(page, 'if name == "READY" and status["url"]:');
-    expect(ready).toContain('keeps = f"this page\'s warehouse, {page_warehouse}, running" if page_warehouse else "this page\'s warehouse running"');
-    expect(ready).toContain('f"while it stays open it keeps {keeps}. "');
+    expect(ready).toContain('keeps = f"this page\'s own, {page_warehouse}" if page_warehouse else "this page\'s own"');
+    // Snowsight's own calls for an open page run on the warehouse it shows at the top (V17 p8 query history).
+    expect(ready).toContain('f"while it stays open it keeps two warehouses running: {keeps}, and the one Snowsight shows at the top of the page. "');
     // The ready page no longer names the app's own warehouse as the one it keeps running.
     expect(ready).not.toContain('{warehouse}');
-    expect(readme).toMatch(/reads the\s+app's name, the time and the name of the warehouse it runs on; it reads none of your data\./);
+    expect(readme).toMatch(/reads the app's name, the time, the name of the warehouse it runs\s+on and the names of the databases granted to the app; it reads none of your data\./);
   });
 
   it('V17 p7: before the user is saved, the launcher says the missing step and checks again until it is saved', () => {
@@ -314,6 +318,64 @@ describe('the app package for Snowflake', () => {
     expect(setUp).toMatch(/left = SETUP_RECHECK_FOR_SECONDS - \(now - state\["setup_since"\]\)\n\s+if left > 0:\n[\s\S]*?time\.sleep\(SETUP_RECHECK_SECONDS\)\n\s+st\.rerun\(\)/);
     expect(setUp).toMatch(/This page has stopped checking, so its warehouse can suspend\.[\s\S]*?if st\.button\("Check again"\):\n\s+state\["setup_since"\] = time\.time\(\)\n\s+st\.rerun\(\)\n\s+st\.stop\(\)/);
     expect(page).toContain('\nstate.pop("setup_since", None)\n');
+  });
+
+  it('V17 p9: once the user is saved, the launcher says when ZLens can read no database, and names the ones it can', () => {
+    const page = read('launcher/launcher.py');
+    const data = procedure('launcher_data');
+    // Names only: SHOW commands, never a query of the data, and nothing started, stopped or created.
+    expect(data).toContain("EXECUTE IMMEDIATE 'SHOW TERSE DATABASES'");
+    expect(data).toContain('SHOW TERSE OBJECTS IN DATABASE');
+    expect(data).not.toMatch(/SELECT|RESUME|SUSPEND;|CREATE /);
+    // The same test ZLens itself uses: not the app's own database, an application or package, or Snowflake's,
+    // and a table or view outside INFORMATION_SCHEMA. NULL when it cannot tell.
+    expect(data).toContain("NOT LIKE 'APPLICATION%'");
+    expect(data).toContain('UPPER(:db_name) <> UPPER(CURRENT_DATABASE())');
+    expect(data).toContain("NOT IN ('SNOWFLAKE', 'SNOWFLAKE_SAMPLE_DATA', 'SNOWFLAKE_LEARNING_DB')");
+    expect(data).toContain("UPPER(obj.\"schema_name\") <> 'INFORMATION_SCHEMA'");
+    expect(data).toMatch(/EXCEPTION WHEN OTHER THEN\s+RETURN NULL;/);
+    expect(setup).toContain('GRANT USAGE ON PROCEDURE app_public.launcher_data() TO APPLICATION ROLE app_user;');
+    // The page: the grant step on the ready and the starting screens while none is readable (V17 p8 tester: one
+    // press of Run ran 1 of 8 grant lines and the page said "ZLens is ready"), and the names once one is.
+    expect(page).toContain('\ndata = read_data()\n');
+    const ready = branch(page, 'if name == "READY" and status["url"]:');
+    expect(ready).toMatch(/if data == \[\]:\n\s+show_missing_data\(app\)\n\s+st\.success/);
+    expect(ready).toContain(`reads = f", and can read {', '.join(data)}" if data else ""`);
+    expect(page).toMatch(/elapsed = now - state\["started_at"\]\nif data == \[\]:\n\s+show_missing_data\(app\)/);
+    expect(page).toContain('"**One step is missing: grant ZLens a database.** ZLens can read none of your data yet.');
+    // A failed read says nothing about data, so the page never says a database is missing when it cannot tell.
+    expect(page).toMatch(/def read_data\(\):[\s\S]*?except Exception:[^\n]*\n\s+return None\n\s+if not isinstance\(value, list\):\n\s+return None/);
+    // The set-up screen and the grant step show the same lines, with the same advice on Snowsight's Run.
+    expect(page.match(/st\.code\(grant_lines\(app\), language="sql"\)/g)).toHaveLength(2);
+    expect(page).toContain('RUN_ALL = "Select all the lines, then press Run: Snowsight\'s Run on its own runs only the statement at the cursor."');
+    const firstOpen = readme.slice(readme.indexOf('## The first open'), readme.indexOf('## What ZLens does first'));
+    expect(firstOpen).toContain('**If the page says "One step is missing: grant ZLens a database"**');
+  });
+
+  it('V17 p9: no line of an earlier screen stays faded under the current one', () => {
+    const page = read('launcher/launcher.py');
+    // Streamlit drops an earlier screen's lines only when a run ends, and each checking screen ends its run with a
+    // rerun (V17 p8 tester: a set-up line stayed faded under "ZLens is ready" for 10 minutes).
+    expect(Number(/^LEFTOVER_SLOTS = (\d+)$/m.exec(page)?.[1])).toBeGreaterThanOrEqual(12);
+    expect(page).toMatch(/def clear_leftovers\(\):[\s\S]*?for _ in range\(LEFTOVER_SLOTS\):\n\s+st\.empty\(\)/);
+    const sleeps = [...page.matchAll(/\n\s*time\.sleep\(\w+\)/g)];
+    expect(sleeps).toHaveLength(3);
+    for (const sleep of sleeps) expect(page.slice(0, sleep.index).trimEnd().endsWith('clear_leftovers()')).toBe(true);
+  });
+
+  it('V17 p9: the readme explains the Future upgrades privileges Snowflake lists in the Get dialog', () => {
+    // Snowflake's privileges for automatic grants (manifest version 2); the Get dialog lists those the app does not
+    // ask for under Future upgrades (V17 p8 tester: the readme said "no listings, shares" with no word on them).
+    const automatic = ['EXECUTE TASK', 'EXECUTE MANAGED TASK', 'CREATE WAREHOUSE', 'CREATE COMPUTE POOL', 'BIND SERVICE ENDPOINT', 'CREATE DATABASE', 'CREATE EXTERNAL ACCESS INTEGRATION', 'CREATE SECURITY INTEGRATION', 'CREATE SHARE', 'CREATE LISTING'];
+    const manifest = yaml.load(read('manifest.yml')) as { manifest_version: number; privileges: Array<Record<string, unknown>> };
+    expect(manifest.manifest_version).toBe(2);
+    const asked = manifest.privileges.map((entry) => Object.keys(entry)[0]!);
+    expect(asked).toEqual(['BIND SERVICE ENDPOINT', 'CREATE COMPUTE POOL', 'CREATE WAREHOUSE']);
+    const privileges = readme.slice(readme.indexOf('## Privileges'), readme.indexOf('## What ZLens reaches')).replace(/\s+/g, ' ');
+    expect(privileges).toContain('under **Future upgrades**');
+    for (const name of automatic.filter((name) => !asked.includes(name))) expect(privileges).toContain(`\`${name}\``);
+    expect(privileges).toContain('This version asks for none of them, and no version can add one in a patch.');
+    expect(privileges).toContain('feature policy');
   });
 
   it('V4: the cost section says an open ZLens tab does not keep ZLens running', () => {

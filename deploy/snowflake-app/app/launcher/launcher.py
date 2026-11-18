@@ -13,9 +13,13 @@ zone), and once ZLens is ready the page checks again every minute for 10 minutes
 stops or restarts shows as it is (a stopped one is started again). Then it stops checking, so its
 warehouse can suspend, and offers Check again. A start that never finishes stops being checked too.
 
+Once the user is saved, the page also says when ZLens can read none of the account's data yet, with the grant
+lines, and which databases it can read once one is granted (V17 p8 tester: one press of Run ran 1 of the 8
+grant lines, and the page said "ZLens is ready" with no data granted).
+
 It reads no customer data and calls nothing outside Snowflake: only the app's own procedures
-app_public.launcher_status() and app_public.launcher_start(), and the app's name, the time and the
-warehouse this page runs on.
+app_public.launcher_status(), app_public.launcher_data() (database names, never rows) and
+app_public.launcher_start(), and the app's name, the time and the warehouse this page runs on.
 """
 
 import datetime
@@ -39,6 +43,10 @@ RECHECK_FOR_SECONDS = 600
 # browser reload; the page had stopped and Snowsight showed its last frame).
 SETUP_RECHECK_SECONDS = 10
 SETUP_RECHECK_FOR_SECONDS = 600
+# Streamlit removes the lines of an earlier screen only when a run ends, and a page that checks again ends each
+# run with a rerun: a faded line of the set-up screen stayed under "ZLens is ready" for 10 minutes (V17 p8
+# tester). Empty slots written after the current screen replace whatever an earlier, longer screen left there.
+LEFTOVER_SLOTS = 16
 # The ZLens mark (paper Z and the green certified dot on a dark tile), drawn inline. An image file
 # shown with st.image does not load in a Native App's Streamlit page (V16 release check: a broken
 # image), so the mark is SVG markup in the page itself, with nothing to fetch.
@@ -96,6 +104,56 @@ def page_warehouse_name():
         except Exception:  # noqa: BLE001 - only the warehouse's name is lost
             st.session_state["page_warehouse"] = ""
     return st.session_state["page_warehouse"]
+
+
+def read_data():
+    """The databases ZLens can read (names only), from launcher_data(); None when the app cannot tell.
+
+    Read until one is found, then kept for this page session: a grant does not go away while the page is open,
+    and each read is a few SHOW commands.
+    """
+    if st.session_state.get("data"):
+        return st.session_state["data"]
+    try:
+        raw = session.sql("CALL app_public.launcher_data()").collect()[0][0]
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:  # noqa: BLE001 - the page then says nothing about data
+        return None
+    if not isinstance(value, list):
+        return None
+    names = [str(name) for name in value if name]
+    if names:
+        st.session_state["data"] = names
+    return names
+
+
+def grant_lines(app):
+    """The grants of the README's steps 2 and 4, with the app's name filled in."""
+    return (
+        f"GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};\n"
+        f"GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
+        f"GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
+        f"GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
+        f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};"
+    )
+
+
+RUN_ALL = "Select all the lines, then press Run: Snowsight's Run on its own runs only the statement at the cursor."
+
+
+def show_missing_data(app):
+    """The grant step, while ZLens can read none of the account's data."""
+    st.warning(
+        "**One step is missing: grant ZLens a database.** ZLens can read none of your data yet. Run these as "
+        "a role that owns the app, with your database and schema names. " + RUN_ALL
+    )
+    st.code(grant_lines(app), language="sql")
+
+
+def clear_leftovers():
+    """Empty slots after this screen's lines, so nothing of an earlier screen stays faded under it."""
+    for _ in range(LEFTOVER_SLOTS):
+        st.empty()
 
 
 def start():
@@ -192,16 +250,9 @@ if not status["zlens_user"]:
     st.code(f"ALTER APPLICATION {app} SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';", language="sql")
     st.write(
         "If you have not yet granted it a database and Cortex (the README's steps 2 to 4), run these too, "
-        "with your database and schema names. Run each line, or press Run all:"
+        "with your database and schema names. " + RUN_ALL
     )
-    st.code(
-        f"GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};\n"
-        f"GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
-        f"GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
-        f"GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
-        f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};",
-        language="sql",
-    )
+    st.code(grant_lines(app), language="sql")
     st.caption(
         f"If Snowsight asks you to select a warehouse before this page opens, pick {warehouse}, "
         "the app's own warehouse: this page runs on it."
@@ -212,6 +263,7 @@ if not status["zlens_user"]:
             f"Checked at {checked}. This page checks again every 10 seconds until {clock(moment, left)}, "
             "and moves on by itself once the user is saved."
         )
+        clear_leftovers()
         time.sleep(SETUP_RECHECK_SECONDS)
         st.rerun()
     st.caption(f"Checked at {checked}. This page has stopped checking, so its warehouse can suspend.")
@@ -230,11 +282,16 @@ if signed_in and signed_in.upper() != status["zlens_user"].upper():
     )
     st.stop()
 
+# The user is saved: say so when ZLens can read none of the account's data yet (None: the app could not tell).
+data = read_data()
+
 if name == "READY" and status["url"]:
     if "ready_since" not in state:
         state["ready_since"] = now
         if "started_at" in state and "started_in" not in state:
             state["started_in"] = minutes(now - state["started_at"])
+    if data == []:
+        show_missing_data(app)
     st.success(f"ZLens is ready. Checked at {checked}.")
     if "started_in" in state:
         st.caption(f"Started in {state['started_in']}.")
@@ -244,17 +301,20 @@ if name == "READY" and status["url"]:
         "If your browser blocks it, copy the address:"
     )
     st.code(status["url"], language=None)
-    # The warehouse the page runs on: read from Snowflake, else the app's own <app>_WH, the page's
-    # QUERY_WAREHOUSE (V17 query history: the page ran there whichever warehouse the person picked).
-    keeps = f"this page's warehouse, {page_warehouse}, running" if page_warehouse else "this page's warehouse running"
+    # Two warehouses: the page's own (read from Snowflake, else the app's <app>_WH, the page's QUERY_WAREHOUSE),
+    # and the one Snowsight shows at the top of the page, which Snowsight's own calls for an open page use
+    # (V17 p8 query history: the page's queries ran on ZLENS_FRESH_WH, Snowsight's on the user's warehouse).
+    keeps = f"this page's own, {page_warehouse}" if page_warehouse else "this page's own"
+    reads = f", and can read {', '.join(data)}" if data else ""
     st.caption(
-        f"ZLens serves {status['zlens_user']}. You can close this tab once ZLens is open: "
-        f"while it stays open it keeps {keeps}. "
+        f"ZLens serves {status['zlens_user']}{reads}. You can close this tab once ZLens is open: "
+        f"while it stays open it keeps two warehouses running: {keeps}, and the one Snowsight shows at the top of the page. "
         "ZLens stops by itself after 60 idle minutes; Launch app starts it again."
     )
     left = RECHECK_FOR_SECONDS - (now - state["ready_since"])
     if left > 0:
         st.caption(f"This page checks again every minute until {clock(moment, left)}.")
+        clear_leftovers()
         time.sleep(RECHECK_SECONDS)
         st.rerun()
     st.caption("This page has stopped checking, so its warehouse can suspend.")
@@ -280,6 +340,8 @@ if name == "SUSPENDED" and now - state.get("start_sent_at", 0) > RESEND_START_SE
     state["start_sent_at"] = now
 
 elapsed = now - state["started_at"]
+if data == []:
+    show_missing_data(app)
 if name == "SUSPENDING":
     st.info("ZLens is stopping. This page starts it again as soon as it has stopped.")
 elif elapsed > SLOW_START_SECONDS:
@@ -301,5 +363,6 @@ if elapsed > STOP_WAITING_SECONDS:
     st.stop()
 if elapsed > SLOW_START_SECONDS:
     st.warning("Still starting after 5 minutes. Keep this page open, or try again in a few minutes.")
+clear_leftovers()
 time.sleep(POLL_SECONDS)
 st.rerun()

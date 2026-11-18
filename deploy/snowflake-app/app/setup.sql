@@ -393,6 +393,58 @@ END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.launcher_start() TO APPLICATION ROLE app_user;
 
+-- The databases ZLens can read, by name only (at most 5), so the launcher can say a database is still to
+-- be granted (V17 p8 tester: one press of Run ran 1 of the 8 grant lines, and the page said "ZLens is
+-- ready" with no data granted). The same test ZLens itself uses: an ordinary database, not the app's own
+-- or Snowflake's, in which the app sees a table or view outside INFORMATION_SCHEMA. It reads names, never
+-- rows, and returns NULL when it cannot tell, so the page then says nothing about data.
+CREATE OR REPLACE PROCEDURE app_public.launcher_data()
+RETURNS VARIANT
+LANGUAGE SQL
+AS
+$$
+DECLARE
+  names ARRAY DEFAULT ARRAY_CONSTRUCT();
+  looked INTEGER DEFAULT 0;
+  db_name VARCHAR;
+  readable BOOLEAN;
+  rs_dbs RESULTSET;
+BEGIN
+  BEGIN
+    rs_dbs := (EXECUTE IMMEDIATE 'SHOW TERSE DATABASES');
+  EXCEPTION WHEN OTHER THEN
+    RETURN NULL;
+  END;
+  LET dc CURSOR FOR rs_dbs;
+  FOR db IN dc DO
+    db_name := db."name";
+    IF (ARRAY_SIZE(:names) < 5 AND :looked < 20
+        AND COALESCE(UPPER(db."kind"), '') NOT LIKE 'APPLICATION%'
+        AND UPPER(:db_name) <> UPPER(CURRENT_DATABASE())
+        AND UPPER(:db_name) NOT IN ('SNOWFLAKE', 'SNOWFLAKE_SAMPLE_DATA', 'SNOWFLAKE_LEARNING_DB')) THEN
+      looked := looked + 1;
+      readable := FALSE;
+      BEGIN
+        LET rs_objs RESULTSET := (EXECUTE IMMEDIATE 'SHOW TERSE OBJECTS IN DATABASE "' || REPLACE(:db_name, '"', '""') || '" LIMIT 200');
+        LET oc CURSOR FOR rs_objs;
+        FOR obj IN oc DO
+          IF (UPPER(obj."schema_name") <> 'INFORMATION_SCHEMA') THEN
+            readable := TRUE;
+          END IF;
+        END FOR;
+      EXCEPTION WHEN OTHER THEN
+        readable := FALSE;  -- not readable by the app: not data granted to it
+      END;
+      IF (readable) THEN
+        names := ARRAY_APPEND(:names, :db_name);
+      END IF;
+    END IF;
+  END FOR;
+  RETURN names;
+END;
+$$;
+GRANT USAGE ON PROCEDURE app_public.launcher_data() TO APPLICATION ROLE app_user;
+
 -- The page itself, on the app's own warehouse (created by core.ensure_zlens above). Snowsight may still
 -- ask a viewer to select a warehouse before a page on a warehouse opens (Snowflake: "Consumers may be
 -- prompted to select a warehouse"); the README and the page say to pick this one, <app>_WH.
