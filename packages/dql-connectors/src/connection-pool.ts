@@ -14,6 +14,7 @@ import { ClickHouseConnector } from './drivers/clickhouse.js';
 import { AthenaConnector } from './drivers/athena.js';
 import { BigQueryConnector } from './drivers/bigquery.js';
 import { openSshTunnel } from './drivers/ssh-tunnel.js';
+import { readEnv } from './env.js';
 import { createHash } from 'node:crypto';
 
 function stableSerialize(value: unknown): string {
@@ -31,6 +32,43 @@ function stableSerialize(value: unknown): string {
     entries.push(`${JSON.stringify(k)}:${stableSerialize(v)}`);
   }
   return `{${entries.join(',')}}`;
+}
+
+/**
+ * The settings that only prove who is signing in (a password, a token, keys). With an execution identity
+ * (`ConnectionConfig.executionIdentity`) the identity stands for them in a session connector's key, so a renewed
+ * token finds the session its identity already has.
+ */
+export const CONNECTION_CREDENTIAL_FIELDS = [
+  'password',
+  'token',
+  'sessionToken',
+  'accessKeyId',
+  'secretAccessKey',
+  'privateKey',
+  'privateKeyPassphrase',
+  'passcode',
+  'credentials',
+  'serviceAccountJson',
+  'oauthClientSecret',
+] as const satisfies ReadonlyArray<keyof ConnectionConfig>;
+
+/**
+ * Drivers whose session, once signed in, lives on its own: the credential is read at sign-in and never again, so a
+ * session outlives the token it signed in with. Every other driver presents the credential with each request, or
+ * with each new connection of its own pool, so it keeps one connector per credential: reusing one after a renewal
+ * would send a token that has expired.
+ */
+const SESSION_OUTLIVES_CREDENTIAL = new Set<string>(['snowflake']);
+
+/** Local embedded databases are one per project and hold data in process: never evicted. */
+const LOCAL_DRIVERS = new Set(['duckdb', 'file', 'sqlite']);
+
+/** Whether this connection's connector is kept by its execution identity instead of by its credential. */
+export function isIdentityPooled(config: ConnectionConfig): boolean {
+  return typeof config.executionIdentity === 'string'
+    && config.executionIdentity.length > 0
+    && SESSION_OUTLIVES_CREDENTIAL.has(config.driver);
 }
 
 export function createConnectionConfigKey(config: ConnectionConfig): string {
@@ -116,42 +154,95 @@ export function createConnectionConfigKey(config: ConnectionConfig): string {
     sqliteQueryIsolation: config.sqliteQueryIsolation,
     moduleSearchPaths: config.moduleSearchPaths,
   };
+  if (isIdentityPooled(config)) {
+    // Whose permissions the session runs with, in place of what proved it: every other setting (the account, the
+    // role, the warehouse, the user name) still tells sessions apart.
+    for (const field of CONNECTION_CREDENTIAL_FIELDS) delete normalized[field];
+    normalized.executionIdentity = config.executionIdentity;
+  }
   const payload = stableSerialize(normalized);
   return createHash('sha1').update(payload).digest('hex');
 }
 
-/** Local embedded databases are one per project and hold data in process: never evicted. */
-const LOCAL_DRIVERS = new Set(['duckdb', 'file', 'sqlite']);
-
 export interface ConnectionPoolOptions {
   /** Disconnect a network connector unused this long (default 30 minutes). */
   idleMs?: number;
-  /** At most this many network connectors; past it the least recently used one goes (default 64). */
+  /** At most this many network connectors; past it the least recently used one that is not running anything goes (default 64). */
   maxConnectors?: number;
   /** How often idle connectors are looked for (default 1 minute). */
   sweepMs?: number;
+  /**
+   * A session kept by its execution identity signs in again at its next use once it is this old, so a change of
+   * role or grants at the warehouse takes effect (default 10 minutes, or `ZLENS_POOL_MAX_SESSION_AGE_MS`; 0 keeps
+   * a session until it is idle or lost). Sessions kept by their credential are not aged: a renewed credential is
+   * already a new session.
+   */
+  maxSessionAgeMs?: number;
+}
+
+/** A connector for one statement: `release` says the statement is over. */
+export interface ConnectorLease {
+  connector: DatabaseConnector;
+  release(): void;
+}
+
+interface PooledConnector {
+  key: string;
+  connector: DatabaseConnector;
+  /** A local embedded database: never evicted, never aged. */
+  local: boolean;
+  /** Kept by execution identity (see `isIdentityPooled`). */
+  identityPooled: boolean;
+  connectedAt: number;
+  lastUsed: number;
+  /** Statements running on it now, and statements it was handed out for. */
+  inFlight: number;
+  /** No longer handed out; disconnected once nothing runs on it. */
+  retiredAt?: number;
+}
+
+interface PendingConnector {
+  promise: Promise<PooledConnector>;
+  /** Callers waiting for it who will run a statement on it at once (`acquire`). */
+  leases: number;
+}
+
+/** A retired session is left this long for whoever was handed it just before, then disconnected once nothing runs on it. */
+const RETIRED_LINGER_MS = 5_000;
+
+const DEFAULT_MAX_SESSION_AGE_MS = 10 * 60_000;
+
+function defaultMaxSessionAgeMs(): number {
+  const configured = Number(readEnv('ZLENS_POOL_MAX_SESSION_AGE_MS'));
+  return Number.isFinite(configured) && configured >= 0 && readEnv('ZLENS_POOL_MAX_SESSION_AGE_MS')?.trim() ? configured : DEFAULT_MAX_SESSION_AGE_MS;
 }
 
 /**
- * Connectors are keyed by their full settings, so a host's per-person sign-in
- * (a token that renews every few minutes) makes a new one per person per
- * renewal. Idle network connectors are therefore disconnected after a while,
- * and their number is capped.
+ * Connectors are kept by their settings. A connection that says whose permissions it runs with
+ * (`executionIdentity`, from a host's per-person sign-in) keeps one session per identity on a driver whose session
+ * outlives its credential: a token that renews every few minutes, or on every request, finds that session again,
+ * and a sign-in happens only when the session is new, lost or too old, always with the credential of the statement
+ * that needs it (the pool keeps no credential of its own). Without an identity a connector is kept by its full
+ * settings, credential included, so each credential has its own.
+ *
+ * Idle network connectors are disconnected after a while and their number is capped, but never while a statement
+ * runs on one: a busy connector is passed over and goes once it is idle.
  */
 export class ConnectionPoolManager {
-  private connectors: Map<string, DatabaseConnector> = new Map();
-  private pendingConnectors: Map<string, Promise<DatabaseConnector>> = new Map();
-  private lastUsed: Map<string, number> = new Map();
-  private local: Set<string> = new Set();
+  private connectors: Map<string, PooledConnector> = new Map();
+  private pendingConnectors: Map<string, PendingConnector> = new Map();
+  private retired: Set<PooledConnector> = new Set();
   private readonly idleMs: number;
   private readonly maxConnectors: number;
   private readonly sweepMs: number;
+  private readonly maxSessionAgeMs: number;
   private sweeper: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: ConnectionPoolOptions = {}) {
     this.idleMs = options.idleMs ?? 30 * 60_000;
     this.maxConnectors = options.maxConnectors ?? 64;
     this.sweepMs = options.sweepMs ?? 60_000;
+    this.maxSessionAgeMs = options.maxSessionAgeMs ?? defaultMaxSessionAgeMs();
   }
 
   private arm(): void {
@@ -160,42 +251,91 @@ export class ConnectionPoolManager {
     this.sweeper.unref?.();
   }
 
-  /** Disconnect network connectors unused for longer than `idleMs`, and the least recently used past the cap. */
+  /**
+   * Disconnect network connectors unused for longer than `idleMs`, and the least recently used past the cap.
+   * A connector with a statement running on it is in use, however long ago it was handed out: it is passed over,
+   * and goes at a later pass once it is idle (one runs as soon as a busy connector finishes while the pool is over
+   * its cap).
+   */
   async evictIdle(now = Date.now()): Promise<number> {
-    const network = [...this.connectors.keys()].filter((key) => !this.local.has(key));
-    const byAge = network.sort((a, b) => (this.lastUsed.get(a) ?? 0) - (this.lastUsed.get(b) ?? 0));
-    const idle = byAge.filter((key) => now - (this.lastUsed.get(key) ?? 0) > this.idleMs);
-    const overCap = byAge.filter((key) => !idle.includes(key)).slice(0, Math.max(0, byAge.length - idle.length - this.maxConnectors));
-    let evicted = 0;
-    for (const key of [...idle, ...overCap]) {
-      const connector = this.connectors.get(key);
-      if (!connector) continue;
-      this.connectors.delete(key);
-      this.lastUsed.delete(key);
-      evicted += 1;
-      try { await connector.disconnect(); } catch { /* already evicted; a later query reconnects */ }
+    const network = [...this.connectors.values()].filter((entry) => !entry.local);
+    const byAge = network.sort((a, b) => a.lastUsed - b.lastUsed);
+    const idle = byAge.filter((entry) => entry.inFlight === 0 && now - entry.lastUsed > this.idleMs);
+    const excess = Math.max(0, byAge.length - idle.length - this.maxConnectors);
+    const overCap = byAge.filter((entry) => entry.inFlight === 0 && !idle.includes(entry)).slice(0, excess);
+    // Chosen and taken out of the pool in one step, before any disconnect is awaited: a connector handed out
+    // while an earlier one disconnects is no longer among those chosen.
+    const evicted = [...idle, ...overCap].filter((entry) => this.connectors.get(entry.key) === entry);
+    for (const entry of evicted) this.connectors.delete(entry.key);
+    const lingered = [...this.retired].filter((entry) => entry.inFlight === 0 && now - (entry.retiredAt ?? 0) >= RETIRED_LINGER_MS);
+    for (const entry of lingered) this.retired.delete(entry);
+    for (const entry of [...evicted, ...lingered]) {
+      try { await entry.connector.disconnect(); } catch { /* already out of the pool; a later query reconnects */ }
     }
-    return evicted;
+    return evicted.length;
   }
 
+  /** A connector for this connection. For one statement, `acquire` also keeps it from being evicted meanwhile. */
   async getConnector(config: ConnectionConfig): Promise<DatabaseConnector> {
+    return (await this.obtain(config, false)).connector;
+  }
+
+  /**
+   * A connector to run one statement on, counted as in use from this moment until `release`: it is not evicted
+   * or disconnected for its age in between.
+   */
+  async acquire(config: ConnectionConfig): Promise<ConnectorLease> {
+    const entry = await this.obtain(config, true);
+    let released = false;
+    return {
+      connector: entry.connector,
+      release: () => {
+        if (released) return;
+        released = true;
+        this.finished(entry);
+      },
+    };
+  }
+
+  private obtain(config: ConnectionConfig, lease: boolean): Promise<PooledConnector> {
     const key = this.configKey(config);
     this.arm();
-    this.lastUsed.set(key, Date.now());
-    if (LOCAL_DRIVERS.has(config.driver)) this.local.add(key);
+    const now = Date.now();
     const existing = this.connectors.get(key);
-    if (existing) return existing;
-    const pending = this.pendingConnectors.get(key);
-    if (pending) return pending;
+    if (existing) {
+      if (this.tooOld(existing, now)) {
+        // The next use signs in again, with this statement's credential. Statements still running on the old
+        // session finish there; it is disconnected once they have.
+        this.retire(existing, now);
+      } else {
+        existing.lastUsed = now;
+        if (lease) existing.inFlight += 1;
+        return Promise.resolve(existing);
+      }
+    }
+    let pending = this.pendingConnectors.get(key);
+    if (!pending) {
+      const record: PendingConnector = { leases: 0, promise: undefined as unknown as Promise<PooledConnector> };
+      this.pendingConnectors.set(key, record);
+      record.promise = this.connect(key, config, record);
+      pending = record;
+    }
+    // Counted before the connector exists, so it is already in use when it enters the pool.
+    if (lease) pending.leases += 1;
+    return pending.promise;
+  }
 
-    const connectPromise = (async () => {
-      const connector = this.createConnector(config);
+  private async connect(key: string, config: ConnectionConfig, record: PendingConnector): Promise<PooledConnector> {
+    let connector: DatabaseConnector | undefined;
+    try {
+      const created = this.createConnector(config);
+      connector = created;
       // A database in a private network is reached through an SSH bastion;
       // the tunnel lives exactly as long as the connector.
       const tunnel = config.sshTunnel ? await openSshTunnel(config) : null;
       if (tunnel) {
-        const disconnect = connector.disconnect.bind(connector);
-        connector.disconnect = async () => {
+        const disconnect = created.disconnect.bind(created);
+        created.disconnect = async () => {
           try {
             await disconnect();
           } finally {
@@ -203,37 +343,121 @@ export class ConnectionPoolManager {
           }
         };
       }
+      await created.connect(tunnel ? tunnel.config : config);
+      const now = Date.now();
+      const local = LOCAL_DRIVERS.has(config.driver);
+      const entry: PooledConnector = {
+        key,
+        connector: created,
+        local,
+        identityPooled: !local && isIdentityPooled(config),
+        connectedAt: now,
+        lastUsed: now,
+        // Everyone who waited for it to run a statement at once: it enters the pool already in use.
+        inFlight: record.leases,
+      };
+      if (!local) this.track(entry);
+      this.connectors.set(key, entry);
+      return entry;
+    } catch (error) {
       try {
-        await connector.connect(tunnel ? tunnel.config : config);
-        this.connectors.set(key, connector);
-        return connector;
-      } catch (error) {
-        try {
-          await connector.disconnect();
-        } catch {
-          // The original connection error remains authoritative.
-        }
-        throw error;
-      } finally {
-        this.pendingConnectors.delete(key);
+        await connector?.disconnect();
+      } catch {
+        // The original connection error remains authoritative.
       }
-    })();
-    this.pendingConnectors.set(key, connectPromise);
-    return connectPromise;
+      throw error;
+    } finally {
+      if (this.pendingConnectors.get(key) === record) this.pendingConnectors.delete(key);
+    }
   }
 
+  private tooOld(entry: PooledConnector, now: number): boolean {
+    return entry.identityPooled && this.maxSessionAgeMs > 0 && now - entry.connectedAt > this.maxSessionAgeMs;
+  }
+
+  /** Take a connector out of the pool; it is disconnected once nothing runs on it (see `evictIdle`, `finished`). */
+  private retire(entry: PooledConnector, now: number): void {
+    if (this.connectors.get(entry.key) === entry) this.connectors.delete(entry.key);
+    entry.retiredAt = now;
+    this.retired.add(entry);
+  }
+
+  /** One statement on this connector is over. */
+  private finished(entry: PooledConnector): void {
+    entry.inFlight = Math.max(0, entry.inFlight - 1);
+    entry.lastUsed = Date.now();
+    if (entry.inFlight > 0) return;
+    if (entry.retiredAt !== undefined) {
+      if (this.retired.has(entry) && Date.now() - entry.retiredAt >= RETIRED_LINGER_MS) {
+        this.retired.delete(entry);
+        void entry.connector.disconnect().catch(() => undefined);
+      }
+      return;
+    }
+    // A busy connector kept the pool over its cap: now that it is idle, the cap is applied again.
+    const network = [...this.connectors.values()].filter((item) => !item.local).length;
+    if (network > this.maxConnectors) void this.evictIdle().catch(() => undefined);
+  }
+
+  /**
+   * Count the statements that run on a network connector, whoever calls it: the executor's own statements and a
+   * caller that keeps the connector (a catalog listing, a stream). `this` is passed through, so a wrapper around
+   * the connector still sees its own `execute` from inside a catalog lookup.
+   */
+  private track(entry: PooledConnector): void {
+    const connector = entry.connector as unknown as Record<string, unknown>;
+    const pool = this;
+    for (const method of ['execute', 'listTables', 'listColumns'] as const) {
+      const original = connector[method];
+      if (typeof original !== 'function') continue;
+      const tracked = function (this: unknown, ...args: unknown[]): unknown {
+        entry.inFlight += 1;
+        entry.lastUsed = Date.now();
+        let result: unknown;
+        try {
+          result = (original as (...call: unknown[]) => unknown).apply(this ?? connector, args);
+        } catch (error) {
+          pool.finished(entry);
+          throw error;
+        }
+        return Promise.resolve(result).finally(() => pool.finished(entry));
+      };
+      try { connector[method] = tracked; } catch { /* a connector that cannot be wrapped is counted by its leases only */ }
+    }
+    const stream = connector.stream;
+    if (typeof stream === 'function') {
+      const tracked = function (this: unknown, ...args: unknown[]): AsyncIterable<unknown> {
+        const self = this ?? connector;
+        return (async function* counted() {
+          entry.inFlight += 1;
+          entry.lastUsed = Date.now();
+          try {
+            yield* (stream as (...call: unknown[]) => AsyncIterable<unknown>).apply(self, args);
+          } finally {
+            pool.finished(entry);
+          }
+        })();
+      };
+      try { connector.stream = tracked; } catch { /* as above */ }
+    }
+  }
+
+  /**
+   * Drop a session that is known to be lost (the executor calls this before it signs in again). It is
+   * disconnected at once: nothing can finish on it.
+   */
   async removeConnector(
     config: ConnectionConfig,
     expectedConnector?: DatabaseConnector,
   ): Promise<void> {
     const key = this.configKey(config);
-    const connector = this.connectors.get(key);
-    if (!connector || (expectedConnector && connector !== expectedConnector)) return;
+    const entry = this.connectors.get(key);
+    if (!entry || (expectedConnector && entry.connector !== expectedConnector)) return;
     // Evict before disconnecting. A slow vendor disconnect must not delete a
     // replacement connector established concurrently by another query.
     this.connectors.delete(key);
     try {
-      await connector.disconnect();
+      await entry.connector.disconnect();
     } catch {
       // The stale connector is already evicted; reconnect remains available.
     }
@@ -242,11 +466,12 @@ export class ConnectionPoolManager {
   async disconnectAll(): Promise<void> {
     if (this.sweeper) clearInterval(this.sweeper);
     this.sweeper = undefined;
-    await Promise.allSettled(this.pendingConnectors.values());
-    const promises = [...this.connectors.values()].map((c) => c.disconnect());
-    await Promise.all(promises);
+    await Promise.allSettled([...this.pendingConnectors.values()].map((pending) => pending.promise));
+    const all = [...this.connectors.values(), ...this.retired];
     this.connectors.clear();
+    this.retired.clear();
     this.pendingConnectors.clear();
+    await Promise.all(all.map((entry) => entry.connector.disconnect()));
   }
 
   private createConnector(config: ConnectionConfig): DatabaseConnector {

@@ -1,6 +1,6 @@
 import type { DatabaseConnector, ConnectionConfig } from './connector.js';
 import type { QueryExecutionOptions, QueryResult } from './result-types.js';
-import { ConnectionPoolManager } from './connection-pool.js';
+import { ConnectionPoolManager, type ConnectorLease } from './connection-pool.js';
 import { buildParamValues, expandArrayParameters, normalizeSQLPlaceholders, type SQLParamSpec } from './sql-params.js';
 
 const CONNECTION_LOSS_PATTERNS = [
@@ -96,7 +96,9 @@ export class QueryExecutor {
     // With nothing to bind, a `$1` is the SQL's own (Snowflake's `->> … FROM $1` reads the result
     // before it), never a placeholder: rewriting it to `?` broke the statement (live, 2026-11-07).
     const normalizedSQL = values ? normalizeSQLPlaceholders(sql, config.driver) : sql;
-    const connector = await this.pool.getConnector(config);
+    // In use from the moment the pool hands it over until the statement is over: the pool never evicts it meanwhile.
+    const lease = await this.lease(config);
+    const connector = lease.connector;
     const startedAt = Date.now();
     try {
       return await connector.execute(normalizedSQL, values, options);
@@ -108,19 +110,36 @@ export class QueryExecutor {
 
       // One bounded retry after evicting the exact failed session. The pool's
       // expected-connector guard prevents concurrent recovery from evicting a
-      // healthy replacement established by another request.
+      // healthy replacement established by another request. The new session
+      // signs in with this statement's own settings: for a per-person sign-in,
+      // the token the host gave for this statement, never the one the lost
+      // session signed in with.
+      lease.release();
       await this.pool.removeConnector(config, connector);
-      const replacement = await this.pool.getConnector(config);
-      const remainingDeadline = options?.deadlineMs === undefined
-        ? undefined
-        : options.deadlineMs - (Date.now() - startedAt);
-      if (remainingDeadline !== undefined && remainingDeadline <= 0) throw error;
-      return replacement.execute(
-        normalizedSQL,
-        values,
-        remainingDeadline === undefined ? options : { ...options, deadlineMs: remainingDeadline },
-      );
+      const replacement = await this.lease(config);
+      try {
+        const remainingDeadline = options?.deadlineMs === undefined
+          ? undefined
+          : options.deadlineMs - (Date.now() - startedAt);
+        if (remainingDeadline !== undefined && remainingDeadline <= 0) throw error;
+        return await replacement.connector.execute(
+          normalizedSQL,
+          values,
+          remainingDeadline === undefined ? options : { ...options, deadlineMs: remainingDeadline },
+        );
+      } finally {
+        replacement.release();
+      }
+    } finally {
+      lease.release();
     }
+  }
+
+  /** A connector for one statement; a pool that can count statements in flight (`acquire`) is told when it is over. */
+  private async lease(config: ConnectionConfig): Promise<ConnectorLease> {
+    const pool = this.pool as ConnectionPoolManager & { acquire?: ConnectionPoolManager['acquire'] };
+    if (typeof pool.acquire === 'function') return pool.acquire(config);
+    return { connector: await this.pool.getConnector(config), release: () => undefined };
   }
 
   async disconnect(): Promise<void> {

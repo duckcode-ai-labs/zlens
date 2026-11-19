@@ -6,6 +6,8 @@ import type {
   QueryExecutor,
   QueryPurpose,
 } from '@zlens/connectors';
+import { createConnectionConfigKey } from '@zlens/connectors';
+import { EXECUTION_SCOPE, SHARED_EXECUTION_SCOPE, executionIdentityDigest, executionScopeOf, unknownExecutionScope } from './execution-scope.js';
 import { classifyWarehouseError, hostedWarehouseError, warehouseDiagnosis } from '@zlens/agent';
 import { analyzeSqlReferences, extractTablesFromSql } from '@zlens/core';
 import { currentDestination, currentPrincipal, currentRequestContext, type DqlDestination, type DqlPrincipal, type DqlStatementObserver } from './request-context.js';
@@ -71,8 +73,22 @@ export type DqlRowPolicy = (query: DqlQueryContext) => Promise<DqlRowPolicyResul
  * credentials, Redshift identity propagation), a per-person role, or a
  * different target. The warehouse's own row and column rules then apply.
  * Refusing — for example an expired token — stops the query with "reconnect";
- * ZLens never retries with the service credential. Connections are pooled by
- * their full settings, so each person's credentials get their own connection.
+ * ZLens never retries with the service credential.
+ *
+ * WHO IT RUNS AS. The answer may name the `identity` the connection runs
+ * with: an opaque, stable string for whose warehouse permissions apply (a
+ * warehouse user or role, the host's own id for the person), never a
+ * credential. ZLens keeps a digest of it, never the name. With it:
+ *  - on a warehouse whose session outlives its token (Snowflake), one
+ *    session is kept per identity, so a token that renews (even on every
+ *    request) does not sign in again; a new sign-in uses the newest token,
+ *    and happens at least every ten minutes so a change of role takes effect;
+ *  - what ZLens remembers from that person's statements (a table's columns,
+ *    a missing table, measured values) stays theirs across renewals.
+ * Two people must never share an identity unless the warehouse shows them the
+ * same data. Without `identity`, a hook that changes the connection gets one
+ * scope and one connection per credential: nothing is shared between people,
+ * and nothing survives a renewal either.
  */
 export interface DqlCredentialsContext {
   principal: DqlPrincipal | null;
@@ -81,8 +97,11 @@ export interface DqlCredentialsContext {
   purpose: QueryPurpose;
 }
 
-/** Settings to lay over the connection for this person (any field but `driver`), or a refusal. */
-export type DqlCredentialsResult = { connection: Partial<ConnectionConfig> } | { refuse: string };
+/**
+ * Settings to lay over the connection for this person (any field but `driver`), with, optionally, the `identity`
+ * the connection then runs as; or a refusal.
+ */
+export type DqlCredentialsResult = { connection: Partial<ConnectionConfig>; identity?: string } | { refuse: string };
 
 export type DqlCredentialsHook = (input: DqlCredentialsContext) => Promise<DqlCredentialsResult> | DqlCredentialsResult;
 
@@ -118,8 +137,15 @@ export async function resolvePersonConnection(hook: DqlCredentialsHook, config: 
   }
   const connection = answer.connection;
   if (!isAnswerObject(connection)) throw new CredentialsRefusedError(CREDENTIALS_UNREADABLE);
-  const { driver: _ignored, ...overlay } = connection as Partial<ConnectionConfig>;
-  return { ...config, ...overlay } as ConnectionConfig;
+  // An identity is a name, or absent. An empty one names nobody (it must never pool everyone together); anything
+  // else (a number, an object) is a host error and refuses, as any other unusable answer does.
+  const named = answer.identity;
+  if (named !== undefined && named !== null && typeof named !== 'string') throw new CredentialsRefusedError(CREDENTIALS_UNREADABLE);
+  const identity = typeof named === 'string' && named.trim() ? named.trim() : undefined;
+  // Only `identity` says who the connection runs as: never a field of the overlay or of the project's own settings.
+  const { driver: _ignored, executionIdentity: _unnamed, ...overlay } = connection as Partial<ConnectionConfig>;
+  const { executionIdentity: _configured, ...base } = config;
+  return { ...base, ...overlay, ...(identity ? { executionIdentity: executionIdentityDigest(identity) } : {}) } as ConnectionConfig;
 }
 
 export class RowPolicyRefusedError extends Error {
@@ -510,8 +536,33 @@ export function withHostQueryHooks<T extends QueryExecutor>(executor: T, hooks: 
     const connection = credentials ? await resolvePersonConnection(credentials, config, purpose) : config;
     return engine ? restrictedEngineConnection(connection) : connection;
   };
+  /**
+   * The execution scope a statement of the current request would run in (execution-scope.ts): the same hook, the
+   * same person and purpose as the statement itself. Asked once per request, connection and purpose. A hook that
+   * refuses or fails gives a scope of the request's own, so nothing it keeps is found by anyone else.
+   */
+  const requestScopes = new WeakMap<object, Map<string, Promise<string>>>();
+  const executionScope = (config: ConnectionConfig, purpose?: QueryPurpose): Promise<string> => {
+    if (!credentials) return Promise.resolve(SHARED_EXECUTION_SCOPE);
+    const resolve = async (): Promise<string> => {
+      try {
+        return executionScopeOf(config, await resolvePersonConnection(credentials, config, purpose));
+      } catch {
+        return unknownExecutionScope();
+      }
+    };
+    const request = currentRequestContext();
+    if (!request) return resolve();
+    let known = requestScopes.get(request);
+    if (!known) requestScopes.set(request, known = new Map());
+    const key = `${purpose ?? 'data'}\u0000${createConnectionConfigKey(config)}`;
+    let scope = known.get(key);
+    if (!scope) known.set(key, scope = resolve());
+    return scope;
+  };
   return new Proxy(executor, {
     get(target, property, receiver) {
+      if (property === EXECUTION_SCOPE) return executionScope;
       const own = Reflect.get(target, property, target);
       if (typeof own !== 'function') return own;
       if (property === 'executePositional') {

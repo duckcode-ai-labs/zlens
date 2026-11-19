@@ -963,6 +963,7 @@ import { isRunPass, issueRunPass, redeemRunPass, revokeRunPass } from './host/sc
 import { setDeliverySink } from './schedule/notifiers/index.js';
 import { routeAction, type DqlAction } from './host/route-actions.js';
 import { relationsOf, relationsOfStatements, withHostQueryHooks } from './host/row-policy.js';
+import { SHARED_EXECUTION_SCOPE, executionScopeFor, scopedKey, setBounded } from './host/execution-scope.js';
 import { exportFile, exportFormat, type ExportFile } from './export/result-file.js';
 import { auditActor, auditModelUsage, auditRequest, otlpHeadersFromEnv, traceQuestionKey, withAnswerAudit, withTraceExport } from './host/observability.js';
 import { isProgramError, logUnderReference, plainFailureMessage } from './host/plain-errors.js';
@@ -5858,27 +5859,33 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
    * a connection, or when the lookup fails, dbt's own columns are used.
    */
   const nodeDetailWithColumns = async (snapshotId: string, uniqueId: string): Promise<DbtNodeAuthoringDetail | undefined> => {
-    const cacheKey = `${snapshotId}:${uniqueId}`;
-    if (dbtNodeDetailCache.has(cacheKey)) return dbtNodeDetailCache.get(cacheKey);
     if (isWarehouseNodeId(uniqueId)) {
+      const cacheKey = `${snapshotId}:${uniqueId}`;
+      if (dbtNodeDetailCache.has(cacheKey)) return dbtNodeDetailCache.get(cacheKey);
       // The warehouse catalog snapshot already holds the relation's columns.
       const warehouseDetail = loadWarehouseNodeAuthoringDetail(projectRoot, uniqueId);
-      dbtNodeDetailCache.set(cacheKey, warehouseDetail);
+      setBounded(dbtNodeDetailCache, cacheKey, warehouseDetail, 5_000);
       return warehouseDetail;
     }
+    // The columns are completed through the connection of whoever asks: with a host's per-person sign-in, what one
+    // person's role shows (or cannot see) is kept for that execution scope only (host/execution-scope.ts).
+    let activeConnection: ConnectionConfig | undefined;
+    try { activeConnection = await resolveExecutionConnection({}); } catch { activeConnection = undefined; }
+    const cacheKey = scopedKey(`${snapshotId}:${uniqueId}`, await executionScopeFor(executor, activeConnection));
+    if (dbtNodeDetailCache.has(cacheKey)) return dbtNodeDetailCache.get(cacheKey);
     const dbtManifestPath = resolveDbtManifestPath(projectRoot);
     let detail = dbtManifestPath ? loadDbtNodeAuthoringDetail(dbtManifestPath, uniqueId) : undefined;
     const sql = detail?.relation ? buildNamedRelationProbeSql([detail.relation], 1) : null;
     if (detail && sql) {
       try {
-        const activeConnection = await resolveExecutionConnection({});
+        if (!activeConnection) throw new Error('no connection');
         const result = await executor.executeQuery(sql, [], {}, activeConnection);
         detail = mergeWarehouseColumns(detail, result.rows as Array<Record<string, unknown>>);
       } catch {
         // No warehouse to ask: the builder still offers the columns dbt documents.
       }
     }
-    dbtNodeDetailCache.set(cacheKey, detail);
+    setBounded(dbtNodeDetailCache, cacheKey, detail, 5_000);
     return detail;
   };
   const onboardingJobs = new Map<string, DbtPreparationJob>();
@@ -8570,12 +8577,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     for (const join of joins) {
       if (join.uniqueness === 'current') continue;
       const sql = joinUniquenessSql(join, datasetQuote(target.driver));
-      const key = `${targetFingerprint}\u0000${sql}`;
+      // Whether a key repeats depends on the rows the asker may see: one answer per execution scope.
+      const key = scopedKey(`${targetFingerprint}\u0000${sql}`, await executionScopeFor(executor, target));
       let entry = joinUniquenessChecks.get(key);
       if (!entry || Date.now() - entry.at > 60_000) {
         const check = executor.executeQuery(sql, [], {}, target).then((result) => result.rows.length === 0);
         entry = { at: Date.now(), check };
-        joinUniquenessChecks.set(key, entry);
+        setBounded(joinUniquenessChecks, key, entry, 5_000);
         check.catch(() => joinUniquenessChecks.delete(key));
       }
       if (!(await entry.check)) throw new Error(joinRepeatsKeyMessage(join, datasetLabel));
@@ -11873,12 +11881,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           valueGrounding.searchSafeColumns,
         )
         : schemaContext.ranked;
-      recordAgentRuntimeSchemaSnapshot(
-        projectRoot,
-        schemaContext.snapshot,
-        'question-scoped information_schema search',
-        executionConnectionName,
-      );
+      // The project's runtime schema snapshot is read by everyone. What a person's own warehouse sign-in showed
+      // for one question serves that question and is not written into it.
+      if (await executionScopeFor(executor, schemaConnection) === SHARED_EXECUTION_SCOPE) {
+        recordAgentRuntimeSchemaSnapshot(
+          projectRoot,
+          schemaContext.snapshot,
+          'question-scoped information_schema search',
+          executionConnectionName,
+        );
+      }
       return enriched;
     } catch {
       return [];
@@ -14266,7 +14278,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if ((block.parameters?.length ?? 0) > 0) {
       return { ok: false, status: 409, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens can't read its columns. Add it as a table, chart or KPI.` };
     }
-    const key = `${source.sourceId}\u0000${source.sourceRevision}`;
+    // One in-flight read per execution scope: a person who arrives during another person's read runs their own, and
+    // never gets that person's outcome (a refusal by the warehouse is theirs alone).
+    let readConnection: ConnectionConfig | undefined;
+    try { readConnection = input.connection ?? requireActiveConnection(); } catch { readConnection = undefined; }
+    const key = scopedKey(`${source.sourceId}\u0000${source.sourceRevision}`, await executionScopeFor(executor, readConnection, 'metadata'));
     const pending = savedQueryFieldReads.get(key);
     if (pending) return pending;
     const reading = (async (): Promise<SavedQueryFieldsOutcome> => {
@@ -17643,7 +17659,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         ...(run?.askAgentRuntimeMode ? { runtimeMode: run.askAgentRuntimeMode } : {}),
       };
       // RFC 0010: a reviewer reading someone else's trace gets it rebuilt from an allowlist: how it was answered, no value.
-      res.end(serializeJSON(ownsRun ? detail : traceDetailForReviewer(detail, { secret: traceReviewSecret(), dialect: connection?.driver, run, catalog: askPipelineHost.catalogNames() })));
+      res.end(serializeJSON(ownsRun ? detail : traceDetailForReviewer(detail, { secret: traceReviewSecret(), dialect: connection?.driver, run, catalog: askPipelineHost.catalogNames(await executionScopeFor(executor, connection ?? undefined)) })));
       return;
     }
 
@@ -17738,7 +17754,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         ...(run?.askAgentRuntimeMode ? { runtimeMode: run.askAgentRuntimeMode } : {}),
       };
       // RFC 0010: a reviewer reading someone else's trace gets it rebuilt from an allowlist: how it was answered, no value.
-      res.end(serializeJSON(ownsRun ? detail : traceDetailForReviewer(detail, { secret: traceReviewSecret(), dialect: connection?.driver, run, catalog: askPipelineHost.catalogNames() })));
+      res.end(serializeJSON(ownsRun ? detail : traceDetailForReviewer(detail, { secret: traceReviewSecret(), dialect: connection?.driver, run, catalog: askPipelineHost.catalogNames(await executionScopeFor(executor, connection ?? undefined)) })));
       return;
     }
 
@@ -44509,7 +44525,9 @@ async function cachedCatalogTableRows(
     perExecutor = new Map();
     catalogTableRowCache.set(executor, perExecutor);
   }
-  const key = JSON.stringify(connection);
+  // The tables listed are the ones the asker's connection shows (a host's per-person sign-in): one listing per
+  // execution scope, asked for the same purpose as the statement below.
+  const key = scopedKey(JSON.stringify(connection), await executionScopeFor(executor, connection, 'metadata'));
   const hit = perExecutor.get(key);
   if (hit && now() - hit.at < CATALOG_TABLE_ROWS_TTL_MS) return hit.rows;
   const pending = executor.executeQuery(
@@ -44520,10 +44538,10 @@ async function cachedCatalogTableRows(
     [], {}, connection, { purpose: 'metadata' },
   ).then((result) => result.rows as Array<Record<string, unknown>>);
   // Concurrent callers share one scan; a failed scan is never remembered.
-  perExecutor.set(key, { at: now(), rows: pending });
+  setBounded(perExecutor, key, { at: now(), rows: pending }, 2_000);
   try {
     const rows = await pending;
-    perExecutor.set(key, { at: now(), rows });
+    setBounded(perExecutor, key, { at: now(), rows }, 2_000);
     return rows;
   } catch (error) {
     if (perExecutor.get(key)?.rows === pending) perExecutor.delete(key);

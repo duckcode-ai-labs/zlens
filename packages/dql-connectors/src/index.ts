@@ -11,7 +11,7 @@ export {
   type ColumnType,
   type Row,
 } from './result-types.js';
-export { ConnectionPoolManager } from './connection-pool.js';
+export { CONNECTION_CREDENTIAL_FIELDS, ConnectionPoolManager, createConnectionConfigKey, isIdentityPooled, type ConnectionPoolOptions, type ConnectorLease } from './connection-pool.js';
 export { QueryExecutor } from './query-executor.js';
 export { MissingConnectorDependencyError, ConnectorNativeBindingError } from './optional-dependency.js';
 export {
