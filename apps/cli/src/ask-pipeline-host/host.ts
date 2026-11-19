@@ -99,6 +99,7 @@ import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certi
 import { readEnv } from '@zlens/core';
 import { readValueProfile, renderColumnProfile } from '../value-profile.js';
 import { resultReviewEnabled } from '../result-review-setting.js';
+import { SHARED_EXECUTION_SCOPE, executionScopeFor, scopedKey, setBounded } from '../host/execution-scope.js';
 
 /**
  * THE ASK PIPELINE HOST.
@@ -603,7 +604,13 @@ interface KindNames { names?: Record<string, string>; words?: Record<string, str
 const KIND_NAMES = new Map<string, KindNames>();
 /** Whether a table's name column ever differs from its key, per connection (a season name that is the season does not). */
 const LABEL_DIFFERS = new Map<string, boolean>();
-const kindNamesKey = (connection: ConnectionConfig, kinds: CodeKinds) => `${connectionKey(connection)}|${kinds.code.toLowerCase()}|${kinds.values.map((value) => value.first).join('')}`;
+const kindNamesKey = (connection: ConnectionConfig, kinds: CodeKinds, scope: string) => `${scopedKey(connectionKey(connection), scope)}|${kinds.code.toLowerCase()}|${kinds.values.map((value) => value.first).join('')}`;
+/**
+ * What these caches hold was seen through a query connection, so each key carries the execution scope of the
+ * request that saw it (host/execution-scope.ts): with a host's per-person sign-in, one person's rows, columns and
+ * missing tables are never another's. The keys then multiply with the people asking, so each cache is bounded.
+ */
+const SCOPED_CACHE_ENTRIES = 5_000;
 /** How long a naming call may run, beside the reading or after the run that started it. */
 const KIND_NAMING_MS = 90_000;
 
@@ -1822,8 +1829,10 @@ export interface AskPipelineHost {
    * Every name the project itself uses (lower case): relations and their parts, their columns (from the manifest and
    * from the warehouse columns probed so far), metrics, measures, dimensions, entities, models and block outputs. A
    * trace read by someone other than the asker keeps an identifier only when it is one of these (host/trace-review.ts).
+   * `scope` is the reader's execution scope (host/execution-scope.ts): columns probed through another person's
+   * connection are not among the names.
    */
-  catalogNames(): Set<string>;
+  catalogNames(scope?: string): Set<string>;
 }
 
 export function createAskPipelineRouteExecutor(deps: AskPipelineHostDeps): AgentRouteExecutor {
@@ -1833,13 +1842,15 @@ export function createAskPipelineRouteExecutor(deps: AskPipelineHostDeps): Agent
 export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHost {
   let vocabularyCache: VocabularyCacheEntry | undefined;
   const preparationCache = new Map<string, PreparedCandidate>();
+  // Bounded: its keys carry the execution scope (see SCOPED_CACHE_ENTRIES).
+  const boundedPreparations = { get: (key: string) => preparationCache.get(key), set: (key: string, value: PreparedCandidate) => { setBounded(preparationCache, key, value, SCOPED_CACHE_ENTRIES); } };
 
   // The warehouse completes only the relations this question is about.  Cache
   // entries are target-specific and short lived for partial/negative evidence:
   // a failed or bounded metadata page never becomes a permanent "missing"
   // claim after a role/catalog/configuration change.
   type ProbeCacheState = 'complete' | 'partial' | 'negative';
-  type ProbeCacheEntry = { relation?: ProbedRelation; state: ProbeCacheState; expiresAt: number };
+  type ProbeCacheEntry = { relation?: ProbedRelation; state: ProbeCacheState; expiresAt: number; /** The execution scope that saw it. */ scope: string };
   // Cache one exact physical relation at a time. A wide table must not make
   // a narrow sibling partial (or vice versa), and negative warehouse evidence
   // must expire quickly because Snowflake deliberately conflates unavailable
@@ -1852,13 +1863,14 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     requested?: string[],
     remainingMs?: number,
     signal?: AbortSignal,
+    scope: string = SHARED_EXECUTION_SCOPE,
   ): Promise<ProbedRelation[]> => {
     if (!connection) return [];
     // An explicit empty list probes nothing; only an absent list falls back to
     // the relations the metadata left without columns.
     const wanted = requested ?? relationsNeedingColumns(base);
     if (wanted.length === 0) return [];
-    const cacheKey = (relation: string) => `${snapshotId}|${connectionKey(connection)}|${physicalRelationIdentity(relation)}`;
+    const cacheKey = (relation: string) => `${snapshotId}|${scopedKey(connectionKey(connection), scope)}|${physicalRelationIdentity(relation)}`;
     const found: ProbedRelation[] = [];
     // BOUNDED: an information_schema lookup on a large warehouse can take
     // seconds per statement; the probe stops issuing statements once its
@@ -1873,11 +1885,12 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         if (state !== 'complete') aggregate.truncated = true;
         found.push(aggregate);
       }
-      probedColumns.set(cacheKey(raw), {
+      setBounded(probedColumns, cacheKey(raw), {
         ...(aggregate ? { relation: aggregate } : {}),
         state,
         expiresAt: Date.now() + (state === 'complete' ? 15 * 60_000 : 60_000),
-      });
+        scope,
+      }, SCOPED_CACHE_ENTRIES);
     };
     const mergePage = (aggregate: ProbedRelation | undefined, page: ProbedRelation): ProbedRelation => {
       if (!aggregate) return { ...page, columns: [...page.columns] };
@@ -2069,7 +2082,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
   // next question about the same relations (the base is cached above; a
   // rebuild is a few hundred milliseconds at 5,000 relations, but not free).
   const discoveredSourceCache = new Map<string, VocabularySource>();
-  const vocabularyFor = async (request: AgentRunRequest, connection?: ConnectionConfig): Promise<VocabularyView> => {
+  const vocabularyFor = async (request: AgentRunRequest, connection?: ConnectionConfig, scope: string = SHARED_EXECUTION_SCOPE): Promise<VocabularyView> => {
     // Where the context time goes, phase by phase: the office trace reads it.
     const phases: Record<string, number> = {};
     const timed = async <T>(phase: string, work: () => Promise<T> | T): Promise<T> => {
@@ -2080,8 +2093,9 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     const { key: baseKey, source: base } = await timed('base', () => baseSourceFor(connection));
     const remaining = request.runBudget?.remainingMs();
     const relevant = await timed('relevance', () => relevantRelationsForQuestion(base, request.question, 3));
-    const discovered = await timed('probe', () => probeColumns(connection, base, envelope.snapshotId, relevant, remaining, request.signal));
-    const key = `${baseKey}|discovery:${discovered.map((relation) => `${relation.database ?? ''}.${relation.schema ?? ''}.${relation.name}:${relation.columns.length}:${relation.columnCompleteness ?? 'unknown'}`).join(',')}`;
+    const discovered = await timed('probe', () => probeColumns(connection, base, envelope.snapshotId, relevant, remaining, request.signal, scope));
+    // The columns found are this scope's: a source or a view built from them is never another scope's.
+    const key = `${scopedKey(baseKey, scope)}|discovery:${discovered.map((relation) => `${relation.database ?? ''}.${relation.schema ?? ''}.${relation.name}:${relation.columns.length}:${relation.columnCompleteness ?? 'unknown'}`).join(',')}`;
     const source = discovered.length
       ? await timed('source', () => {
         const cached = discoveredSourceCache.get(key);
@@ -2146,7 +2160,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
   // A relationship the warehouse proved holds for as long as the snapshot and
   // the connection do; proving it twice would ask the same question twice.
   const provenJoins = new Map<string, Map<string, { steps: RelationalJoinStep[]; expiresAt: number; generationToken?: string }>>();
-  const prepareDeps = (connection: ConnectionConfig, vocabulary: VocabularyIndex | (() => VocabularyIndex), engine?: PrepareDeps['engine'], signal?: AbortSignal): PrepareDeps => {
+  const prepareDeps = (connection: ConnectionConfig, vocabulary: VocabularyIndex | (() => VocabularyIndex), engine?: PrepareDeps['engine'], signal?: AbortSignal, scope: string = SHARED_EXECUTION_SCOPE): PrepareDeps => {
     const currentVocabulary = () => typeof vocabulary === 'function' ? vocabulary() : vocabulary;
     const layer = deps.getSemanticLayer();
     /**
@@ -2224,8 +2238,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         physicalBindings: [...selected.values()],
       };
     };
-    const provenScope = `${deps.getManifest().snapshotId}|${connectionKey(connection)}`;
-    if (!provenJoins.has(provenScope)) provenJoins.set(provenScope, new Map());
+    const provenScope = `${deps.getManifest().snapshotId}|${scopedKey(connectionKey(connection), scope)}`;
+    if (!provenJoins.has(provenScope)) setBounded(provenJoins, provenScope, new Map(), SCOPED_CACHE_ENTRIES);
     const provenJoinPath = provenJoins.get(provenScope)!;
     const dialect = getDialect(connection.driver);
     const relationOfCube = new Map<string, string>();
@@ -2357,7 +2371,10 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     } catch (error) {
       connectionError = error;
     }
-    const view = await vocabularyFor(request, connection);
+    // Whose connection this request's statements run on (a host's per-person sign-in), asked once: everything this
+    // run remembers from the warehouse is kept under it. `shared` without a host or without that hook.
+    const executionScope = await executionScopeFor(deps.executor, connection);
+    const view = await vocabularyFor(request, connection, executionScope);
     const contextMs = Date.now() - contextStarted;
     const vocabulary = view.vocabulary;
     // Discovery may hydrate a relation after the first interpretation. Keep
@@ -2434,7 +2451,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     };
     const kindDatesOf = (kinds: CodeKinds, tables: string[]): Promise<CodeKinds['dates']> => {
       if (!connection) return Promise.resolve(undefined);
-      const cacheKey = `${deps.getManifest().snapshotId}|${connectionKey(connection)}|${kinds.code.toLowerCase()}`;
+      const cacheKey = `${deps.getManifest().snapshotId}|${scopedKey(connectionKey(connection), executionScope)}|${kinds.code.toLowerCase()}`;
       const cached = KIND_DATES.get(cacheKey);
       if (cached) return cached;
       const ruleTable = currentVocabulary().entries.flatMap((entry) => entry.kind === 'relation' && entryPhysicalRelation(entry) && sameTable(entryPhysicalRelation(entry)!, kinds.table, 'tail') ? [entryPhysicalRelation(entry)!] : []);
@@ -2457,13 +2474,13 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           return kindDatesFrom(result.rows ?? [], table.period!.replace(/"/g, ''));
         } catch { return undefined; }
       })();
-      KIND_DATES.set(cacheKey, measured);
+      setBounded(KIND_DATES, cacheKey, measured, SCOPED_CACHE_ENTRIES);
       return measured;
     };
     // Named only from evidence (the dates), once, when the rule does not name every kind itself.
     const nameKinds = (kinds: CodeKinds, dates: CodeKinds['dates']): Promise<void> | undefined => {
       if (!connection || !dates || kinds.values.every((value) => kinds.names?.[value.first])) return undefined;
-      const key = kindNamesKey(connection, kinds);
+      const key = kindNamesKey(connection, kinds, executionScope);
       const known = KIND_NAMES.get(key);
       if (known && (known.pending || known.names || (known.retryAt ?? 0) > Date.now())) return known.pending;
       const entry: KindNames = {};
@@ -2486,7 +2503,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           entry.pending = undefined;
         }
       })();
-      KIND_NAMES.set(key, entry);
+      setBounded(KIND_NAMES, key, entry, SCOPED_CACHE_ENTRIES);
       return entry.pending;
     };
     // THE KINDS ARE NAMED BESIDE THE READING: the call starts with the run and costs it no time, so the answer, the
@@ -2494,7 +2511,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     if (connection) {
       for (const kinds of codeKindsFrom(deps.getManifest().manifest?.modeling?.rules)) {
         if (kinds.values.every((value) => kinds.names?.[value.first])) continue;
-        const known = KIND_NAMES.get(kindNamesKey(connection, kinds));
+        const known = KIND_NAMES.get(kindNamesKey(connection, kinds, executionScope));
         if (known && (known.pending || known.names || (known.retryAt ?? 0) > Date.now())) continue;
         void kindDatesOf(kinds, []).then((dates) => nameKinds(kinds, dates)).catch(() => undefined);
       }
@@ -2508,7 +2525,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // Up to five when a reading or a widened search names a table; every
       // table chosen for the draft when the draft's tables are read (up to
       // DRAFT_DESCRIBE_TABLES). A table it cannot describe cannot be drafted over.
-      return probeColumns(connection, source, deps.getManifest().snapshotId, relations.slice(0, max), remaining, request.signal);
+      return probeColumns(connection, source, deps.getManifest().snapshotId, relations.slice(0, max), remaining, request.signal, executionScope);
     };
     // THE LAST TIER'S DRAFT: one read-only statement from the reading and the
     // admitted relations and columns, validated against the catalog before
@@ -2725,7 +2742,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           const id = labelId(item);
           if (checkedLabels.has(id) || !connection) continue;
           checkedLabels.add(id);
-          const cacheKey = `${connectionKey(connection)}|${id}`;
+          const cacheKey = `${scopedKey(connectionKey(connection), executionScope)}|${id}`;
           let differs = LABEL_DIFFERS.get(cacheKey);
           if (differs === undefined) {
             try {
@@ -3152,7 +3169,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const withKindDates = async (kinds: CodeKinds): Promise<CodeKinds> => {
         if (!connection) return kinds;
         const dates = await kindDatesOf(kinds, relations);
-        const key = kindNamesKey(connection, kinds);
+        const key = kindNamesKey(connection, kinds, executionScope);
         const pending = KIND_NAMES.get(key)?.pending ?? nameKinds(kinds, dates);
         if (pending) {
           // Never at the cost of the draft: it must still start inside the window.
@@ -3944,7 +3961,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             && holdsCode(entry.physical?.column ?? entry.name.split('.').pop()!, kinds.code)));
         if (!reads) return [];
         // Names outlive a snapshot (certifying a block makes a new one): named once for this target and key.
-        const cached = connection ? KIND_NAMES.get(kindNamesKey(connection, kinds)) : undefined;
+        const cached = connection ? KIND_NAMES.get(kindNamesKey(connection, kinds, executionScope)) : undefined;
         const names = cached?.names || kinds.names ? { ...(cached?.names ?? {}), ...(kinds.names ?? {}) } : undefined;
         const line = kindsAnswerLine({ ...kinds, ...(names ? { names } : {}) }, kinds.code, filter);
         return line ? [line] : [];
@@ -3962,7 +3979,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // block, metric or measure in scope): draft from the question itself.
       // ZLENS_ASK_DRAFT_FIRST=0 keeps the reading step first, for comparison.
       ...(readEnv('ZLENS_ASK_DRAFT_FIRST') !== '0' && warehouseFirstCatalog(deps.getManifest().manifest, deps.projectRoot) && !currentVocabulary().entries.some((entry) => entry.kind === 'block' || entry.kind === 'metric' || entry.kind === 'measure') ? { draftFirst: true } : {}),
-      prepareDeps: { ...prepareDeps(connection ?? { driver: 'duckdb' } as ConnectionConfig, currentVocabulary, engine, request.signal), draftSql: makeDraftSql(state) },
+      prepareDeps: { ...prepareDeps(connection ?? { driver: 'duckdb' } as ConnectionConfig, currentVocabulary, engine, request.signal, executionScope), draftSql: makeDraftSql(state) },
       ...(resultReviewEnabled(deps.resultReviewConfigured?.() === true) ? { reviewResult: makeResultReview(state) } : {}),
       executeDeps: {
         maxRows: deps.maxRows ?? 500,
@@ -4012,7 +4029,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           // A relation this connection has already proven it cannot see is
           // refused before SQL: the catalog lists it, the warehouse does not
           // have it, and a second round trip would say the same thing.
-          const cacheKey = connectionKey(connection);
+          // Per execution scope: a table one person's role cannot see is not missing for anyone else.
+          const cacheKey = scopedKey(connectionKey(connection), executionScope);
           const known = knownMissingRelation(cacheKey, sql);
           if (known) throw new Error(`'${known}' is known to be missing on this connection: the catalog lists it, the warehouse does not have it`);
           const started = Date.now();
@@ -4089,8 +4107,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       deadlineMs: request.runBudget ? Math.max(1, request.runBudget.remainingMs()) : 240_000,
       // The reading keeps enough of the window for new AI calls for the SQL draft.
       ...(request.runBudget ? { dispatchWindowMs: dispatchWindow } : {}),
-      preparationCache,
-      cacheScope: `${deps.getManifest().snapshotId}|${connection ? connectionKey(connection) : 'none'}|${vocabulary.fingerprint}`,
+      preparationCache: boundedPreparations,
+      cacheScope: `${deps.getManifest().snapshotId}|${connection ? scopedKey(connectionKey(connection), executionScope) : 'none'}|${vocabulary.fingerprint}`,
       ...(deps.buildIdentity ? { build: deps.buildIdentity() } : {}),
       trace: (event) => emit({ type: 'executor.started', message: `${event.stage}${typeof event.detail === 'number' ? ` ${event.detail} ms` : ''}`, route }),
       onStep: (entry) => emit({ type: 'executor.started', message: entry.title, route, payload: { askStep: entry } }),
@@ -4200,14 +4218,17 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     const opened = await openRequest(context);
     return 'blocked' in opened ? opened.blocked : opened.answer();
   };
-  const catalogNames = (): Set<string> => {
+  const catalogNames = (scope: string = SHARED_EXECUTION_SCOPE): Set<string> => {
     const names = new Set<string>();
     const add = (name: unknown) => { if (typeof name === 'string' && name.trim()) names.add(name.trim().replace(/^["`[]|["`\]]$/g, '').toLowerCase()); };
     let source = vocabularyCache?.source;
     if (!source) {
       try { source = buildVocabularySource(sourceInputFor(undefined)); } catch { source = undefined; }
     }
-    const relations = [...(source?.relations ?? []), ...[...probedColumns.values()].map((entry) => entry.relation).filter((relation): relation is ProbedRelation => Boolean(relation))];
+    // Columns found through a person's own connection are known to that person only: a reader gets the names the
+    // shared connection found and the ones their own scope found, never another person's.
+    const probed = [...probedColumns.values()].filter((entry) => entry.scope === SHARED_EXECUTION_SCOPE || entry.scope === scope);
+    const relations = [...(source?.relations ?? []), ...probed.map((entry) => entry.relation).filter((relation): relation is ProbedRelation => Boolean(relation))];
     for (const relation of relations) {
       for (const part of [relation.database, relation.schema, relation.name]) add(part);
       for (const column of [...(relation.columns ?? []), ...((relation as { embeddedColumns?: Array<{ name: string }> }).embeddedColumns ?? [])]) add(column.name);
@@ -4685,7 +4706,7 @@ export function recordRelationEvidence(key: string, sql: string, failure?: { cla
   missing.set(tableKey(sourceRelation), evidence);
   const tail = relationTailKey(namedRelation);
   if (tail) missing.set(tail, evidence);
-  missingByConnection.set(key, missing);
+  setBounded(missingByConnection, key, missing, SCOPED_CACHE_ENTRIES);
 }
 
 /** Test seam: forget everything learned about connections. */

@@ -293,6 +293,14 @@ export interface ConnectionConfig {
    */
   sqliteQueryIsolation?: 'worker' | 'inline';
   moduleSearchPaths?: string[];
+  /**
+   * Whose permissions this connection runs with, when a program that embeds ZLens signs each person in to the
+   * warehouse: an opaque, stable name for the identity, never a credential. Set at run time only, never read
+   * from or written to a project's files. On a driver whose session outlives its credential (Snowflake), the
+   * pool keeps one session per identity in place of one per token, so a renewed token signs in again only when
+   * that session is new, lost or too old (see `ConnectionPoolManager`). No driver sends it to a warehouse.
+   */
+  executionIdentity?: string;
 }
 
 export type DriverName = ConnectionConfig['driver'];
