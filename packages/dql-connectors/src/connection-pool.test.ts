@@ -103,6 +103,31 @@ describe('createConnectionConfigKey', () => {
   });
 });
 
+describe('createConnectionConfigKey keeps credentials out of any plain hash', () => {
+  const config = { driver: 'snowflake' as const, account: 'acct', username: 'svc', password: 'p', token: 't', warehouse: 'WH' };
+
+  it('is a digest under a key of this process: another process gives another key for the same settings', async () => {
+    const here = createConnectionConfigKey(config);
+    expect(here).toMatch(/^[0-9a-f]{64}$/);
+    expect(createConnectionConfigKey({ ...config })).toBe(here);
+    // The module loaded again stands for another process: it draws its own key.
+    vi.resetModules();
+    const other = await import('./connection-pool.js');
+    const there = other.createConnectionConfigKey(config);
+    expect(there).toMatch(/^[0-9a-f]{64}$/);
+    expect(there).not.toBe(here);
+    expect(other.createConnectionConfigKey({ ...config })).toBe(there);
+    // Within one process it still tells credentials apart.
+    expect(other.createConnectionConfigKey({ ...config, password: 'q' })).not.toBe(there);
+    expect(other.createConnectionConfigKey({ ...config, token: 'u' })).not.toBe(there);
+  });
+
+  it('never contains a setting, a credential or an identity', () => {
+    const key = createConnectionConfigKey({ ...config, password: 'correct-horse', token: 'tok-abcdef', executionIdentity: 'id-0123abcd' });
+    for (const text of ['correct-horse', 'tok-abcdef', 'id-0123abcd', 'acct', 'svc']) expect(key).not.toContain(text);
+  });
+});
+
 describe('ConnectionPoolManager singleflight', () => {
   it('shares one in-flight connector creation for concurrent callers', async () => {
     const pool = new ConnectionPoolManager();
@@ -300,13 +325,145 @@ describe('ConnectionPoolManager per-person sign-in', () => {
       expect(made[0]!.disconnected).toBe(0);
       made[0]!.release?.();
       await running;
+      // It was handed out without a lease, so its holder may run another statement: it stays for the hold.
       await pool.evictIdle(Date.now() + 60_000);
+      expect(made[0]!.disconnected).toBe(0);
+      await pool.evictIdle(Date.now() + 5 * 60_000);
       expect(made[0]!.disconnected).toBe(1);
       expect(made[1]!.disconnected).toBe(0);
       await pool.disconnectAll();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('keeps a session it retired for age connected while a caller without a lease may still use it', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const { pool, made } = poolOf({ maxSessionAgeMs: 10 * 60_000, unleasedHoldMs: 5 * 60_000 });
+      const config = (token: string) => ({ ...snowflake, token, executionIdentity: 'person-a' });
+      // A caller keeps the connector over several statements (a catalog listing, then each table's columns).
+      await (await pool.acquire(config('token-0'))).release();
+      vi.setSystemTime(new Date('2026-01-01T00:09:58Z'));
+      const held = await pool.getConnector(config('token-1'));
+      expect(made).toHaveLength(1);
+      await held.execute('SELECT 1');
+      // The session passes its age; the next statement retires it and signs in again.
+      vi.setSystemTime(new Date('2026-01-01T00:10:05Z'));
+      const lease = await pool.acquire(config('token-2'));
+      expect(lease.connector).not.toBe(held);
+      lease.release();
+      // Ten seconds on (past the five a leased session lingers) the holder is between two statements.
+      vi.setSystemTime(new Date('2026-01-01T00:10:15Z'));
+      await pool.evictIdle();
+      expect(made[0]!.disconnected).toBe(0);
+      await held.execute('SELECT 2');
+      expect(made[0]!.disconnected).toBe(0);
+      // Each statement it runs keeps it for the hold again; new work never gets it back.
+      vi.setSystemTime(new Date('2026-01-01T00:14:50Z'));
+      await pool.evictIdle();
+      expect(made[0]!.disconnected).toBe(0);
+      expect(await pool.getConnector(config('token-3'))).toBe(lease.connector);
+      // Five minutes after its last statement it goes.
+      vi.setSystemTime(new Date('2026-01-01T00:15:16Z'));
+      await pool.evictIdle();
+      expect(made[0]!.disconnected).toBe(1);
+      expect(made[1]!.disconnected).toBe(0);
+      await pool.disconnectAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disconnects a retired session that was only ever leased once its statements are over and five seconds have passed', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const { pool, made } = poolOf({ maxSessionAgeMs: 10 * 60_000 });
+      const config = (token: string) => ({ ...snowflake, token, executionIdentity: 'person-a' });
+      const first = await pool.acquire(config('token-1'));
+      const slow = first.connector.execute('slow');
+      vi.setSystemTime(new Date('2026-01-01T00:10:01Z'));
+      // Its age retires it; the statement and the lease still run on it.
+      const second = await pool.acquire(config('token-2'));
+      expect(second.connector).not.toBe(first.connector);
+      expect(made[1]!.signedInWith).toEqual(['token-2']);
+      vi.setSystemTime(new Date('2026-01-01T00:10:30Z'));
+      await pool.evictIdle();
+      expect(made[0]!.disconnected).toBe(0);
+      made[0]!.release?.();
+      await slow;
+      // The statement is over, the lease is not.
+      await pool.evictIdle();
+      expect(made[0]!.disconnected).toBe(0);
+      // The last release disconnects it at once: nobody else can hold it. Releasing twice counts once.
+      first.release();
+      first.release();
+      await Promise.resolve();
+      expect(made[0]!.disconnected).toBe(1);
+      await pool.evictIdle();
+      expect(made[0]!.disconnected).toBe(1);
+      expect((pool as any).retired.size).toBe(0);
+
+      // Released within the five seconds, it is left for the next look instead.
+      vi.setSystemTime(new Date('2026-01-01T00:20:02Z'));
+      const third = await pool.acquire(config('token-3'));
+      expect(third.connector).not.toBe(second.connector);
+      second.release();
+      await Promise.resolve();
+      expect(made[1]!.disconnected).toBe(0);
+      await pool.evictIdle(Date.now() + 4_000);
+      expect(made[1]!.disconnected).toBe(0);
+      await pool.evictIdle(Date.now() + 5_000);
+      expect(made[1]!.disconnected).toBe(1);
+      third.release();
+      await pool.disconnectAll();
+      expect(made[2]!.disconnected).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails every caller waiting for a sign-in that fails, counts none of them, and signs in again for the next', async () => {
+    const { pool, made } = poolOf();
+    const create = (pool as any).createConnector as (config: { driver: string }) => Fake;
+    let failing = true;
+    let letFail!: () => void;
+    (pool as any).createConnector = (settings: { driver: string }) => {
+      const connector = create(settings);
+      if (failing) connector.connect = () => new Promise<void>((_resolve, reject) => { letFail = () => reject(new Error('sign-in refused')); });
+      return connector;
+    };
+    const config = { ...snowflake, token: 'token-1', executionIdentity: 'person-a' };
+    // Two statements and one keeper wait for the same sign-in.
+    const waiting = [pool.acquire(config), pool.acquire(config), pool.getConnector(config)];
+    const outcomes = Promise.allSettled(waiting);
+    await Promise.resolve();
+    expect(made).toHaveLength(1);
+    letFail();
+    for (const outcome of await outcomes) {
+      expect(outcome.status).toBe('rejected');
+      expect((outcome as PromiseRejectedResult).reason).toMatchObject({ message: 'sign-in refused' });
+    }
+    // The connector that never signed in is closed once and kept nowhere.
+    expect(made[0]!.disconnected).toBe(1);
+    expect((pool as any).connectors.size).toBe(0);
+    expect((pool as any).pendingConnectors.size).toBe(0);
+    expect((pool as any).retired.size).toBe(0);
+    // The next statement signs in afresh, and is the only one counted on the new connector.
+    failing = false;
+    const lease = await pool.acquire(config);
+    expect(made).toHaveLength(2);
+    expect(lease.connector).toBe(made[1]);
+    const [entry] = [...(pool as any).connectors.values()];
+    expect(entry.inFlight).toBe(1);
+    lease.release();
+    expect(entry.inFlight).toBe(0);
+    // Idle, it can be evicted: no lease of the failed sign-in holds it.
+    expect(await pool.evictIdle(Date.now() + 31 * 60_000)).toBe(1);
+    expect(made[1]!.disconnected).toBe(1);
+    await pool.disconnectAll();
   });
 
   it('does not age a session kept by its credential, and can leave identity sessions unaged', async () => {

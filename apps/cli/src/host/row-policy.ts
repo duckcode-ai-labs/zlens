@@ -7,7 +7,7 @@ import type {
   QueryPurpose,
 } from '@zlens/connectors';
 import { createConnectionConfigKey } from '@zlens/connectors';
-import { EXECUTION_SCOPE, SHARED_EXECUTION_SCOPE, executionIdentityDigest, executionScopeOf, unknownExecutionScope } from './execution-scope.js';
+import { EXECUTION_SCOPE, SHARED_EXECUTION_SCOPE, executionIdentityDigest, executionScopeOf, markSignsPeopleIn, unknownExecutionScope } from './execution-scope.js';
 import { classifyWarehouseError, hostedWarehouseError, warehouseDiagnosis } from '@zlens/agent';
 import { analyzeSqlReferences, extractTablesFromSql } from '@zlens/core';
 import { currentDestination, currentPrincipal, currentRequestContext, type DqlDestination, type DqlPrincipal, type DqlStatementObserver } from './request-context.js';
@@ -86,7 +86,21 @@ export type DqlRowPolicy = (query: DqlQueryContext) => Promise<DqlRowPolicyResul
  *  - what ZLens remembers from that person's statements (a table's columns,
  *    a missing table, measured values) stays theirs across renewals.
  * Two people must never share an identity unless the warehouse shows them the
- * same data. Without `identity`, a hook that changes the connection gets one
+ * same data.
+ *
+ * WHAT `identity` MUST NAME. Everything that decides what the session may see.
+ * ZLens compares the identity and the settings the hook lays over the
+ * connection, and never reads the token: on a warehouse that keeps one session
+ * per identity the token is not compared at all. So when the role, the tenant,
+ * the secondary roles or any other entitlement travels only inside the token
+ * (a claim of an OAuth token, say), put it in the identity string, for example
+ * `user:<id>|role:<role>|tenant:<tenant>`. Leave it out and a person whose role
+ * changed keeps the session and the remembered columns of the old role until
+ * the session ages out, and two tenants that share a user name share both.
+ * Naming the role as the `role` setting of the connection does as well: every
+ * setting the hook changes is part of the scope and of the session's key.
+ *
+ * Without `identity`, a hook that changes the connection gets one
  * scope and one connection per credential: nothing is shared between people,
  * and nothing survives a renewal either.
  */
@@ -560,6 +574,8 @@ export function withHostQueryHooks<T extends QueryExecutor>(executor: T, hooks: 
     if (!scope) known.set(key, scope = resolve());
     return scope;
   };
+  // The executor underneath cannot say whose connection a statement runs on: asked directly, its scope is unknown.
+  if (credentials) markSignsPeopleIn(executor);
   return new Proxy(executor, {
     get(target, property, receiver) {
       if (property === EXECUTION_SCOPE) return executionScope;
