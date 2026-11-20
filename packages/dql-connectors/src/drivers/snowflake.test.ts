@@ -287,3 +287,78 @@ describe('signing in with a token read from a file (Snowflake\'s container token
     expect(await readSnowflakeTokenFile(undefined)).toBeUndefined();
   });
 });
+
+/**
+ * A session that is not this connection's alone (`sessionRelease: 'abandon'`): letting go of it sends Snowflake no
+ * logout, and nothing of the connection keeps running.
+ */
+describe('a Snowflake session that is abandoned, never ended', () => {
+  /** An SDK connection that counts logouts and can carry the SDK's heartbeat timer. */
+  const connectionOf = (withHeartbeat = false) => {
+    const connection = {
+      destroyed: 0,
+      keepalive: undefined as ReturnType<typeof setInterval> | undefined,
+      connect(done: (err?: Error) => void) {
+        if (withHeartbeat) connection.keepalive = setInterval(() => undefined, 3_600_000);
+        done();
+      },
+      destroy(done: (err?: Error) => void) { connection.destroyed += 1; done(); },
+    };
+    return connection;
+  };
+  const connect = async (config: Record<string, unknown>, connection = connectionOf()) => {
+    const create = fakeSdk.sdk.createConnection;
+    fakeSdk.created.length = 0;
+    fakeSdk.sdk.createConnection = ((settings: Record<string, unknown>) => { fakeSdk.created.push(settings); return connection; }) as never;
+    const connector = new SnowflakeConnector();
+    try {
+      await connector.connect({ driver: 'snowflake', account: 'acct', authMethod: 'oauth', token: 'a-token', ...config } as never);
+    } finally {
+      fakeSdk.sdk.createConnection = create;
+    }
+    return { connector, connection, settings: fakeSdk.created[0]! };
+  };
+
+  it('sends no logout when it is let go of, and forgets the connection', async () => {
+    const { connector, connection } = await connect({ sessionRelease: 'abandon' });
+    await connector.abandon();
+    expect(connection.destroyed).toBe(0);
+    expect(await connector.ping()).toBe(false);
+    // Let go of twice, or then disconnected: still nothing is sent.
+    await connector.abandon();
+    await connector.disconnect();
+    expect(connection.destroyed).toBe(0);
+    // Without the setting, disconnect is the logout it always was.
+    const ended = await connect({});
+    await ended.connector.disconnect();
+    expect(ended.connection.destroyed).toBe(1);
+  });
+
+  it('signs in with the session keep-alive off by name, whatever the account\'s own setting is', async () => {
+    expect((await connect({ sessionRelease: 'abandon' })).settings.clientSessionKeepAlive).toBe(false);
+    expect((await connect({ sessionRelease: 'abandon', clientSessionKeepAlive: false })).settings.clientSessionKeepAlive).toBe(false);
+    // Asking for both is refused before anything is sent.
+    fakeSdk.created.length = 0;
+    await expect(new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', authMethod: 'oauth', token: 'a-token', sessionRelease: 'abandon', clientSessionKeepAlive: true } as never))
+      .rejects.toThrow('cannot keep its session alive (clientSessionKeepAlive)');
+    expect(fakeSdk.created).toEqual([]);
+    // A connection of its own is left as it was: unset stays unset (the account decides), and a host may still turn it off.
+    expect('clientSessionKeepAlive' in (await connect({})).settings).toBe(false);
+    expect((await connect({ clientSessionKeepAlive: false })).settings.clientSessionKeepAlive).toBe(false);
+    expect((await connect({ clientSessionKeepAlive: true })).settings.clientSessionKeepAlive).toBe(true);
+  });
+
+  it('stops a heartbeat timer the SDK started all the same, so nothing keeps the session or the process alive', async () => {
+    vi.useFakeTimers();
+    try {
+      const { connector, connection } = await connect({ sessionRelease: 'abandon' }, connectionOf(true));
+      expect(vi.getTimerCount()).toBe(1);
+      await connector.abandon();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(connection.keepalive).toBeUndefined();
+      expect(connection.destroyed).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConnectionPoolManager, createConnectionConfigKey } from './connection-pool.js';
+import { ConnectionPoolManager, SessionSignInError, createConnectionConfigKey } from './connection-pool.js';
 import { QueryExecutor } from './query-executor.js';
 
 describe('createConnectionConfigKey', () => {
@@ -444,7 +444,9 @@ describe('ConnectionPoolManager per-person sign-in', () => {
     letFail();
     for (const outcome of await outcomes) {
       expect(outcome.status).toBe('rejected');
-      expect((outcome as PromiseRejectedResult).reason).toMatchObject({ message: 'sign-in refused' });
+      // Said by type; the driver's own words are the cause, not the message.
+      expect((outcome as PromiseRejectedResult).reason).toBeInstanceOf(SessionSignInError);
+      expect((outcome as PromiseRejectedResult).reason).toMatchObject({ code: 'SESSION_SIGN_IN_FAILED', replaced: false, driver: 'snowflake', message: 'The credentials given for this connection did not open a session.', cause: { message: 'sign-in refused' } });
     }
     // The connector that never signed in is closed once and kept nowhere.
     expect(made[0]!.disconnected).toBe(1);
@@ -594,5 +596,281 @@ describe('ConnectionPoolManager per-person sign-in', () => {
     // A local database is one per project: an identity changes nothing about how it is kept.
     const local = { driver: 'duckdb' as const, filepath: ':memory:' };
     expect(createConnectionConfigKey({ ...local, executionIdentity: 'person-a' })).toBe(createConnectionConfigKey(local));
+  });
+});
+
+/**
+ * A session that is not this connection's alone (`sessionRelease: 'abandon'`): somebody else holds it too, or one
+ * credential is one session wherever it is used, so a logout here would end it for everyone. The pool lets go of
+ * such a session on every path without ever ending it.
+ */
+describe('ConnectionPoolManager sessions that are abandoned, never ended', () => {
+  type Fake = {
+    driverName: string;
+    signedInWith: Array<string | undefined>;
+    ended: number;
+    abandoned: number;
+    failConnect?: Error;
+    connect(config: { token?: string }): Promise<void>;
+    disconnect(): Promise<void>;
+    abandon?(): Promise<void>;
+    execute(sql: string): Promise<{ columns: never[]; rows: never[]; rowCount: number; executionTimeMs: number }>;
+    ping(): Promise<boolean>;
+    release?: () => void;
+  };
+  const result = { columns: [] as never[], rows: [] as never[], rowCount: 0, executionTimeMs: 0 };
+  /** A pool of fakes; a fake can be abandoned unless its driver is in `cannotAbandon`. `failNext` fails the next sign-in. */
+  const poolOf = (options: ConstructorParameters<typeof ConnectionPoolManager>[0] = {}, cannotAbandon: string[] = []) => {
+    const made: Fake[] = [];
+    const state: { failNext?: Error } = {};
+    const pool = new ConnectionPoolManager({ sweepMs: 60_000, ...options });
+    (pool as any).createConnector = (config: { driver: string }) => {
+      const connector: Fake = {
+        driverName: config.driver,
+        signedInWith: [],
+        ended: 0,
+        abandoned: 0,
+        connect: async (settings) => {
+          connector.signedInWith.push(settings.token);
+          if (state.failNext) { const error = state.failNext; state.failNext = undefined; throw error; }
+        },
+        disconnect: async () => { connector.ended += 1; },
+        execute: async (sql) => {
+          if (sql === 'slow') await new Promise<void>((resolve) => { connector.release = resolve; });
+          if (sql.includes('lost_session')) throw new Error('Unable to perform operation using terminated connection.');
+          return result;
+        },
+        ping: async () => true,
+      };
+      if (!cannotAbandon.includes(config.driver)) connector.abandon = async () => { connector.abandoned += 1; };
+      made.push(connector);
+      return connector;
+    };
+    return { pool, made, state };
+  };
+  const base = { driver: 'snowflake' as const, account: 'acct', warehouse: 'WH', authMethod: 'oauth' as const };
+  const shared = { ...base, sessionRelease: 'abandon' as const };
+  const own = { ...base };
+  /** What each fake was told when the pool let it go: [ended, abandoned]. */
+  const letGo = (made: Fake[]) => made.map((connector) => [connector.ended, connector.abandoned]);
+
+  /**
+   * Each path on which the pool lets a session go, run twice: with the setting (never ended) and without (ended,
+   * as before). Each returns the connectors the path let go of.
+   */
+  const paths: Array<[string, (config: typeof shared | typeof own) => Promise<Fake[]>]> = [
+    ['idle for too long', async (config) => {
+      const { pool, made } = poolOf({ idleMs: 1_000 });
+      await pool.getConnector({ ...config, token: 't1', executionIdentity: 'person-a' });
+      expect(await pool.evictIdle(Date.now() + 5_000)).toBe(1);
+      await pool.disconnectAll();
+      return made;
+    }],
+    ['over the cap', async (config) => {
+      const { pool, made } = poolOf({ maxConnectors: 1 });
+      await pool.getConnector({ ...config, token: 't1', executionIdentity: 'person-a' });
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      await pool.getConnector({ ...config, token: 't2', executionIdentity: 'person-b' });
+      expect(await pool.evictIdle(Date.now())).toBe(1);
+      expect((pool as any).connectors.size).toBe(1);
+      return [made[0]!];
+    }],
+    ['retired for its age, at a sweep', async (config) => {
+      const { pool, made } = poolOf({ maxSessionAgeMs: 1 });
+      (await pool.acquire({ ...config, token: 't1', executionIdentity: 'person-a' })).release();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      (await pool.acquire({ ...config, token: 't2', executionIdentity: 'person-a' })).release();
+      expect(made).toHaveLength(2);
+      await pool.evictIdle(Date.now() + 6_000);
+      return [made[0]!];
+    }],
+    ['retired for its age, when its last statement ends', async (config) => {
+      const { pool, made } = poolOf({ maxSessionAgeMs: 1 });
+      const first = await pool.acquire({ ...config, token: 't1', executionIdentity: 'person-a' });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      (await pool.acquire({ ...config, token: 't2', executionIdentity: 'person-a' })).release();
+      const [old] = [...(pool as any).retired];
+      old.retiredAt = Date.now() - 6_000;
+      first.release();
+      await Promise.resolve();
+      return [made[0]!];
+    }],
+    ['lost (the executor drops it and signs in again)', async (config) => {
+      const { pool, made } = poolOf();
+      const executor = new QueryExecutor(pool);
+      const settings = { ...config, token: 't1', executionIdentity: 'person-a' };
+      await expect(executor.executePositional('SELECT lost_session', [], settings)).rejects.toThrow('terminated connection');
+      expect(made).toHaveLength(2);
+      return [made[0]!];
+    }],
+    ['a sign-in that failed', async (config) => {
+      const { pool, made, state } = poolOf();
+      state.failNext = new Error('sign-in refused');
+      await expect(pool.acquire({ ...config, token: 't1', executionIdentity: 'person-a' })).rejects.toBeInstanceOf(SessionSignInError);
+      expect((pool as any).connectors.size).toBe(0);
+      return made;
+    }],
+    ['shutdown', async (config) => {
+      const { pool, made } = poolOf({ maxSessionAgeMs: 1 });
+      await pool.getConnector({ ...config, token: 't1', executionIdentity: 'person-a' });
+      await pool.getConnector({ ...config, token: 't2', executionIdentity: 'person-b' });
+      // One more that is already retired, and one whose sign-in is still under way.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await pool.getConnector({ ...config, token: 't3', executionIdentity: 'person-a' });
+      const pending = pool.getConnector({ ...config, token: 't4', executionIdentity: 'person-c' });
+      await pool.disconnectAll();
+      await pending;
+      expect(made).toHaveLength(4);
+      return made;
+    }],
+  ];
+
+  for (const [name, run] of paths) {
+    it(`never ends a session it lets go of when the connection says abandon: ${name}`, async () => {
+      const let_go = await run(shared);
+      expect(let_go.length).toBeGreaterThan(0);
+      for (const connector of let_go) expect([connector.ended, connector.abandoned]).toEqual([0, 1]);
+    });
+
+    it(`ends the session as before without the setting: ${name}`, async () => {
+      const let_go = await run(own);
+      expect(let_go.length).toBeGreaterThan(0);
+      for (const connector of let_go) expect([connector.ended, connector.abandoned]).toEqual([1, 0]);
+      // `end` by name is the same as leaving it out.
+      const named = await run({ ...own, sessionRelease: 'end' } as never);
+      for (const connector of named) expect([connector.ended, connector.abandoned]).toEqual([1, 0]);
+    });
+  }
+
+  it('leaves no timer behind: an emptied pool, sweeper stopped, lets the process end', async () => {
+    vi.useFakeTimers();
+    try {
+      const { pool, made } = poolOf({ maxSessionAgeMs: 1_000, idleMs: 10_000 });
+      await pool.getConnector({ ...shared, token: 't1', executionIdentity: 'person-a' });
+      vi.advanceTimersByTime(2_000);
+      (await pool.acquire({ ...shared, token: 't2', executionIdentity: 'person-a' })).release();
+      await pool.disconnectAll();
+      expect(letGo(made)).toEqual([[0, 1], [0, 1]]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses the setting on a driver that can only end a session, before it signs in, and never treats it as "end"', async () => {
+    const { pool, made } = poolOf({}, ['postgresql']);
+    const config = { driver: 'postgresql' as const, host: 'db', sessionRelease: 'abandon' as const };
+    await expect(pool.getConnector(config)).rejects.toThrow('The postgresql driver cannot let go of a session without ending it, so it does not take sessionRelease: abandon.');
+    await expect(pool.acquire(config)).rejects.toThrow('does not take sessionRelease: abandon');
+    expect(made.map((connector) => connector.signedInWith)).toEqual([[], []]);
+    expect(letGo(made)).toEqual([[0, 0], [0, 0]]);
+    expect((pool as any).connectors.size).toBe(0);
+    // The real drivers: Snowflake can, the others cannot.
+    const real = new ConnectionPoolManager();
+    const create = (driver: string) => (real as any).createConnector({ driver });
+    expect(typeof create('snowflake').abandon).toBe('function');
+    for (const driver of ['postgresql', 'redshift', 'mysql', 'mssql', 'databricks', 'bigquery', 'trino', 'clickhouse', 'athena', 'fabric', 'duckdb', 'sqlite', 'file']) {
+      expect(create(driver).abandon, driver).toBeUndefined();
+    }
+  });
+
+  it('keeps an abandoned session and an ended one apart, whatever else is equal', async () => {
+    const { pool, made } = poolOf();
+    const a = await pool.getConnector({ ...shared, token: 't', executionIdentity: 'person-a' });
+    const b = await pool.getConnector({ ...own, token: 't', executionIdentity: 'person-a' });
+    expect(a).not.toBe(b);
+    expect(createConnectionConfigKey({ ...shared, token: 't' })).not.toBe(createConnectionConfigKey({ ...own, token: 't' }));
+    await pool.disconnectAll();
+    expect(letGo(made)).toEqual([[0, 1], [1, 0]]);
+  });
+
+  it('takes the oldest a session may get from the connection, over the pool\'s own', async () => {
+    const { pool, made } = poolOf({ maxSessionAgeMs: 60_000 });
+    const now = Date.now();
+    const aged = (settings: Record<string, unknown>, age: number) => { for (const entry of (pool as any).connectors.values()) entry.connectedAt = now - age; return pool.getConnector(settings as never); };
+    const person = { ...shared, executionIdentity: 'person-a' };
+    await pool.getConnector({ ...person, token: 't1', maxSessionAgeMs: 1_800_000 });
+    // Past the pool's minute, inside the connection's half hour: the same session.
+    await aged({ ...person, token: 't2', maxSessionAgeMs: 1_800_000 }, 600_000);
+    expect(made).toHaveLength(1);
+    // Past the connection's own: signed in again, with the token of the statement that asked.
+    await aged({ ...person, token: 't3', maxSessionAgeMs: 1_800_000 }, 1_800_001);
+    expect(made).toHaveLength(2);
+    expect(made[1]!.signedInWith).toEqual(['t3']);
+    // A shorter age on the connection than the pool's works the same way; it is read from the statement that asks.
+    await aged({ ...person, token: 't4', maxSessionAgeMs: 5_000 }, 6_000);
+    expect(made).toHaveLength(3);
+    // 0: never retired for its age. Without one, or with a value that is not an age, the pool's own applies.
+    await aged({ ...person, token: 't5', maxSessionAgeMs: 0 }, 86_400_000);
+    expect(made).toHaveLength(3);
+    for (const bad of [undefined, -1, Number.NaN, '5' as unknown as number]) {
+      const before = made.length;
+      await aged({ ...person, token: 't6', maxSessionAgeMs: bad }, 30_000);
+      expect(made.length, String(bad)).toBe(before);
+      await aged({ ...person, token: 't7', maxSessionAgeMs: bad }, 61_000);
+      expect(made.length, String(bad)).toBe(before + 1);
+    }
+    // A session kept by its credential (no identity) is never aged, whatever the connection says.
+    const { pool: plain, made: plainMade } = poolOf();
+    await plain.getConnector({ ...own, token: 'k', maxSessionAgeMs: 1 });
+    for (const entry of (plain as any).connectors.values()) entry.connectedAt = now - 60_000;
+    await plain.getConnector({ ...own, token: 'k', maxSessionAgeMs: 1 });
+    expect(plainMade).toHaveLength(1);
+    await pool.disconnectAll();
+    await plain.disconnectAll();
+  });
+
+  it('fails the statement, by type, when a session past its age cannot be opened again: no other session is used', async () => {
+    const { pool, made, state } = poolOf({ maxSessionAgeMs: 1_000 });
+    const executor = new QueryExecutor(pool);
+    const person = { ...shared, executionIdentity: 'person-a' };
+    const other = { ...shared, executionIdentity: 'person-b' };
+    // The configured connection itself (no identity), another person, and this person: three sessions.
+    await executor.executePositional('select 1', [], { ...own, token: 'service' });
+    await executor.executePositional('select 1', [], { ...other, token: 'b1' });
+    await executor.executePositional('select 1', [], { ...person, token: 'a1' });
+    expect(made).toHaveLength(3);
+    const executed: Fake[] = [];
+    for (const connector of made) { const run = connector.execute; connector.execute = async (sql) => { executed.push(connector); return run(sql); }; }
+    // The person's session is past its age, and the token that came with the next statement no longer signs in.
+    for (const entry of (pool as any).connectors.values()) if (entry.connector === made[2]) entry.connectedAt = Date.now() - 2_000;
+    state.failNext = new Error('390303 Invalid OAuth access token.');
+    const failure = await executor.executePositional('select 1', [], { ...person, token: 'a1-stale' }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(SessionSignInError);
+    expect(failure).toMatchObject({ code: 'SESSION_SIGN_IN_FAILED', replaced: true, driver: 'snowflake', message: 'The credentials given for this connection can no longer open a session. Sign in again.' });
+    // The driver's words are the cause only: not in the message, which a host may show.
+    expect((failure as Error).message).not.toContain('390303');
+    expect(((failure as Error).cause as Error).message).toBe('390303 Invalid OAuth access token.');
+    // Nothing ran anywhere: not on the old session, not on the other person's, not on the configured connection.
+    expect(executed).toEqual([]);
+    expect(made).toHaveLength(4);
+    expect(made[3]!.signedInWith).toEqual(['a1-stale']);
+    // The old session is not handed out again: the next statement tries to sign in again, and fails the same way.
+    state.failNext = new Error('390303 Invalid OAuth access token.');
+    await expect(executor.executePositional('select 1', [], { ...person, token: 'a1-stale' })).rejects.toMatchObject({ code: 'SESSION_SIGN_IN_FAILED', replaced: true });
+    expect(executed).toEqual([]);
+    expect(made).toHaveLength(5);
+    // Everybody else is where they were, and a newer token signs this person in again.
+    await executor.executePositional('select 1', [], { ...other, token: 'b2' });
+    expect(executed).toEqual([made[1]]);
+    await executor.executePositional('select 1', [], { ...person, token: 'a2' });
+    expect(made).toHaveLength(6);
+    expect(made[5]!.signedInWith).toEqual(['a2']);
+    // None of the person's sessions was ended: the two that failed to open, and the old one once it is let go.
+    await pool.evictIdle(Date.now() + 6_000);
+    await pool.disconnectAll();
+    expect(letGo(made)).toEqual([[1, 0], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]);
+  });
+
+  it('says "did not open" for an identity that never had a session here, and leaves other connections\' errors as they were', async () => {
+    const { pool, state } = poolOf();
+    state.failNext = new Error('sign-in refused');
+    await expect(pool.acquire({ ...shared, token: 't', executionIdentity: 'never-seen' })).rejects.toMatchObject({ code: 'SESSION_SIGN_IN_FAILED', replaced: false, message: 'The credentials given for this connection did not open a session.' });
+    // Without an identity nothing changes: the driver's own error, as before.
+    state.failNext = new Error('sign-in refused');
+    const plain = await pool.acquire({ ...own, token: 't' }).catch((error: unknown) => error);
+    expect(plain).not.toBeInstanceOf(SessionSignInError);
+    expect((plain as Error).message).toBe('sign-in refused');
+    await pool.disconnectAll();
   });
 });
