@@ -36,7 +36,7 @@ const person = (id: string): DqlPrincipal => ({ id, kind: 'person', source: 'hos
 
 interface Seen { who: string; sql: string; token?: string }
 
-function setup(options: { identity: boolean }) {
+function setup(options: { identity: boolean; ownTeamsColumn?: boolean }) {
   const seen: Seen[] = [];
   /** Who may not see the vault table (their role lacks the grant: the warehouse says it does not exist). */
   const vaultHidden = new Set<string>(['alice']);
@@ -58,7 +58,8 @@ function setup(options: { identity: boolean }) {
       if (/HAVING COUNT\(\*\) > 1/.test(sql)) return answer([]);
       if (sql.includes('information_schema.columns')) {
         return answer(Object.keys(BASE_COLUMNS).filter((table) => sql.includes(`'${table.split('.').pop()}'`)).flatMap((table) => {
-          const names = table === GAMES ? [...BASE_COLUMNS[table]!, OWN_COLUMN[who]!] : BASE_COLUMNS[table]!;
+          // Optionally the teams table, too, has a column only one person's role is shown (the same count for all).
+          const names = table === GAMES ? [...BASE_COLUMNS[table]!, OWN_COLUMN[who]!] : table === TEAMS && options.ownTeamsColumn ? [...BASE_COLUMNS[table]!, OWN_COLUMN[who]!.replace('margin', 'region')] : BASE_COLUMNS[table]!;
           return names.map((column) => ({ table_schema: 'dev', table_name: table.split('.').pop(), column_name: column, data_type: /_id$|season|margin|total/.test(column) ? 'BIGINT' : 'VARCHAR', dql_column_total: names.length }));
         }));
       }
@@ -119,7 +120,9 @@ function setup(options: { identity: boolean }) {
     return { result, statements: seen.slice(before.seen), prompts: prompts.slice(before.prompts).map((item) => item.prompt) };
   });
   const scopeOf = (who: string) => withRequestContext({ principal: person(who), requestId: `scope-${who}` }, () => executionScopeFor(executor, connection));
-  return { ask, seen, prompts, namings, drafts, host, vaultHidden, scopeOf };
+  /** The same question asked of the executor underneath the hook, which cannot say whose connection it is. */
+  const scopeOfUnhooked = (who: string) => withRequestContext({ principal: person(who), requestId: `scope-unhooked-${who}` }, () => executionScopeFor(raw, connection));
+  return { ask, seen, prompts, namings, drafts, host, vaultHidden, scopeOf, scopeOfUnhooked };
 }
 
 const WON = 'How many games did teams win?';
@@ -196,6 +199,64 @@ describe.each([{ identity: true, name: 'a host that names the identity' }, { ide
     const bobs = world.host.catalogNames(await world.scopeOf('bob'));
     expect(bobs.has('alice_only_margin')).toBe(false);
     if (identity) expect(bobs.has('bob_only_margin')).toBe(true);
+  });
+
+  it('a trace reviewer reads the names of the shared connection and of their own scope, never another person\'s', async () => {
+    const world = setup({ identity });
+    await world.ask('alice', WON);
+    await world.ask('bob', WON);
+    await world.ask('service', WON);
+    const names = async (who: string) => world.host.catalogNames(await world.scopeOf(who));
+    // Bob reviews Alice's run: the column only her role is shown is not a name he may read.
+    const bobs = await names('bob');
+    expect(bobs.has('alice_only_margin')).toBe(false);
+    expect(bobs.has('service_only_margin')).toBe(true);
+    expect(bobs.has('team_won')).toBe(true);
+    const alices = await names('alice');
+    expect(alices.has('bob_only_margin')).toBe(false);
+    expect(alices.has('service_only_margin')).toBe(true);
+    // With a named identity a reviewer's own columns are theirs on a later request; without one the credential
+    // has renewed since, and the scope with it.
+    expect(bobs.has('bob_only_margin')).toBe(identity);
+    expect(alices.has('alice_only_margin')).toBe(identity);
+    // Someone who has asked nothing, and a reviewer whose scope is unknown: the shared names only.
+    for (const scope of [await world.scopeOf('carol'), 'unknown-0000', undefined]) {
+      const reviewer = world.host.catalogNames(scope);
+      expect(reviewer.has('service_only_margin')).toBe(true);
+      expect(reviewer.has('alice_only_margin')).toBe(false);
+      expect(reviewer.has('bob_only_margin')).toBe(false);
+    }
+    // A reviewer whose executor cannot say whose connection it is (the hook is set) gets the shared names only too.
+    const blind = await world.scopeOfUnhooked('alice');
+    expect(blind).toMatch(/^unknown-/);
+    expect(world.host.catalogNames(blind).has('alice_only_margin')).toBe(false);
+  });
+
+  it('a source rebuilt with one person\'s columns is never another\'s, though the tables and the column counts are the same', async () => {
+    // The teams table has, for each person, one column of their own: the same tables and the same number of
+    // columns for everyone, so only the scope tells one person's rebuilt source from another's.
+    const world = setup({ identity, ownTeamsColumn: true });
+    const alice = await world.ask('alice', WON);
+    const bob = await world.ask('bob', WON);
+    const carol = await world.ask('carol', WON);
+    expect(alice.prompts[0]).toContain('alice_only_region');
+    expect(bob.prompts[0]).toContain('bob_only_region');
+    expect(bob.prompts[0]).not.toContain('alice_only_region');
+    // Carol's role is shown what Alice's is, and still her source is built from her own listing.
+    expect(carol.prompts[0]).toContain('alice_only_region');
+    expect(probes(carol.statements).length).toBeGreaterThan(0);
+    expect(probes(carol.statements).every((item) => item.who === 'carol')).toBe(true);
+    // Warm, in the other order: each still reads their own.
+    const bobAgain = await world.ask('bob', WON);
+    const aliceAgain = await world.ask('alice', WON);
+    expect(bobAgain.prompts[0]).toContain('bob_only_region');
+    expect(bobAgain.prompts[0]).not.toContain('alice_only_region');
+    expect(aliceAgain.prompts[0]).toContain('alice_only_region');
+    expect(aliceAgain.prompts[0]).not.toContain('bob_only_region');
+    // The configured connection's source is its own as well.
+    const service = await world.ask('service', WON);
+    expect(service.prompts[0]).toContain('service_only_region');
+    expect(service.prompts[0]).not.toMatch(/alice_only_region|bob_only_region/);
   });
 
   it('a table one person may not read is refused for that person only', async () => {

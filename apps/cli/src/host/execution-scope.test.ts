@@ -3,10 +3,10 @@ import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ConnectionPoolManager, QueryExecutor, type ConnectionConfig } from '@zlens/connectors';
+import { ConnectionPoolManager, QueryExecutor, createConnectionConfigKey, type ConnectionConfig } from '@zlens/connectors';
 import { clearCatalogTableRowCache, resolveSemanticTableMapping, startLocalServer } from '../local-runtime.js';
 import { SHARED_EXECUTION_SCOPE, executionScopeFor, executionScopeOf, scopedKey, setBounded } from './execution-scope.js';
-import { withRequestContext, type DqlPrincipal } from './request-context.js';
+import { withRequestContext, withServerScope, type DqlPrincipal } from './request-context.js';
 import { CredentialsRefusedError, resolvePersonConnection, withHostQueryHooks, type DqlCredentialsHook } from './row-policy.js';
 
 /**
@@ -106,6 +106,44 @@ describe('the execution scope of a connection', () => {
     expect(await executionScopeFor(failing, service)).toMatch(/^unknown-/);
   });
 
+  it('is never shared for an executor that cannot say, once a credentials hook signs people in', async () => {
+    const result = { columns: [], rows: [], rowCount: 0, executionTimeMs: 0 };
+    const bare = () => ({ executePositional: async () => result, executeQuery: async () => result, getConnector: async () => ({}) }) as unknown as QueryExecutor;
+    const credentials: DqlCredentialsHook = ({ principal }) => (principal ? { connection: { token: `token-of-${principal.id}` }, identity: principal.id } : { connection: {} });
+
+    // The executor underneath the hook, asked directly: it runs on nobody's connection in particular.
+    const inner = bare();
+    const hooked = withHostQueryHooks(inner, { credentials });
+    const direct = await as('maria', () => executionScopeFor(inner, service));
+    expect(direct).toMatch(/^unknown-/);
+    expect(direct).not.toBe(await as('maria', () => executionScopeFor(hooked, service)));
+    // A scope of its own every time: nothing kept under it is found again, by this person or anyone.
+    expect(await as('maria', () => executionScopeFor(inner, service))).not.toBe(direct);
+    expect(await as('dev', () => executionScopeFor(inner, service))).toMatch(/^unknown-/);
+    expect(await executionScopeFor(inner, service)).toMatch(/^unknown-/);
+    expect(scopedKey('columns', direct)).not.toBe('columns');
+
+    // A wrapper that forgets to pass the resolver on, on a server whose host set the hook.
+    const forgetful = { executePositional: hooked.executePositional, executeQuery: hooked.executeQuery, getConnector: hooked.getConnector };
+    const onServer = <T>(hooks: { credentials?: DqlCredentialsHook }, work: () => T): T => withServerScope({ id: `server-${Math.random()}`, hooks }, work);
+    expect(await onServer({ credentials }, () => as('maria', () => executionScopeFor(forgetful, service)))).toMatch(/^unknown-/);
+    expect(await onServer({ credentials }, () => executionScopeFor(undefined, service))).toMatch(/^unknown-/);
+    expect(await withRequestContext({ principal: person('maria'), requestId: 'named-hooks', hooks: { credentials } }, () => executionScopeFor(bare(), service))).toMatch(/^unknown-/);
+    // The executor that can say still says: the person's scope, the same on every request.
+    const marias = await onServer({ credentials }, () => as('maria', () => executionScopeFor(hooked, service)));
+    expect(marias).toMatch(/^person-/);
+    expect(await onServer({ credentials }, () => as('maria', () => executionScopeFor(hooked, service)))).toBe(marias);
+
+    // No credentials hook anywhere: shared, as before (no host, or a host that signs nobody in).
+    expect(await executionScopeFor(bare(), service)).toBe(SHARED_EXECUTION_SCOPE);
+    expect(await onServer({}, () => as('maria', () => executionScopeFor(bare(), service)))).toBe(SHARED_EXECUTION_SCOPE);
+    const policyOnly = bare();
+    withHostQueryHooks(policyOnly, { hosted: true, rowPolicy: (query) => ({ sql: query.sql }) });
+    expect(await executionScopeFor(policyOnly, service)).toBe(SHARED_EXECUTION_SCOPE);
+    // No connection: nothing was seen through one.
+    expect(await onServer({ credentials }, () => executionScopeFor(forgetful, undefined))).toBe(SHARED_EXECUTION_SCOPE);
+  });
+
   it('keeps the shared key as it was and bounds what scoped keys add', () => {
     expect(scopedKey('account=acct|database=DB', SHARED_EXECUTION_SCOPE)).toBe('account=acct|database=DB');
     expect(scopedKey('account=acct|database=DB', 'person-1')).not.toBe(scopedKey('account=acct|database=DB', 'person-2'));
@@ -151,6 +189,62 @@ describe('one warehouse session per identity, through the host\'s hook', () => {
     for (let statement = 0; statement < 3; statement += 1) await as('maria', () => unnamed.executePositional(`SELECT ${statement}`, [], service));
     expect(signIns.map((entry) => entry.token)).toEqual(['maria-token-1', 'maria-token-2', 'maria-token-3']);
     await unnamedPool.disconnectAll();
+  });
+});
+
+describe('the identity a host names stays out of logs and errors', () => {
+  const IDENTITY = 'warehouse-user:MARIA_7731|role:FINANCE_EU';
+  const logged: string[] = [];
+  const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((level) => vi.spyOn(console, level).mockImplementation((...parts: unknown[]) => { logged.push(parts.map((part) => (part instanceof Error ? `${part.message}\n${part.stack ?? ''}` : typeof part === 'string' ? part : JSON.stringify(part))).join(' ')); }));
+  afterEach(() => { logged.length = 0; });
+  const text = (error: unknown): string => (error instanceof Error ? [error.message, error.stack ?? '', JSON.stringify(error, Object.getOwnPropertyNames(error)), String((error as { cause?: unknown }).cause ?? '')].join('\n') : String(error));
+  const failure = async (work: () => Promise<unknown>): Promise<unknown> => work().then(() => { throw new Error('expected a failure'); }, (error: unknown) => error);
+
+  it('whether the sign-in fails, the statement fails, the policy refuses or the hook itself throws', async () => {
+    expect(spies).toHaveLength(5);
+    const configs: ConnectionConfig[] = [];
+    const pool = new ConnectionPoolManager();
+    let refuseSignIn = true;
+    (pool as unknown as { createConnector(config: ConnectionConfig): unknown }).createConnector = () => ({
+      driverName: 'snowflake',
+      // A driver that quotes its settings when it fails, as some do.
+      connect: async (config: ConnectionConfig) => { configs.push(config); if (refuseSignIn) throw new Error(`could not sign in with ${JSON.stringify({ ...config, token: undefined, password: undefined })}`); },
+      execute: async (sql: string) => { if (sql.includes('missing_table')) throw new Error('SQL compilation error: Object MISSING_TABLE does not exist or not authorized.'); return { columns: [], rows: [], rowCount: 0, executionTimeMs: 0 }; },
+      disconnect: async () => undefined,
+      ping: async () => true,
+    });
+    const credentials: DqlCredentialsHook = ({ principal }) => {
+      if (principal?.id === 'broken') throw new Error(`no token for ${IDENTITY}`);
+      if (principal?.id === 'odd') return { connection: { token: 'odd-token' }, identity: { name: IDENTITY } } as never;
+      return principal ? { connection: { token: `${principal.id}-token`, password: undefined, authMethod: 'oauth' }, identity: IDENTITY } : { connection: {} };
+    };
+    const executor = withHostQueryHooks(new QueryExecutor(pool), { hosted: true, credentials, rowPolicy: (query) => (query.sql.includes('forbidden') ? { refuse: 'You may not read that.' } : { sql: query.sql }) });
+    const seen: string[] = [];
+    // The sign-in fails, with the driver quoting the connection it was given.
+    seen.push(text(await failure(() => as('maria', () => executor.executePositional('SELECT 1', [], service)))));
+    refuseSignIn = false;
+    await as('maria', () => executor.executePositional('SELECT 1', [], service));
+    // The warehouse refuses the statement; the policy refuses one; the hook throws; the hook names a non-name.
+    seen.push(text(await failure(() => as('maria', () => executor.executePositional('SELECT * FROM missing_table', [], service)))));
+    seen.push(text(await failure(() => as('maria', () => executor.executePositional('SELECT forbidden', [], service)))));
+    seen.push(text(await failure(() => as('broken', () => executor.executePositional('SELECT 1', [], service)))));
+    seen.push(text(await failure(() => as('odd', () => executor.executePositional('SELECT 1', [], service)))));
+    // A caller that keeps the connector.
+    const connector = await as('maria', () => executor.getConnector(service));
+    seen.push(text(await failure(() => as('maria', () => connector.execute('SELECT * FROM missing_table')))));
+    expect(seen).toHaveLength(6);
+
+    // What ZLens derived from the identity: the connection's digest, the pool's key, the cache scope.
+    expect(configs.length).toBeGreaterThan(1);
+    const digests = new Set(configs.map((config) => config.executionIdentity));
+    expect(digests.size).toBe(1);
+    const derived = [...digests, ...configs.map((config) => createConnectionConfigKey(config)), ...configs.map((config) => JSON.stringify(config)), await as('maria', () => executionScopeFor(executor, service))];
+    for (const part of ['MARIA_7731', 'FINANCE_EU', 'warehouse-user', IDENTITY]) {
+      for (const value of [...seen, ...logged, ...derived]) expect(value, `"${part}" in: ${String(value).slice(0, 200)}`).not.toContain(part);
+    }
+    // The statement's failure was logged for the operator, so the logs were really read.
+    expect(logged.some((line) => line.includes('A statement failed on the warehouse'))).toBe(true);
+    await pool.disconnectAll();
   });
 });
 

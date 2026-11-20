@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { CONNECTION_CREDENTIAL_FIELDS, type ConnectionConfig, type QueryPurpose } from '@zlens/connectors';
+import { currentHostHooks } from './request-context.js';
 
 /**
  * WHOSE EYES A STATEMENT SAW THROUGH. With a host's `credentials` hook each
@@ -75,15 +76,35 @@ export const EXECUTION_SCOPE: unique symbol = Symbol.for('zlens.executionScope')
 export type ExecutionScopeResolver = (config: ConnectionConfig, purpose?: QueryPurpose) => Promise<string>;
 
 /**
+ * Executors a host's `credentials` hook was put in front of (row-policy.ts): the wrapped executor and the one
+ * underneath. Asked directly, without the wrapper's resolver, either one cannot say whose connection a statement
+ * would run on.
+ */
+const SIGNS_PEOPLE_IN = new WeakSet<object>();
+
+/** Record that statements of this executor run on each person's own connection (a `credentials` hook is set). */
+export function markSignsPeopleIn(executor: unknown): void {
+  if (executor && (typeof executor === 'object' || typeof executor === 'function')) SIGNS_PEOPLE_IN.add(executor);
+}
+
+/**
  * THE ONE HELPER. The execution scope a statement of the current request would run in on this connection, asked of
- * the executor that will run it, so the answer comes from the same hook, for the same person and purpose. An
- * executor without a host's `credentials` hook (no host, or a host that signs nobody in to the warehouse) answers
- * `shared` without asking anyone.
+ * the executor that will run it, so the answer comes from the same hook, for the same person and purpose.
+ *
+ * An executor that cannot answer (it does not carry the resolver) is `shared` only where nobody is signed in to
+ * the warehouse as themselves: no host, or a host without the `credentials` hook. Where the hook is set (for the
+ * server handling this work, or in front of this very executor) the scope is unknown, and unknown is never
+ * `shared`: the caller gets a scope of its own, so what it keeps is found by no other request. A new wrapper around
+ * the executor that forgets to pass the resolver on therefore costs a cache, never a leak.
  */
 export async function executionScopeFor(executor: unknown, config: ConnectionConfig | undefined, purpose?: QueryPurpose): Promise<string> {
-  if (!config || !executor || (typeof executor !== 'object' && typeof executor !== 'function')) return SHARED_EXECUTION_SCOPE;
-  const resolver = (executor as { [EXECUTION_SCOPE]?: ExecutionScopeResolver })[EXECUTION_SCOPE];
-  if (typeof resolver !== 'function') return SHARED_EXECUTION_SCOPE;
+  if (!config) return SHARED_EXECUTION_SCOPE;
+  const asked = executor && (typeof executor === 'object' || typeof executor === 'function') ? executor as { [EXECUTION_SCOPE]?: ExecutionScopeResolver } : undefined;
+  const resolver = asked?.[EXECUTION_SCOPE];
+  if (typeof resolver !== 'function') {
+    const signsPeopleIn = typeof currentHostHooks()?.credentials === 'function' || (asked !== undefined && SIGNS_PEOPLE_IN.has(asked));
+    return signsPeopleIn ? unknownExecutionScope() : SHARED_EXECUTION_SCOPE;
+  }
   try {
     return await resolver(config, purpose);
   } catch {

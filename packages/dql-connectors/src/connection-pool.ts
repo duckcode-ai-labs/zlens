@@ -15,7 +15,7 @@ import { AthenaConnector } from './drivers/athena.js';
 import { BigQueryConnector } from './drivers/bigquery.js';
 import { openSshTunnel } from './drivers/ssh-tunnel.js';
 import { readEnv } from './env.js';
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 function stableSerialize(value: unknown): string {
   if (value === null) return 'null';
@@ -71,97 +71,116 @@ export function isIdentityPooled(config: ConnectionConfig): boolean {
     && SESSION_OUTLIVES_CREDENTIAL.has(config.driver);
 }
 
+/**
+ * Every setting that tells one connector from another, the credentials included. They are read by name from this
+ * one list and only ever go into the keyed digest below.
+ */
+const CONNECTION_KEY_FIELDS = [
+  'driver',
+  'host',
+  'port',
+  'database',
+  'username',
+  'password',
+  'token',
+  // The path, not the token in it: a renewed token keeps the same pooled connection until it is lost.
+  'tokenFilePath',
+  'ssl',
+  'sslMode',
+  'trustServerCertificate',
+  'tenantId',
+  'sslRootCert',
+  'clusterId',
+  'sshTunnel',
+  'tlsServername',
+  'filepath',
+  'dataFolder',
+  'sources',
+  'catalogs',
+  'storage',
+  'allowedDirectories',
+  'restrictExternalAccess',
+  'projectId',
+  'account',
+  'warehouse',
+  'workgroup',
+  'connectionString',
+  'schema',
+  'role',
+  'region',
+  'outputLocation',
+  'httpPath',
+  'catalog',
+  'accessUrl',
+  'application',
+  'browserActionTimeout',
+  'clientRequestMFAToken',
+  'clientStoreTemporaryCredential',
+  'clientSessionKeepAlive',
+  'clientSessionKeepAliveHeartbeatFrequency',
+  'credentialCacheDir',
+  'keepAlive',
+  'noProxy',
+  'oauthAuthorizationUrl',
+  'oauthClientId',
+  'oauthClientSecret',
+  'oauthRedirectUri',
+  'oauthScope',
+  'oauthTokenRequestUrl',
+  'passcode',
+  'passcodeInPassword',
+  'proxyHost',
+  'proxyPassword',
+  'proxyPort',
+  'proxyProtocol',
+  'proxyUser',
+  'queryTag',
+  'timeout',
+  'workloadIdentityProvider',
+  'workloadIdentityAzureClientId',
+  'workloadIdentityImpersonationPath',
+  'waitTimeout',
+  'byteLimit',
+  'privateKey',
+  'privateKeyPath',
+  'privateKeyPassphrase',
+  'authMethod',
+  'authenticator',
+  'keyFilename',
+  'serviceAccountJson',
+  'credentials',
+  'location',
+  'accessKeyId',
+  'secretAccessKey',
+  'sessionToken',
+  'profile',
+  'sqliteQueryIsolation',
+  'moduleSearchPaths',
+] as const satisfies ReadonlyArray<keyof ConnectionConfig>;
+
+/**
+ * Keys are digests under a key made at random when the process starts and kept only in its memory. A connector key
+ * covers passwords and tokens, so it is never a plain hash of them: without this key a digest cannot be tested
+ * against guessed credentials, and it means nothing to another process. Nothing stores or sends these keys; they
+ * name entries of in-memory maps for the life of the process.
+ */
+const PROCESS_KEY = randomBytes(32);
+
+/**
+ * The key a connector is pooled under: equal for equal settings within this process, and different in every other
+ * process. Never write it down or compare it across processes.
+ */
 export function createConnectionConfigKey(config: ConnectionConfig): string {
-  const normalized: Record<string, unknown> = {
-    driver: config.driver,
-    host: config.host,
-    port: config.port,
-    database: config.database,
-    username: config.username,
-    password: config.password,
-    token: config.token,
-    // The path, not the token in it: a renewed token keeps the same pooled connection until it is lost.
-    tokenFilePath: config.tokenFilePath,
-    ssl: config.ssl,
-    sslMode: config.sslMode,
-    trustServerCertificate: config.trustServerCertificate,
-    tenantId: config.tenantId,
-    sslRootCert: config.sslRootCert,
-    clusterId: config.clusterId,
-    sshTunnel: config.sshTunnel,
-    tlsServername: config.tlsServername,
-    filepath: config.filepath,
-    dataFolder: config.dataFolder,
-    sources: config.sources,
-    catalogs: config.catalogs,
-    storage: config.storage,
-    allowedDirectories: config.allowedDirectories,
-    restrictExternalAccess: config.restrictExternalAccess,
-    projectId: config.projectId,
-    account: config.account,
-    warehouse: config.warehouse,
-    workgroup: config.workgroup,
-    connectionString: config.connectionString,
-    schema: config.schema,
-    role: config.role,
-    region: config.region,
-    outputLocation: config.outputLocation,
-    httpPath: config.httpPath,
-    catalog: config.catalog,
-    accessUrl: config.accessUrl,
-    application: config.application,
-    browserActionTimeout: config.browserActionTimeout,
-    clientRequestMFAToken: config.clientRequestMFAToken,
-    clientStoreTemporaryCredential: config.clientStoreTemporaryCredential,
-    clientSessionKeepAlive: config.clientSessionKeepAlive,
-    clientSessionKeepAliveHeartbeatFrequency: config.clientSessionKeepAliveHeartbeatFrequency,
-    credentialCacheDir: config.credentialCacheDir,
-    keepAlive: config.keepAlive,
-    noProxy: config.noProxy,
-    oauthAuthorizationUrl: config.oauthAuthorizationUrl,
-    oauthClientId: config.oauthClientId,
-    oauthClientSecret: config.oauthClientSecret,
-    oauthRedirectUri: config.oauthRedirectUri,
-    oauthScope: config.oauthScope,
-    oauthTokenRequestUrl: config.oauthTokenRequestUrl,
-    passcode: config.passcode,
-    passcodeInPassword: config.passcodeInPassword,
-    proxyHost: config.proxyHost,
-    proxyPassword: config.proxyPassword,
-    proxyPort: config.proxyPort,
-    proxyProtocol: config.proxyProtocol,
-    proxyUser: config.proxyUser,
-    queryTag: config.queryTag,
-    timeout: config.timeout,
-    workloadIdentityProvider: config.workloadIdentityProvider,
-    workloadIdentityAzureClientId: config.workloadIdentityAzureClientId,
-    workloadIdentityImpersonationPath: config.workloadIdentityImpersonationPath,
-    waitTimeout: config.waitTimeout,
-    byteLimit: config.byteLimit,
-    privateKey: config.privateKey,
-    privateKeyPath: config.privateKeyPath,
-    privateKeyPassphrase: config.privateKeyPassphrase,
-    authMethod: config.authMethod,
-    authenticator: config.authenticator,
-    keyFilename: config.keyFilename,
-    serviceAccountJson: config.serviceAccountJson,
-    credentials: config.credentials,
-    location: config.location,
-    accessKeyId: config.accessKeyId,
-    secretAccessKey: config.secretAccessKey,
-    sessionToken: config.sessionToken,
-    profile: config.profile,
-    sqliteQueryIsolation: config.sqliteQueryIsolation,
-    moduleSearchPaths: config.moduleSearchPaths,
-  };
+  const settings = config as unknown as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+  for (const field of CONNECTION_KEY_FIELDS) normalized[field] = settings[field];
   if (isIdentityPooled(config)) {
     // Whose permissions the session runs with, in place of what proved it: every other setting (the account, the
     // role, the warehouse, the user name) still tells sessions apart.
     for (const field of CONNECTION_CREDENTIAL_FIELDS) delete normalized[field];
     normalized.executionIdentity = config.executionIdentity;
   }
-  const payload = stableSerialize(normalized);
-  return createHash('sha1').update(payload).digest('hex');
+  return createHmac('sha256', PROCESS_KEY).update(stableSerialize(normalized)).digest('hex');
 }
 
 export interface ConnectionPoolOptions {
@@ -178,6 +197,12 @@ export interface ConnectionPoolOptions {
    * already a new session.
    */
   maxSessionAgeMs?: number;
+  /**
+   * A session that was handed out with `getConnector` (no lease) and has since been retired for its age is kept
+   * connected until this long after it was last handed out or last ran a statement (default 5 minutes): whoever
+   * holds it may be between two statements. New work never gets it; it signs in again.
+   */
+  unleasedHoldMs?: number;
 }
 
 /** A connector for one statement: `release` says the statement is over. */
@@ -197,6 +222,8 @@ interface PooledConnector {
   lastUsed: number;
   /** Statements running on it now, and statements it was handed out for. */
   inFlight: number;
+  /** When it was last handed out without a lease (`getConnector`): its holder may use it again at any moment. */
+  unleasedAt?: number;
   /** No longer handed out; disconnected once nothing runs on it. */
   retiredAt?: number;
 }
@@ -211,6 +238,8 @@ interface PendingConnector {
 const RETIRED_LINGER_MS = 5_000;
 
 const DEFAULT_MAX_SESSION_AGE_MS = 10 * 60_000;
+
+const DEFAULT_UNLEASED_HOLD_MS = 5 * 60_000;
 
 function defaultMaxSessionAgeMs(): number {
   const configured = Number(readEnv('ZLENS_POOL_MAX_SESSION_AGE_MS'));
@@ -236,6 +265,7 @@ export class ConnectionPoolManager {
   private readonly maxConnectors: number;
   private readonly sweepMs: number;
   private readonly maxSessionAgeMs: number;
+  private readonly unleasedHoldMs: number;
   private sweeper: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: ConnectionPoolOptions = {}) {
@@ -243,6 +273,7 @@ export class ConnectionPoolManager {
     this.maxConnectors = options.maxConnectors ?? 64;
     this.sweepMs = options.sweepMs ?? 60_000;
     this.maxSessionAgeMs = options.maxSessionAgeMs ?? defaultMaxSessionAgeMs();
+    this.unleasedHoldMs = options.unleasedHoldMs ?? DEFAULT_UNLEASED_HOLD_MS;
   }
 
   private arm(): void {
@@ -267,7 +298,7 @@ export class ConnectionPoolManager {
     // while an earlier one disconnects is no longer among those chosen.
     const evicted = [...idle, ...overCap].filter((entry) => this.connectors.get(entry.key) === entry);
     for (const entry of evicted) this.connectors.delete(entry.key);
-    const lingered = [...this.retired].filter((entry) => entry.inFlight === 0 && now - (entry.retiredAt ?? 0) >= RETIRED_LINGER_MS);
+    const lingered = [...this.retired].filter((entry) => this.retiredIsDone(entry, now));
     for (const entry of lingered) this.retired.delete(entry);
     for (const entry of [...evicted, ...lingered]) {
       try { await entry.connector.disconnect(); } catch { /* already out of the pool; a later query reconnects */ }
@@ -275,9 +306,15 @@ export class ConnectionPoolManager {
     return evicted.length;
   }
 
-  /** A connector for this connection. For one statement, `acquire` also keeps it from being evicted meanwhile. */
+  /**
+   * A connector for this connection, for a caller that keeps it over several statements (a catalog listing, a
+   * consistent read). No lease says when the caller is done, so a session retired for its age after this is kept
+   * connected for `unleasedHoldMs` past its last use. For one statement, prefer `acquire`.
+   */
   async getConnector(config: ConnectionConfig): Promise<DatabaseConnector> {
-    return (await this.obtain(config, false)).connector;
+    const entry = await this.obtain(config, false);
+    entry.unleasedAt = Date.now();
+    return entry.connector;
   }
 
   /**
@@ -382,13 +419,26 @@ export class ConnectionPoolManager {
     this.retired.add(entry);
   }
 
+  /**
+   * Whether a retired session can be disconnected: nothing runs on it, and nobody who was handed it can still be
+   * about to. A lease says when its statement is over; a connector handed out without one (`getConnector`) is
+   * held by a caller the pool cannot see, between a listing and the statements that follow it, so the session
+   * stays until `unleasedHoldMs` after it was last handed out that way or last ran anything.
+   */
+  private retiredIsDone(entry: PooledConnector, now: number): boolean {
+    if (entry.inFlight > 0) return false;
+    if (now - (entry.retiredAt ?? 0) < RETIRED_LINGER_MS) return false;
+    if (entry.unleasedAt === undefined) return true;
+    return now - Math.max(entry.unleasedAt, entry.lastUsed) >= this.unleasedHoldMs;
+  }
+
   /** One statement on this connector is over. */
   private finished(entry: PooledConnector): void {
     entry.inFlight = Math.max(0, entry.inFlight - 1);
     entry.lastUsed = Date.now();
     if (entry.inFlight > 0) return;
     if (entry.retiredAt !== undefined) {
-      if (this.retired.has(entry) && Date.now() - entry.retiredAt >= RETIRED_LINGER_MS) {
+      if (this.retired.has(entry) && this.retiredIsDone(entry, Date.now())) {
         this.retired.delete(entry);
         void entry.connector.disconnect().catch(() => undefined);
       }
