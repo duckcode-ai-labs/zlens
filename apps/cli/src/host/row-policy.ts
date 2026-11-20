@@ -103,6 +103,14 @@ export type DqlRowPolicy = (query: DqlQueryContext) => Promise<DqlRowPolicyResul
  * Without `identity`, a hook that changes the connection gets one
  * scope and one connection per credential: nothing is shared between people,
  * and nothing survives a renewal either.
+ *
+ * A SESSION THAT IS NOT THE CONNECTION'S ALONE. The connection the hook
+ * answers may carry `sessionRelease: 'abandon'` (the pool then never sends a
+ * logout for it, on any path; only a driver that can drop a session takes
+ * it, today Snowflake) and `maxSessionAgeMs` (how old an identity session may
+ * get before the next statement signs in again). A sign-in for an identity
+ * that fails is a `SessionSignInError` from `@zlens/connectors`: the statement
+ * fails and no other session is used. See docs/rfcs/0010-host-hooks.md.
  */
 export interface DqlCredentialsContext {
   principal: DqlPrincipal | null;

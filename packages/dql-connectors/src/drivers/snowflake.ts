@@ -101,6 +101,16 @@ export class SnowflakeConnector implements DatabaseConnector {
       connectionConfig.host = config.host;
     }
 
+    if (config.sessionRelease === 'abandon') {
+      // A session that is only ever dropped must not be kept alive from here: with the SDK's session keep-alive on
+      // (the account's own CLIENT_SESSION_KEEP_ALIVE decides when the connection does not say), a heartbeat timer
+      // runs that only a logout stops. So it is off by name, and asking for both is a mistake worth stopping for.
+      if (config.clientSessionKeepAlive === true) {
+        throw new Error('A Snowflake connection that is abandoned rather than ended (sessionRelease: abandon) cannot keep its session alive (clientSessionKeepAlive).');
+      }
+      connectionConfig.clientSessionKeepAlive = false;
+    }
+
     await new Promise<void>((resolve, reject) => {
       this.connection = this.sdk.createConnection(connectionConfig);
       this.connection.connect((err: Error | undefined) => {
@@ -283,6 +293,21 @@ export class SnowflakeConnector implements DatabaseConnector {
           resolve();
         });
       });
+    }
+  }
+
+  /**
+   * Let go of the session without a logout (`sessionRelease: 'abandon'`): the SDK's `destroy` is never called, so
+   * Snowflake is told nothing and the session ends by Snowflake's own rules. The SDK's heartbeat timer, if one was
+   * started all the same, is stopped: it is the one thing of a connection that would keep running here. (The SDK's
+   * HTTP agent is shared by every connection and holds no session.)
+   */
+  async abandon(): Promise<void> {
+    const connection = this.connection;
+    this.connection = null;
+    if (connection && connection.keepalive !== undefined) {
+      try { clearInterval(connection.keepalive); } catch { /* not a timer: nothing to stop */ }
+      connection.keepalive = undefined;
     }
   }
 

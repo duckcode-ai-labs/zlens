@@ -156,6 +156,8 @@ const CONNECTION_KEY_FIELDS = [
   'profile',
   'sqliteQueryIsolation',
   'moduleSearchPaths',
+  // A session that is abandoned and one that is ended are never the same connector.
+  'sessionRelease',
 ] as const satisfies ReadonlyArray<keyof ConnectionConfig>;
 
 /**
@@ -205,6 +207,28 @@ export interface ConnectionPoolOptions {
   unleasedHoldMs?: number;
 }
 
+/**
+ * A connection kept by its execution identity could not sign in. Nothing else is tried: the statement fails, and it
+ * never runs on another identity's session, on the configured connection, or on the session this one replaces.
+ * `replaced` says a session of this identity existed in this process before (it was too old or lost), so the
+ * credential that came with the statement can no longer open one: a host asks the person to sign in again.
+ * The driver's own error is the `cause`; it is not in the message.
+ */
+export class SessionSignInError extends Error {
+  readonly code = 'SESSION_SIGN_IN_FAILED';
+  readonly driver: string;
+  readonly replaced: boolean;
+
+  constructor(driver: string, replaced: boolean, cause: unknown) {
+    super(replaced
+      ? 'The credentials given for this connection can no longer open a session. Sign in again.'
+      : 'The credentials given for this connection did not open a session.', { cause });
+    this.name = 'SessionSignInError';
+    this.driver = driver;
+    this.replaced = replaced;
+  }
+}
+
 /** A connector for one statement: `release` says the statement is over. */
 export interface ConnectorLease {
   connector: DatabaseConnector;
@@ -218,6 +242,8 @@ interface PooledConnector {
   local: boolean;
   /** Kept by execution identity (see `isIdentityPooled`). */
   identityPooled: boolean;
+  /** Let go of without a logout (`ConnectionConfig.sessionRelease: 'abandon'`). */
+  abandon: boolean;
   connectedAt: number;
   lastUsed: number;
   /** Statements running on it now, and statements it was handed out for. */
@@ -241,6 +267,8 @@ const DEFAULT_MAX_SESSION_AGE_MS = 10 * 60_000;
 
 const DEFAULT_UNLEASED_HOLD_MS = 5 * 60_000;
 
+const MAX_REMEMBERED_IDENTITY_KEYS = 10_000;
+
 function defaultMaxSessionAgeMs(): number {
   const configured = Number(readEnv('ZLENS_POOL_MAX_SESSION_AGE_MS'));
   return Number.isFinite(configured) && configured >= 0 && readEnv('ZLENS_POOL_MAX_SESSION_AGE_MS')?.trim() ? configured : DEFAULT_MAX_SESSION_AGE_MS;
@@ -261,6 +289,8 @@ export class ConnectionPoolManager {
   private connectors: Map<string, PooledConnector> = new Map();
   private pendingConnectors: Map<string, PendingConnector> = new Map();
   private retired: Set<PooledConnector> = new Set();
+  /** Identity sessions this process has had (their keys): a sign-in that fails for one of them replaces a session. */
+  private signedInBefore: Set<string> = new Set();
   private readonly idleMs: number;
   private readonly maxConnectors: number;
   private readonly sweepMs: number;
@@ -301,7 +331,7 @@ export class ConnectionPoolManager {
     const lingered = [...this.retired].filter((entry) => this.retiredIsDone(entry, now));
     for (const entry of lingered) this.retired.delete(entry);
     for (const entry of [...evicted, ...lingered]) {
-      try { await entry.connector.disconnect(); } catch { /* already out of the pool; a later query reconnects */ }
+      try { await this.letGo(entry); } catch { /* already out of the pool; a later query reconnects */ }
     }
     return evicted.length;
   }
@@ -340,7 +370,7 @@ export class ConnectionPoolManager {
     const now = Date.now();
     const existing = this.connectors.get(key);
     if (existing) {
-      if (this.tooOld(existing, now)) {
+      if (this.tooOld(existing, now, config)) {
         // The next use signs in again, with this statement's credential. Statements still running on the old
         // session finish there; it is disconnected once they have.
         this.retire(existing, now);
@@ -364,8 +394,15 @@ export class ConnectionPoolManager {
 
   private async connect(key: string, config: ConnectionConfig, record: PendingConnector): Promise<PooledConnector> {
     let connector: DatabaseConnector | undefined;
+    const abandon = config.sessionRelease === 'abandon';
+    const local = LOCAL_DRIVERS.has(config.driver);
+    const identityPooled = !local && isIdentityPooled(config);
     try {
       const created = this.createConnector(config);
+      // Refused before it signs in: a driver that can only end a session must never be handed one to abandon.
+      if (abandon && typeof created.abandon !== 'function') {
+        throw new Error(`The ${config.driver} driver cannot let go of a session without ending it, so it does not take sessionRelease: abandon.`);
+      }
       connector = created;
       // A database in a private network is reached through an SSH bastion;
       // the tunnel lives exactly as long as the connector.
@@ -379,15 +416,26 @@ export class ConnectionPoolManager {
             await tunnel.close();
           }
         };
+        // The tunnel is this connection's own either way.
+        const letGo = created.abandon?.bind(created);
+        if (letGo) {
+          created.abandon = async () => {
+            try {
+              await letGo();
+            } finally {
+              await tunnel.close();
+            }
+          };
+        }
       }
       await created.connect(tunnel ? tunnel.config : config);
       const now = Date.now();
-      const local = LOCAL_DRIVERS.has(config.driver);
       const entry: PooledConnector = {
         key,
         connector: created,
         local,
-        identityPooled: !local && isIdentityPooled(config),
+        identityPooled,
+        abandon,
         connectedAt: now,
         lastUsed: now,
         // Everyone who waited for it to run a statement at once: it enters the pool already in use.
@@ -395,21 +443,45 @@ export class ConnectionPoolManager {
       };
       if (!local) this.track(entry);
       this.connectors.set(key, entry);
+      if (identityPooled) {
+        // Bounded: past the cap the oldest keys are forgotten, which only makes a later failure read "did not open".
+        this.signedInBefore.delete(key);
+        this.signedInBefore.add(key);
+        for (const oldest of this.signedInBefore) {
+          if (this.signedInBefore.size <= MAX_REMEMBERED_IDENTITY_KEYS) break;
+          this.signedInBefore.delete(oldest);
+        }
+      }
       return entry;
     } catch (error) {
       try {
-        await connector?.disconnect();
+        // A sign-in that failed part-way may have opened a session: it is let go of the way the connection asked.
+        if (connector) await (abandon ? connector.abandon?.() : connector.disconnect());
       } catch {
         // The original connection error remains authoritative.
       }
+      // An identity's sign-in that fails is the statement's failure, said by type: no other session is tried.
+      if (identityPooled && !(error instanceof SessionSignInError)) throw new SessionSignInError(config.driver, this.signedInBefore.has(key), error);
       throw error;
     } finally {
       if (this.pendingConnectors.get(key) === record) this.pendingConnectors.delete(key);
     }
   }
 
-  private tooOld(entry: PooledConnector, now: number): boolean {
-    return entry.identityPooled && this.maxSessionAgeMs > 0 && now - entry.connectedAt > this.maxSessionAgeMs;
+  /** Whether an identity session is past its age: the connection's own `maxSessionAgeMs` if it has one, else the pool's. */
+  private tooOld(entry: PooledConnector, now: number, config: ConnectionConfig): boolean {
+    if (!entry.identityPooled) return false;
+    const own = config.maxSessionAgeMs;
+    const maxAgeMs = typeof own === 'number' && Number.isFinite(own) && own >= 0 ? own : this.maxSessionAgeMs;
+    return maxAgeMs > 0 && now - entry.connectedAt > maxAgeMs;
+  }
+
+  /**
+   * THE ONE PLACE A SESSION IS LET GO OF: every path (idle, over the cap, retired for its age, lost, shutdown) ends
+   * here. Ended at the warehouse, or, for a connection that asked to be abandoned, only dropped: no logout.
+   */
+  private letGo(entry: Pick<PooledConnector, 'connector' | 'abandon'>): Promise<void> {
+    return entry.abandon ? entry.connector.abandon!() : entry.connector.disconnect();
   }
 
   /** Take a connector out of the pool; it is disconnected once nothing runs on it (see `evictIdle`, `finished`). */
@@ -440,7 +512,7 @@ export class ConnectionPoolManager {
     if (entry.retiredAt !== undefined) {
       if (this.retired.has(entry) && this.retiredIsDone(entry, Date.now())) {
         this.retired.delete(entry);
-        void entry.connector.disconnect().catch(() => undefined);
+        void this.letGo(entry).catch(() => undefined);
       }
       return;
     }
@@ -507,7 +579,7 @@ export class ConnectionPoolManager {
     // replacement connector established concurrently by another query.
     this.connectors.delete(key);
     try {
-      await entry.connector.disconnect();
+      await this.letGo(entry);
     } catch {
       // The stale connector is already evicted; reconnect remains available.
     }
@@ -521,7 +593,7 @@ export class ConnectionPoolManager {
     this.connectors.clear();
     this.retired.clear();
     this.pendingConnectors.clear();
-    await Promise.all(all.map((entry) => entry.connector.disconnect()));
+    await Promise.all(all.map((entry) => this.letGo(entry)));
   }
 
   private createConnector(config: ConnectionConfig): DatabaseConnector {

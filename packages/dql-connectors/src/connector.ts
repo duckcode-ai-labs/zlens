@@ -301,6 +301,23 @@ export interface ConnectionConfig {
    * that session is new, lost or too old (see `ConnectionPoolManager`). No driver sends it to a warehouse.
    */
   executionIdentity?: string;
+  /**
+   * What letting go of this connection's session means, for a program that embeds ZLens. `end` (the default): the
+   * session is this connection's own, and it is ended at the warehouse (a logout) when the pool lets it go.
+   * `abandon`: the session is not this connection's alone. Somebody else holds it too, or ending it would end more
+   * than this connection (a warehouse where one credential is one session, wherever it is used), so the pool only
+   * drops it: no logout is sent on any path (too old, idle, over the cap, lost, a sign-in that failed, shutdown),
+   * and nothing is left running for it here. The warehouse ends the session by its own rules. Only a driver that
+   * can do that takes the setting (`DatabaseConnector.abandon`; today Snowflake); on any other driver a connection
+   * with `abandon` is refused before it signs in, never treated as `end`.
+   */
+  sessionRelease?: 'end' | 'abandon';
+  /**
+   * The oldest this connection's session may get before the next statement signs in again, in milliseconds, for a
+   * session kept by its execution identity; it replaces the pool's own `maxSessionAgeMs` for this connection, and
+   * 0 means such a session is never retired for its age. Read from the settings of the statement that asks.
+   */
+  maxSessionAgeMs?: number;
 }
 
 export type DriverName = ConnectionConfig['driver'];
@@ -333,6 +350,11 @@ export interface DatabaseConnector {
   execute(sql: string, params?: unknown[], options?: QueryExecutionOptions): Promise<QueryResult>;
   stream?(sql: string, params?: unknown[], options?: QueryExecutionOptions): AsyncIterable<QueryBatch>;
   disconnect(): Promise<void>;
+  /**
+   * Let go of the session without ending it at the warehouse (`ConnectionConfig.sessionRelease: 'abandon'`): no
+   * logout is sent, and no timer of this connection is left running. A driver without it cannot take that setting.
+   */
+  abandon?(): Promise<void>;
   ping(): Promise<boolean>;
   listTables?(): Promise<TableInfo[]>;
   /** DuckDB also takes `catalog.schema` for a table in an attached database. */
