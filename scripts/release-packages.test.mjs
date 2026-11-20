@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,7 @@ import {
   assertExpectedReleaseVersion,
   assertReleaseTagCompatibility,
   assertSynchronizedReleaseVersions,
+  emptyArtifactsDir,
   exactPackageSpec,
   parseReleaseArguments,
   publishCommandArgs,
@@ -171,4 +173,24 @@ test('the release workflow passes its trusted Git tag version to the release scr
     workflow,
     /node scripts\/release-packages\.mjs --publish --tag "\$\{\{ steps\.npm_dist_tag\.outputs\.tag \}\}" --expected-version "\$\{GITHUB_REF_NAME#zlens-v\}"/,
   );
+});
+
+test('the pack folder starts empty, so an earlier run cannot add a package that is no longer released', () => {
+  const scratch = mkdtempSync(path.join(tmpdir(), 'zlens-release-artifacts-'));
+  try {
+    const artifactsDir = path.join(scratch, '.release-artifacts');
+    mkdirSync(path.join(artifactsDir, 'nested'), { recursive: true });
+    writeFileSync(path.join(artifactsDir, 'zlens-0.3.0.tgz'), 'stale tarball from an earlier dry run');
+    writeFileSync(path.join(artifactsDir, 'nested', 'left-over.txt'), 'stale');
+    emptyArtifactsDir(artifactsDir);
+    assert.equal(existsSync(artifactsDir), true);
+    assert.deepEqual(readdirSync(artifactsDir), []);
+
+    const missing = path.join(scratch, 'not-made-yet');
+    emptyArtifactsDir(missing);
+    assert.equal(existsSync(missing), true);
+    assert.deepEqual(readdirSync(missing), []);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
