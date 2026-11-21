@@ -302,6 +302,15 @@ export interface ConnectionConfig {
    */
   executionIdentity?: string;
   /**
+   * A session the program that embeds ZLens keeps for this identity, in place of one the pool would open: asked for
+   * each statement, it answers the connected session to run on. The pool then never signs in for this connection,
+   * with these settings or any other, and never ends or abandons what it is handed: the host owns the session's
+   * life, and the pool only stops using it. No answer (or an error) means the host has no session for this identity
+   * now: the statement fails with `SessionSignInError`, and runs nowhere else. Needs `executionIdentity`. Set at run
+   * time only (by a host's `credentials` hook, as `session`), never read from or written to a project's files.
+   */
+  hostSession?: HostSessionProvider;
+  /**
    * What letting go of this connection's session means, for a program that embeds ZLens. `end` (the default): the
    * session is this connection's own, and it is ended at the warehouse (a logout) when the pool lets it go.
    * `abandon`: the session is not this connection's alone. Somebody else holds it too, or ending it would end more
@@ -343,6 +352,9 @@ export interface ColumnInfo {
   dataType: string;
   ordinalPosition: number;
 }
+
+/** See `ConnectionConfig.hostSession`. */
+export type HostSessionProvider = () => DatabaseConnector | undefined | null | Promise<DatabaseConnector | undefined | null>;
 
 export interface DatabaseConnector {
   readonly driverName: DriverName;

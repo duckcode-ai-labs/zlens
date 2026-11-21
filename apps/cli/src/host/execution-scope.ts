@@ -53,7 +53,9 @@ export function executionScopeOf(configured: ConnectionConfig, resolved: Connect
   const after = resolved as unknown as Record<string, unknown>;
   const changed: Array<[string, string]> = [];
   for (const field of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
-    if (field === 'executionIdentity') continue;
+    // Neither names who it runs as: the identity is read above, and a host's session provider is a function of the
+    // request (the same person's session, a new closure each time).
+    if (field === 'executionIdentity' || field === 'hostSession') continue;
     if (identity && CREDENTIAL_FIELDS.has(field)) continue;
     const now = stableText(after[field]);
     if (stableText(before[field]) !== now) changed.push([field, now]);

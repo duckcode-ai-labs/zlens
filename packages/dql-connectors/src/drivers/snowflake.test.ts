@@ -229,6 +229,40 @@ describe('what ZLens tells Snowflake about itself', () => {
   });
 });
 
+describe('statements that share one Snowflake session', () => {
+  it('each carry their own tag, as a parameter of the statement: nothing is set on the session, so nothing leaks to the next', async () => {
+    const connector = new SnowflakeConnector();
+    const sent: Array<Record<string, any>> = [];
+    const waiting: Array<() => void> = [];
+    const statement = { getColumns: () => [], getStatementId: () => '01shared', streamRows: () => Readable.from([]), cancel: (complete: () => void) => complete() };
+    (connector as any).connection = {
+      // Each statement answers only when the test lets it: all of them are under way at once.
+      execute: (options: Record<string, any>) => { sent.push(options); waiting.push(() => options.complete(undefined, statement)); return statement; },
+    };
+    const people = ['req-a', 'req-b', 'req-c', 'req-d'];
+    const running = people.map((request, n) => withQueryLabels({ action: n % 2 ? 'ask' : 'app', request }, () => connector.execute(`select ${n}`, [], { purpose: n === 3 ? 'metadata' : 'data' })));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sent).toHaveLength(4);
+    // Answered in the opposite order to the one they were sent in.
+    for (const answer of waiting.reverse()) answer();
+    await Promise.all(running);
+    expect(sent.map((options) => [options.sqlText, JSON.parse(options.parameters.QUERY_TAG).zlens])).toEqual([
+      ['select 0', { purpose: 'data', action: 'app', request: 'req-a' }],
+      ['select 1', { purpose: 'data', action: 'ask', request: 'req-b' }],
+      ['select 2', { purpose: 'data', action: 'app', request: 'req-c' }],
+      ['select 3', { purpose: 'metadata', action: 'ask', request: 'req-d' }],
+    ]);
+    // Only a statement's own parameters carry anything: no statement changes the session (no ALTER SESSION, no USE).
+    expect(sent.map((options) => options.sqlText).filter((sql: string) => /^\s*(alter\s+session|use\s)/i.test(sql))).toEqual([]);
+    // After the labelled work, a statement with no labels carries none of them.
+    const last = connector.execute('select 4');
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    sent[4]!.complete(undefined, statement);
+    await last;
+    expect(JSON.parse(sent[4]!.parameters.QUERY_TAG)).toEqual({ zlens: { purpose: 'data' } });
+  });
+});
+
 describe('snowflakeQueryTag', () => {
   const labels = { purpose: 'data', action: 'ask' };
 

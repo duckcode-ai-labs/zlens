@@ -192,6 +192,75 @@ describe('one warehouse session per identity, through the host\'s hook', () => {
   });
 });
 
+describe('a session the host supplies, through the host\'s hook', () => {
+  const result = { columns: [], rows: [], rowCount: 0, executionTimeMs: 0 };
+  const sessionOf = (owner: string, ran: string[]) => ({
+    driverName: 'snowflake' as const,
+    connect: async () => { throw new Error('never connected by ZLens'); },
+    execute: async (sql: string) => { ran.push(`${owner}: ${sql}`); return result; },
+    disconnect: async () => { ran.push(`${owner}: ENDED`); },
+    abandon: async () => { ran.push(`${owner}: ABANDONED`); },
+    ping: async () => true,
+  });
+
+  it('rides on the connection only from `session`, needs an identity, and is not part of the scope', async () => {
+    const provider = () => undefined;
+    const hook: DqlCredentialsHook = ({ principal }) => ({ connection: { warehouse: 'PEOPLE_WH' }, identity: `user:${principal?.id}`, session: provider });
+    const maria = await as('maria', () => resolvePersonConnection(hook, service));
+    expect(maria.hostSession).toBe(provider);
+    // Never from the overlay or from the project's own settings.
+    const smuggled = await as('maria', () => resolvePersonConnection(() => ({ connection: { hostSession: provider } as Partial<ConnectionConfig>, identity: 'user:maria' }), { ...service, hostSession: provider }));
+    expect('hostSession' in smuggled).toBe(false);
+    // Without an identity nothing says whose session it is: refused, as any unusable answer is.
+    for (const identity of [undefined, '', '  ']) {
+      await expect(resolvePersonConnection(() => ({ connection: {}, ...(identity === undefined ? {} : { identity }), session: provider }), service)).rejects.toBeInstanceOf(CredentialsRefusedError);
+    }
+    for (const session of ['a session', 7, {}, true]) {
+      await expect(resolvePersonConnection(() => ({ connection: {}, identity: 'user:maria', session } as never), service)).rejects.toBeInstanceOf(CredentialsRefusedError);
+    }
+    // The scope is the identity's, with or without a supplied session and whichever closure supplies it.
+    const named: DqlCredentialsHook = ({ principal }) => ({ connection: { warehouse: 'PEOPLE_WH' }, identity: `user:${principal?.id}` });
+    const without = await as('maria', () => resolvePersonConnection(named, service));
+    const again = await as('maria', () => resolvePersonConnection(({ principal }) => ({ connection: { warehouse: 'PEOPLE_WH' }, identity: `user:${principal?.id}`, session: () => null }), service));
+    const dev = await as('dev', () => resolvePersonConnection(hook, service));
+    expect(executionScopeOf(service, maria)).toBe(executionScopeOf(service, without));
+    expect(executionScopeOf(service, maria)).toBe(executionScopeOf(service, again));
+    expect(executionScopeOf(service, maria)).not.toBe(executionScopeOf(service, dev));
+    expect(executionScopeOf(service, maria)).not.toBe(SHARED_EXECUTION_SCOPE);
+  });
+
+  it('gives each person their own session across two pools that never sign in; no session fails the statement and its scope is nobody else\'s', async () => {
+    const ran: string[] = [];
+    const sessions = new Map<string, ReturnType<typeof sessionOf>>([['maria', sessionOf('maria', ran)], ['dev', sessionOf('dev', ran)]]);
+    const hooks = { credentials: (({ principal }) => (principal ? { connection: { password: undefined }, identity: `user:${principal.id}`, session: () => sessions.get(principal.id) } : { refuse: 'Nobody is asking.' })) as DqlCredentialsHook };
+    const pools = [new ConnectionPoolManager(), new ConnectionPoolManager()];
+    for (const pool of pools) (pool as unknown as { createConnector(): never }).createConnector = () => { throw new Error('The pool tried to sign in by itself.'); };
+    const [first, second] = pools.map((pool) => withHostQueryHooks(new QueryExecutor(pool), hooks));
+    await as('maria', () => first!.executePositional('SELECT 1', [], service));
+    await as('dev', () => second!.executePositional('SELECT 2', [], service));
+    await as('maria', () => second!.executePositional('SELECT 3', [], service));
+    await as('dev', () => first!.executePositional('SELECT 4', [], service));
+    expect(ran).toEqual(['maria: SELECT 1', 'dev: SELECT 2', 'maria: SELECT 3', 'dev: SELECT 4']);
+    // The scope each statement ran in is its person's, the same from either pool.
+    const scope = (id: string, executor: unknown) => as(id, () => executionScopeFor(executor, service));
+    expect(await scope('maria', first)).toBe(await scope('maria', second));
+    expect(await scope('maria', first)).not.toBe(await scope('dev', first));
+    expect(await scope('maria', first)).not.toBe(SHARED_EXECUTION_SCOPE);
+    // The host has no session for someone: their statement fails, by type, and runs on nobody's session.
+    sessions.delete('dev');
+    const failure = await as('dev', () => first!.executePositional('SELECT 5', [], service)).catch((error: unknown) => error);
+    expect((failure as { code?: string }).code).toBe('SESSION_SIGN_IN_FAILED');
+    await as('ana', () => second!.executePositional('SELECT 6', [], service)).then(() => { throw new Error('It ran.'); }, (error: { code?: string }) => expect(error.code).toBe('SESSION_SIGN_IN_FAILED'));
+    // With nobody asking, the hook refuses: nothing runs, and the scope is unknown, never shared.
+    await expect(first!.executePositional('SELECT 7', [], service)).rejects.toBeInstanceOf(CredentialsRefusedError);
+    expect(await executionScopeFor(first, service)).toMatch(/^unknown-/);
+    expect(ran).toHaveLength(4);
+    // Shutting both pools down ends nothing of the host's.
+    for (const pool of pools) await pool.disconnectAll();
+    expect(ran.filter((line) => line.endsWith('ENDED') || line.endsWith('ABANDONED'))).toEqual([]);
+  });
+});
+
 describe('the identity a host names stays out of logs and errors', () => {
   const IDENTITY = 'warehouse-user:MARIA_7731|role:FINANCE_EU';
   const logged: string[] = [];
