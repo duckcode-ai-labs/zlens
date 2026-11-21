@@ -6,7 +6,7 @@ import type {
   QueryExecutor,
   QueryPurpose,
 } from '@zlens/connectors';
-import { createConnectionConfigKey } from '@zlens/connectors';
+import { createConnectionConfigKey, type HostSessionProvider } from '@zlens/connectors';
 import { EXECUTION_SCOPE, SHARED_EXECUTION_SCOPE, executionIdentityDigest, executionScopeOf, markSignsPeopleIn, unknownExecutionScope } from './execution-scope.js';
 import { classifyWarehouseError, hostedWarehouseError, warehouseDiagnosis } from '@zlens/agent';
 import { analyzeSqlReferences, extractTablesFromSql } from '@zlens/core';
@@ -111,6 +111,12 @@ export type DqlRowPolicy = (query: DqlQueryContext) => Promise<DqlRowPolicyResul
  * get before the next statement signs in again). A sign-in for an identity
  * that fails is a `SessionSignInError` from `@zlens/connectors`: the statement
  * fails and no other session is used. See docs/rfcs/0010-host-hooks.md.
+ *
+ * A SESSION THE HOST KEEPS. The answer may carry `session`, a function that
+ * gives the connected session to run this identity's statements on. ZLens
+ * then never signs in for the connection and never ends that session; it
+ * asks for every statement, and no answer fails the statement
+ * (`SessionSignInError`). It needs `identity`.
  */
 export interface DqlCredentialsContext {
   principal: DqlPrincipal | null;
@@ -123,7 +129,7 @@ export interface DqlCredentialsContext {
  * Settings to lay over the connection for this person (any field but `driver`), with, optionally, the `identity`
  * the connection then runs as; or a refusal.
  */
-export type DqlCredentialsResult = { connection: Partial<ConnectionConfig>; identity?: string } | { refuse: string };
+export type DqlCredentialsResult = { connection: Partial<ConnectionConfig>; identity?: string; session?: HostSessionProvider } | { refuse: string };
 
 export type DqlCredentialsHook = (input: DqlCredentialsContext) => Promise<DqlCredentialsResult> | DqlCredentialsResult;
 
@@ -164,10 +170,20 @@ export async function resolvePersonConnection(hook: DqlCredentialsHook, config: 
   const named = answer.identity;
   if (named !== undefined && named !== null && typeof named !== 'string') throw new CredentialsRefusedError(CREDENTIALS_UNREADABLE);
   const identity = typeof named === 'string' && named.trim() ? named.trim() : undefined;
-  // Only `identity` says who the connection runs as: never a field of the overlay or of the project's own settings.
-  const { driver: _ignored, executionIdentity: _unnamed, ...overlay } = connection as Partial<ConnectionConfig>;
-  const { executionIdentity: _configured, ...base } = config;
-  return { ...base, ...overlay, ...(identity ? { executionIdentity: executionIdentityDigest(identity) } : {}) } as ConnectionConfig;
+  // A session the host supplies is a function, and it is somebody's: without an identity nothing says whose, so
+  // the answer refuses rather than run on a session that could be anyone's.
+  const session = answer.session;
+  if (session !== undefined && session !== null && typeof session !== 'function') throw new CredentialsRefusedError(CREDENTIALS_UNREADABLE);
+  if (typeof session === 'function' && !identity) throw new CredentialsRefusedError(CREDENTIALS_UNREADABLE);
+  // Only `identity` says who the connection runs as, and only `session` supplies one: never a field of the overlay
+  // or of the project's own settings.
+  const { driver: _ignored, executionIdentity: _unnamed, hostSession: _supplied, ...overlay } = connection as Partial<ConnectionConfig>;
+  const { executionIdentity: _configured, hostSession: _own, ...base } = config;
+  return {
+    ...base, ...overlay,
+    ...(identity ? { executionIdentity: executionIdentityDigest(identity) } : {}),
+    ...(typeof session === 'function' ? { hostSession: session as HostSessionProvider } : {}),
+  } as ConnectionConfig;
 }
 
 export class RowPolicyRefusedError extends Error {

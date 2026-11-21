@@ -176,7 +176,13 @@ export function createConnectionConfigKey(config: ConnectionConfig): string {
   const settings = config as unknown as Record<string, unknown>;
   const normalized: Record<string, unknown> = {};
   for (const field of CONNECTION_KEY_FIELDS) normalized[field] = settings[field];
-  if (isIdentityPooled(config)) {
+  if (typeof config.hostSession === 'function') {
+    // A session the host supplies is kept by whose it is, on any driver, and never shares an entry with a session
+    // the pool opened itself: no credential is part of it (the pool presents none).
+    for (const field of CONNECTION_CREDENTIAL_FIELDS) delete normalized[field];
+    normalized.executionIdentity = config.executionIdentity ?? null;
+    normalized.hostSession = true;
+  } else if (isIdentityPooled(config)) {
     // Whose permissions the session runs with, in place of what proved it: every other setting (the account, the
     // role, the warehouse, the user name) still tells sessions apart.
     for (const field of CONNECTION_CREDENTIAL_FIELDS) delete normalized[field];
@@ -229,6 +235,26 @@ export class SessionSignInError extends Error {
   }
 }
 
+/**
+ * This pool's handle on a session the host supplied. Statements go to the host's session; the pool counts them on
+ * the handle, so the host's object is never changed (several pools may hold the same session, each with a handle
+ * of its own). Connecting, ending and abandoning do nothing here: the session is the host's.
+ */
+function borrowedSession(session: DatabaseConnector): DatabaseConnector {
+  const handle: DatabaseConnector = {
+    driverName: session.driverName,
+    connect: async () => undefined,
+    disconnect: async () => undefined,
+    abandon: async () => undefined,
+    execute: (sql, params, options) => session.execute(sql, params, options),
+    ping: () => session.ping(),
+  };
+  if (typeof session.stream === 'function') handle.stream = (sql, params, options) => session.stream!(sql, params, options);
+  if (typeof session.listTables === 'function') handle.listTables = () => session.listTables!();
+  if (typeof session.listColumns === 'function') handle.listColumns = (schema, table) => session.listColumns!(schema, table);
+  return handle;
+}
+
 /** A connector for one statement: `release` says the statement is over. */
 export interface ConnectorLease {
   connector: DatabaseConnector;
@@ -244,6 +270,11 @@ interface PooledConnector {
   identityPooled: boolean;
   /** Let go of without a logout (`ConnectionConfig.sessionRelease: 'abandon'`). */
   abandon: boolean;
+  /**
+   * The host's own session this entry runs on (`ConnectionConfig.hostSession`): `connector` is then this pool's
+   * handle on it, and letting the entry go ends nothing.
+   */
+  supplied?: DatabaseConnector;
   connectedAt: number;
   lastUsed: number;
   /** Statements running on it now, and statements it was handed out for. */
@@ -367,6 +398,11 @@ export class ConnectionPoolManager {
   private obtain(config: ConnectionConfig, lease: boolean): Promise<PooledConnector> {
     const key = this.configKey(config);
     this.arm();
+    if (config.hostSession !== undefined) {
+      // Anything but a provider is a mistake, and never a reason to sign in with the connection's own settings.
+      if (typeof config.hostSession !== 'function') return Promise.reject(new Error('hostSession must be a function that answers the host\'s session.'));
+      return this.obtainSupplied(key, config, lease);
+    }
     const now = Date.now();
     const existing = this.connectors.get(key);
     if (existing) {
@@ -480,8 +516,50 @@ export class ConnectionPoolManager {
    * THE ONE PLACE A SESSION IS LET GO OF: every path (idle, over the cap, retired for its age, lost, shutdown) ends
    * here. Ended at the warehouse, or, for a connection that asked to be abandoned, only dropped: no logout.
    */
-  private letGo(entry: Pick<PooledConnector, 'connector' | 'abandon'>): Promise<void> {
+  private letGo(entry: Pick<PooledConnector, 'connector' | 'abandon' | 'supplied'>): Promise<void> {
+    // A session the host supplied is the host's: this pool stops using it, and that is all.
+    if (entry.supplied) return Promise.resolve();
     return entry.abandon ? entry.connector.abandon!() : entry.connector.disconnect();
+  }
+
+  /**
+   * A session the host supplies (`ConnectionConfig.hostSession`). The host is asked for every statement, so a
+   * session it replaced or took away is seen at once. This pool never signs in for such a connection: with no
+   * session from the host the statement fails, by type, and nothing else is tried.
+   */
+  private async obtainSupplied(key: string, config: ConnectionConfig, lease: boolean): Promise<PooledConnector> {
+    // Whose session it is must be named: without an identity nothing says who may be handed it.
+    if (typeof config.executionIdentity !== 'string' || !config.executionIdentity) {
+      throw new Error('A session supplied by the host (hostSession) needs an execution identity; none was given, so the statement did not run.');
+    }
+    let session: DatabaseConnector | undefined | null;
+    try {
+      session = await config.hostSession!();
+    } catch (error) {
+      throw new SessionSignInError(config.driver, this.signedInBefore.has(key), error);
+    }
+    if (!session || typeof session.execute !== 'function') throw new SessionSignInError(config.driver, this.signedInBefore.has(key), undefined);
+    const now = Date.now();
+    const existing = this.connectors.get(key);
+    let entry: PooledConnector;
+    if (existing && existing.supplied === session) {
+      entry = existing;
+    } else {
+      // Another session than the one in use (the host replaced it): statements still running finish on the old one.
+      if (existing) this.retire(existing, now);
+      entry = { key, connector: borrowedSession(session), supplied: session, local: false, identityPooled: false, abandon: false, connectedAt: now, lastUsed: now, inFlight: 0 };
+      this.track(entry);
+      this.connectors.set(key, entry);
+      this.signedInBefore.delete(key);
+      this.signedInBefore.add(key);
+      for (const oldest of this.signedInBefore) {
+        if (this.signedInBefore.size <= MAX_REMEMBERED_IDENTITY_KEYS) break;
+        this.signedInBefore.delete(oldest);
+      }
+    }
+    entry.lastUsed = now;
+    if (lease) entry.inFlight += 1;
+    return entry;
   }
 
   /** Take a connector out of the pool; it is disconnected once nothing runs on it (see `evictIdle`, `finished`). */

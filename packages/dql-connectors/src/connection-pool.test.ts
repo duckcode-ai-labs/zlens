@@ -874,3 +874,258 @@ describe('ConnectionPoolManager sessions that are abandoned, never ended', () =>
     await pool.disconnectAll();
   });
 });
+
+/**
+ * A session the program that embeds ZLens keeps itself (`hostSession`): the pool runs statements on it and never
+ * signs in, ends or abandons anything. Several pools may be handed the same session.
+ */
+describe('ConnectionPoolManager with a session the host supplies', () => {
+  const result = { columns: [] as never[], rows: [] as never[], rowCount: 0, executionTimeMs: 0 };
+  type Session = {
+    name: string;
+    driverName: string;
+    ran: string[];
+    connected: number;
+    ended: number;
+    abandoned: number;
+    running: number;
+    mostAtOnce: number;
+    release?: () => void;
+    connect(): Promise<void>;
+    disconnect(): Promise<void>;
+    abandon(): Promise<void>;
+    execute(sql: string): Promise<typeof result>;
+    ping(): Promise<boolean>;
+    listTables(): Promise<never[]>;
+  };
+  /** The host's own session: it counts what is done to it. */
+  const sessionOf = (name: string, driverName = 'snowflake'): Session => {
+    const session: Session = {
+      name, driverName, ran: [], connected: 0, ended: 0, abandoned: 0, running: 0, mostAtOnce: 0,
+      connect: async () => { session.connected += 1; },
+      disconnect: async () => { session.ended += 1; },
+      abandon: async () => { session.abandoned += 1; },
+      execute: async (sql) => {
+        session.running += 1;
+        session.mostAtOnce = Math.max(session.mostAtOnce, session.running);
+        try {
+          if (sql.includes('lost_session')) throw new Error('Unable to perform operation using terminated connection.');
+          if (sql === 'slow') await new Promise<void>((resolve) => { session.release = resolve; });
+          else await Promise.resolve();
+          session.ran.push(sql);
+          return result;
+        } finally {
+          session.running -= 1;
+        }
+      },
+      ping: async () => true,
+      listTables: async () => [],
+    };
+    return session;
+  };
+  /** A pool that fails the test if it ever makes a connector of its own. */
+  const poolOf = (options: ConstructorParameters<typeof ConnectionPoolManager>[0] = {}) => {
+    const pool = new ConnectionPoolManager({ sweepMs: 60_000, ...options });
+    const signedIn: unknown[] = [];
+    (pool as any).createConnector = (config: unknown) => { signedIn.push(config); throw new Error('The pool tried to sign in by itself.'); };
+    return { pool, signedIn };
+  };
+  const base = { driver: 'snowflake' as const, account: 'acct', warehouse: 'WH', authMethod: 'oauth' as const, token: 'a-credential-the-pool-must-never-use' };
+  const untouched = (session: Session) => [session.connected, session.ended, session.abandoned];
+
+  it('runs statements on the host\'s session and never signs in, with these settings or any other', async () => {
+    const { pool, signedIn } = poolOf();
+    const session = sessionOf('a');
+    const methods = { execute: session.execute, ping: session.ping, disconnect: session.disconnect, abandon: session.abandon, listTables: session.listTables };
+    const config = { ...base, executionIdentity: 'person-a', hostSession: () => session };
+    const executor = new QueryExecutor(pool);
+    await executor.executePositional('select 1', [], config);
+    const kept = await pool.getConnector(config);
+    await kept.execute('select 2');
+    await kept.listTables!();
+    expect(session.ran).toEqual(['select 1', 'select 2']);
+    expect(signedIn).toEqual([]);
+    expect(untouched(session)).toEqual([0, 0, 0]);
+    // What the pool hands out is a handle of its own: the host's object is not the pool's to change or to end.
+    expect(kept).not.toBe(session);
+    expect({ execute: session.execute, ping: session.ping, disconnect: session.disconnect, abandon: session.abandon, listTables: session.listTables }).toEqual(methods);
+    await kept.disconnect();
+    await kept.abandon!();
+    await kept.connect({} as never);
+    expect(untouched(session)).toEqual([0, 0, 0]);
+    await pool.disconnectAll();
+  });
+
+  it('never ends or abandons the host\'s session, on any path it stops using one by', async () => {
+    // Idle, over the cap, lost, replaced by the host, and shutdown, with and without `sessionRelease`.
+    for (const release of [undefined, 'abandon', 'end'] as const) {
+      const sessions = [sessionOf('a'), sessionOf('b'), sessionOf('a-again')];
+      const { pool, signedIn } = poolOf({ idleMs: 1_000, maxConnectors: 1 });
+      const executor = new QueryExecutor(pool);
+      let mine = sessions[0]!;
+      const a = { ...base, ...(release ? { sessionRelease: release } : {}), executionIdentity: 'person-a', hostSession: () => mine };
+      const b = { ...base, ...(release ? { sessionRelease: release } : {}), executionIdentity: 'person-b', hostSession: () => sessions[1]! };
+      await executor.executePositional('select 1', [], a);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      await executor.executePositional('select 1', [], b);
+      // Over the cap: the least recently used goes (as soon as the statement that put it over ends, or at a sweep).
+      await pool.evictIdle(Date.now());
+      expect((pool as any).connectors.size).toBe(1);
+      // Lost: the executor drops it and asks again (the host answers the same session; the statement fails on it).
+      await expect(executor.executePositional('SELECT lost_session', [], b)).rejects.toThrow('terminated connection');
+      // Replaced by the host, with a statement still running on the old one.
+      const slow = executor.executePositional('slow', [], a);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      mine = sessions[2]!;
+      await executor.executePositional('select 2', [], a);
+      expect(sessions[2]!.ran).toEqual(['select 2']);
+      sessions[0]!.release!();
+      await slow;
+      // Idle, the retired one's linger, then shutdown.
+      await pool.evictIdle(Date.now() + 10_000);
+      await pool.disconnectAll();
+      for (const session of sessions) expect([release, session.name, ...untouched(session)]).toEqual([release, session.name, 0, 0, 0]);
+      expect(signedIn).toEqual([]);
+    }
+  });
+
+  it('asks the host for every statement: a replaced session is used at once, and a statement in flight finishes where it started', async () => {
+    const { pool } = poolOf();
+    const executor = new QueryExecutor(pool);
+    const first = sessionOf('first');
+    const second = sessionOf('second');
+    let current = first;
+    let asked = 0;
+    const config = { ...base, executionIdentity: 'person-a', hostSession: async () => { asked += 1; return current; } };
+    const slow = executor.executePositional('slow', [], config);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    current = second;
+    await executor.executePositional('select after', [], config);
+    await executor.executePositional('select again', [], config);
+    expect(asked).toBe(3);
+    expect(second.ran).toEqual(['select after', 'select again']);
+    expect(first.ran).toEqual([]);
+    first.release!();
+    await slow;
+    expect(first.ran).toEqual(['slow']);
+    expect([...untouched(first), ...untouched(second)]).toEqual([0, 0, 0, 0, 0, 0]);
+    await pool.disconnectAll();
+  });
+
+  it('fails the statement, by type, when the host has no session: it never signs in instead, and runs nowhere else', async () => {
+    const { pool, signedIn } = poolOf();
+    const executor = new QueryExecutor(pool);
+    const other = sessionOf('other');
+    let mine: Session | undefined | null = sessionOf('mine');
+    const first = mine;
+    const config = { ...base, executionIdentity: 'person-a', hostSession: () => mine };
+    await executor.executePositional('select 1', [], { ...base, executionIdentity: 'person-b', hostSession: () => other });
+    // Never had one here: "did not open".
+    const never = await executor.executePositional('select 1', [], { ...base, executionIdentity: 'person-c', hostSession: () => undefined }).catch((error: unknown) => error);
+    expect(never).toBeInstanceOf(SessionSignInError);
+    expect(never).toMatchObject({ code: 'SESSION_SIGN_IN_FAILED', replaced: false, driver: 'snowflake' });
+    await executor.executePositional('select 1', [], config);
+    // Had one, and the host has none now (it is gone, or too old): "can no longer open a session".
+    for (const gone of [undefined, null, {} as never]) {
+      mine = gone;
+      const failure = await executor.executePositional('select 2', [], config).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(SessionSignInError);
+      expect(failure).toMatchObject({ code: 'SESSION_SIGN_IN_FAILED', replaced: true, message: 'The credentials given for this connection can no longer open a session. Sign in again.' });
+    }
+    // The host's own error is the cause, never the message.
+    const thrown = await executor.executePositional('select 2', [], { ...config, hostSession: () => { throw new Error('token digest 12ab'); } }).catch((error: unknown) => error);
+    expect(thrown).toMatchObject({ code: 'SESSION_SIGN_IN_FAILED', replaced: true, cause: { message: 'token digest 12ab' } });
+    expect((thrown as Error).message).not.toContain('12ab');
+    // Nothing ran on the session it had before, on the other person's, or on a session of the pool's own making.
+    expect(first!.ran).toEqual(['select 1']);
+    expect(other.ran).toEqual(['select 1']);
+    expect(signedIn).toEqual([]);
+    // The host has a session again: statements run.
+    mine = sessionOf('mine-again');
+    await executor.executePositional('select 3', [], config);
+    expect(mine.ran).toEqual(['select 3']);
+    await pool.disconnectAll();
+  });
+
+  it('refuses a supplied session without an identity, and a provider that is not a function, without signing in', async () => {
+    const { pool, signedIn } = poolOf();
+    const session = sessionOf('a');
+    await expect(pool.acquire({ ...base, hostSession: () => session })).rejects.toThrow('needs an execution identity');
+    await expect(pool.getConnector({ ...base, executionIdentity: '', hostSession: () => session })).rejects.toThrow('needs an execution identity');
+    await expect(pool.acquire({ ...base, executionIdentity: 'person-a', hostSession: session as never })).rejects.toThrow('hostSession must be a function');
+    await expect(pool.acquire({ ...base, executionIdentity: 'person-a', hostSession: null as never })).rejects.toThrow('hostSession must be a function');
+    expect(session.ran).toEqual([]);
+    expect(signedIn).toEqual([]);
+    expect((pool as any).connectors.size).toBe(0);
+  });
+
+  it('keeps supplied sessions by whose they are: apart per identity, apart from the pool\'s own, the same whatever the credential', () => {
+    const provider = () => undefined;
+    const key = (settings: Record<string, unknown>) => createConnectionConfigKey({ ...base, ...settings } as never);
+    const a = key({ executionIdentity: 'person-a', hostSession: provider });
+    expect(key({ executionIdentity: 'person-a', hostSession: () => undefined, token: 'another', password: 'x' })).toBe(a);
+    expect(key({ executionIdentity: 'person-b', hostSession: provider })).not.toBe(a);
+    expect(key({ executionIdentity: 'person-a' })).not.toBe(a);
+    expect(key({})).not.toBe(a);
+    // Every other setting still tells sessions apart (a role, a warehouse).
+    expect(key({ executionIdentity: 'person-a', hostSession: provider, role: 'ANALYST' })).not.toBe(a);
+    expect(key({ executionIdentity: 'person-a', hostSession: provider, warehouse: 'OTHER' })).not.toBe(a);
+    // On a driver that is otherwise kept by its credential, too.
+    const pg = (settings: Record<string, unknown>) => createConnectionConfigKey({ driver: 'postgresql', host: 'db', password: 'p', ...settings } as never);
+    expect(pg({ executionIdentity: 'person-a', hostSession: provider, password: 'q' })).toBe(pg({ executionIdentity: 'person-a', hostSession: provider }));
+    expect(pg({ executionIdentity: 'person-a', hostSession: provider })).not.toBe(pg({ executionIdentity: 'person-a' }));
+  });
+
+  it('lets several pools run statements on one session at the same moment, each counting its own, none ending it', async () => {
+    const session = sessionOf('shared');
+    const pools = [poolOf({ idleMs: 1_000 }), poolOf({ idleMs: 1_000 }), poolOf({ idleMs: 1_000 })];
+    const config = { ...base, executionIdentity: 'person-a', hostSession: () => session };
+    const leases = await Promise.all(pools.flatMap(({ pool }) => [pool.acquire(config), pool.acquire(config)]));
+    const running = leases.map((lease, n) => lease.connector.execute(`select ${n}`));
+    expect(session.running).toBe(6);
+    // A pool whose own statements are still running does not drop its handle; the others' do not count for it.
+    const entries = pools.map(({ pool }) => [...(pool as any).connectors.values()][0]);
+    expect(entries.map((entry) => entry.inFlight)).toEqual([4, 4, 4]);
+    expect(await pools[0]!.pool.evictIdle(Date.now() + 5_000)).toBe(0);
+    await Promise.all(running);
+    for (const lease of leases) lease.release();
+    expect(entries.map((entry) => entry.inFlight)).toEqual([0, 0, 0]);
+    expect(session.ran.sort()).toEqual(['select 0', 'select 1', 'select 2', 'select 3', 'select 4', 'select 5']);
+    expect(session.mostAtOnce).toBe(6);
+    // One pool stops using it (idle), another shuts down: the third still runs on it, and it was never ended.
+    expect(await pools[0]!.pool.evictIdle(Date.now() + 5_000)).toBe(1);
+    await pools[1]!.pool.disconnectAll();
+    await new QueryExecutor(pools[2]!.pool).executePositional('select after', [], config);
+    expect(session.ran).toContain('select after');
+    expect(untouched(session)).toEqual([0, 0, 0]);
+    for (const { pool, signedIn } of pools) { await pool.disconnectAll(); expect(signedIn).toEqual([]); }
+  });
+
+  it('does not age a supplied session: how long it lives is the host\'s to say', async () => {
+    const { pool } = poolOf({ maxSessionAgeMs: 1 });
+    const session = sessionOf('a');
+    const config = { ...base, executionIdentity: 'person-a', maxSessionAgeMs: 1, hostSession: () => session };
+    const first = await pool.getConnector(config);
+    for (const entry of (pool as any).connectors.values()) entry.connectedAt = Date.now() - 86_400_000;
+    expect(await pool.getConnector(config)).toBe(first);
+    expect((pool as any).retired.size).toBe(0);
+    await pool.disconnectAll();
+    expect(untouched(session)).toEqual([0, 0, 0]);
+  });
+
+  it('works the same on a local driver, and leaves every connection without the setting as it was', async () => {
+    const { pool } = poolOf();
+    const session = sessionOf('local', 'duckdb');
+    await new QueryExecutor(pool).executePositional('select 1', [], { driver: 'duckdb', filepath: ':memory:', executionIdentity: 'person-a', hostSession: () => session } as never);
+    expect(session.ran).toEqual(['select 1']);
+    await pool.disconnectAll();
+    expect(untouched(session)).toEqual([0, 0, 0]);
+    // Without it: the pool makes and ends its own connector, as before.
+    const plain = new ConnectionPoolManager();
+    const made: Session[] = [];
+    (plain as any).createConnector = () => { const connector = sessionOf(`own-${made.length}`); made.push(connector); return connector; };
+    await new QueryExecutor(plain).executePositional('select 1', [], base);
+    await plain.disconnectAll();
+    expect(made.map(untouched)).toEqual([[1, 1, 0]]);
+  });
+});
