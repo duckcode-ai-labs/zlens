@@ -352,6 +352,34 @@ describe('the app package for Snowflake', () => {
     expect(firstOpen).toContain('**If the page says "One step is missing: grant ZLens a database"**');
   });
 
+  it('V17 p10: the database box lists only the database grants, and the user shows as Snowflake keeps it', () => {
+    const page = read('launcher/launcher.py');
+    // Snowflake's review (20 Nov 2026) and the V17 p9 tester: the box about data also listed the optional Cortex
+    // grant, so it read as missing even when the app had it.
+    const lines = /def grant_lines\(app\):[\s\S]*?return \(([\s\S]*?)\n    \)/.exec(page)?.[1] ?? '';
+    expect(lines).toContain('GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};');
+    expect(lines).not.toContain('CORTEX_USER');
+    // The set-up screen still offers Cortex, as the README's optional step 4, on its own line.
+    const setUp = branch(page, 'if not status["zlens_user"]:');
+    expect(setUp).toContain("If you have not yet granted it a database (the README's step 2), run these too, ");
+    expect(setUp).toContain('"To let ZLens ask Claude (optional), also run this if the app\'s **Permissions** tab does not show "');
+    expect(setUp).toContain('st.code(cortex_line(app), language="sql")');
+    expect(page).toContain('return f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};"');
+    // The user's name in capitals when unquoted, as Snowflake shows it (tester: "ZLens serves Test_admin").
+    expect(page).toContain('return name.upper() if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name) else name');
+    expect(page).not.toMatch(/ZLens serves \{status\['zlens_user'\]\}/);
+    expect(page.match(/ZLens serves \{user_name\(status\['zlens_user'\]\)\}/g)).toHaveLength(2);
+  });
+
+  it('V17 p10: the readme has the five-minute try on Snowflake sample data, with the check file', () => {
+    const tryIt = readme.slice(readme.indexOf("## Try it on Snowflake's sample data"), readme.indexOf('## The first open'));
+    expect(tryIt).toContain('CREATE OR REPLACE TABLE ZLENS_SAMPLE.TPCH.ORDERS   AS SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.ORDERS;');
+    expect(tryIt).toContain('GRANT SELECT ON ALL TABLES IN SCHEMA ZLENS_SAMPLE.TPCH TO APPLICATION ZLENS_APP;');
+    expect(tryIt).toContain('N_NATIONKEY,N_NAME,ORDER_REVENUE\n   24,UNITED STATES,1419081800.96');
+    expect(tryIt).toContain('**Matches: 5 of 5 rows, every value**');
+    expect(tryIt).toContain('```sql\n   DROP DATABASE ZLENS_SAMPLE;\n   ```');
+  });
+
   it('V17 p9: no line of an earlier screen stays faded under the current one', () => {
     const page = read('launcher/launcher.py');
     // Streamlit drops an earlier screen's lines only when a run ends, and each checking screen ends its run with a
@@ -374,8 +402,14 @@ describe('the app package for Snowflake', () => {
     const privileges = readme.slice(readme.indexOf('## Privileges'), readme.indexOf('## What ZLens reaches')).replace(/\s+/g, ' ');
     expect(privileges).toContain('under **Future upgrades**');
     for (const name of automatic.filter((name) => !asked.includes(name))) expect(privileges).toContain(`\`${name}\``);
-    expect(privileges).toContain('This version asks for none of them, and no version can add one in a patch.');
-    expect(privileges).toContain('feature policy');
+    // V17 p9 tester: say plainly whether we plan to ask for them, and give the feature policy's SQL. A feature
+    // policy blocks databases and tasks only; ZLens creates neither (its setup script creates no task or database).
+    expect(privileges).toContain('ZLens asks for none of them, and we do not plan to:');
+    expect(privileges).toContain('A patch cannot add one.');
+    expect(privileges).toContain('It does not cover shares, listings or integrations.');
+    expect(privileges).toContain('CREATE FEATURE POLICY MY_DB.MY_SCHEMA.ZLENS_NO_NEW_OBJECTS BLOCKED_OBJECT_TYPES_FOR_CREATION = (DATABASES, TASKS);');
+    expect(privileges).toContain('ALTER APPLICATION ZLENS_APP SET FEATURE POLICY MY_DB.MY_SCHEMA.ZLENS_NO_NEW_OBJECTS;');
+    expect(setup).not.toMatch(/CREATE (OR REPLACE )?(TASK|DATABASE)\b/i);
   });
 
   it('V4: the cost section says an open ZLens tab does not keep ZLens running', () => {

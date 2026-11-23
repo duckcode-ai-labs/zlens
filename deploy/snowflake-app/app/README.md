@@ -52,6 +52,67 @@ statement at the cursor.
 
 5. **Open it.** Press **Launch app** on the app's page in Snowsight (next section).
 
+## Try it on Snowflake's sample data
+
+ZLens ships no data. To try it without your own tables, copy four tables of Snowflake's TPC-H sample
+data into a database you own (about 1.7 million rows), then grant that database instead of step 2.
+
+1. **Copy the sample tables.** Select all the lines, then press **Run**:
+
+   ```sql
+   CREATE DATABASE IF NOT EXISTS ZLENS_SAMPLE COMMENT = 'ZLens: copy of TPC-H SF1 sample data';
+   CREATE SCHEMA IF NOT EXISTS ZLENS_SAMPLE.TPCH;
+   CREATE OR REPLACE TABLE ZLENS_SAMPLE.TPCH.REGION   AS SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.REGION;
+   CREATE OR REPLACE TABLE ZLENS_SAMPLE.TPCH.NATION   AS SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.NATION;
+   CREATE OR REPLACE TABLE ZLENS_SAMPLE.TPCH.CUSTOMER AS SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.CUSTOMER;
+   CREATE OR REPLACE TABLE ZLENS_SAMPLE.TPCH.ORDERS   AS SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.ORDERS;
+   ```
+
+   No `SNOWFLAKE_SAMPLE_DATA` database in your account? Create it from Snowflake's sample share first:
+
+   ```sql
+   CREATE DATABASE SNOWFLAKE_SAMPLE_DATA FROM SHARE SFC_SAMPLES.SAMPLE_DATA;
+   ```
+
+2. **Grant it to ZLens.** Select all the lines, then press **Run**:
+
+   ```sql
+   GRANT USAGE ON DATABASE ZLENS_SAMPLE TO APPLICATION ZLENS_APP;
+   GRANT USAGE ON SCHEMA ZLENS_SAMPLE.TPCH TO APPLICATION ZLENS_APP;
+   GRANT SELECT ON ALL TABLES IN SCHEMA ZLENS_SAMPLE.TPCH TO APPLICATION ZLENS_APP;
+   ```
+
+3. **Open ZLens.** Within a minute or two it says it read 4 tables in ZLENS_SAMPLE and drafted 4 models
+   and 3 joins. Review the drafts and accept the ones that passed.
+
+4. **Ask** "Which 5 nations had the most order revenue in 1997?" The answer is labeled **AI-generated**:
+   five rows, UNITED STATES first at 1,419,081,800.96. Ask "What was our payroll in 1997?" and ZLens
+   says **Not in this data** and runs no query.
+
+5. **Certify it.** On the first answer, select **Save as saved query**, give it a name and an owner, and
+   **Save draft**. Open it under **Saved queries**. In **Compare with the old report**, upload the report
+   you trust today; for this sample, save these lines as `old-report.csv`:
+
+   ```csv
+   N_NATIONKEY,N_NAME,ORDER_REVENUE
+   24,UNITED STATES,1419081800.96
+   9,INDONESIA,1414884578.36
+   6,FRANCE,1409569148.24
+   19,ROMANIA,1408772241.42
+   13,JORDAN,1396943500.98
+   ```
+
+   ZLens says **Matches: 5 of 5 rows, every value**. It matches the file's columns to the answer's by
+   name, ignoring case, spaces and underscores; if the answer's columns are named differently, change
+   the file's first line to match. Select **Certify**, then ask the first question again: the answer is
+   now **Certified**.
+
+6. **Clean up** when you are done:
+
+   ```sql
+   DROP DATABASE ZLENS_SAMPLE;
+   ```
+
 ## The first open: what to expect
 
 - **Press Launch app.** It opens a small ZLens page inside Snowsight. If ZLens has stopped (it stops
@@ -266,8 +327,21 @@ version could be granted without asking again: `EXECUTE TASK`, `EXECUTE MANAGED 
 `CREATE DATABASE`, `CREATE EXTERNAL ACCESS INTEGRATION`, `CREATE SECURITY INTEGRATION`,
 `CREATE SHARE` and `CREATE LISTING`. Snowflake shows that list for every app that asks for its
 privileges this way (manifest version 2, automatic grants), minus what the app already asks for.
-This version asks for none of them, and no version can add one in a patch. To rule them out for
-good, an admin can attach a Snowflake feature policy to the app that blocks creating those objects.
+ZLens asks for none of them, and we do not plan to: it reads only what you grant it, and writes only
+inside its own app and to a backup stage you name. A patch cannot add one.
+
+A Snowflake feature policy can stop the app from creating databases and tasks, two of the objects
+in that list. It does not cover shares, listings or integrations. ZLens creates neither, so it
+works the same with this policy attached. Run as ACCOUNTADMIN, with a database and schema of yours
+to hold the policy:
+
+```sql
+CREATE FEATURE POLICY MY_DB.MY_SCHEMA.ZLENS_NO_NEW_OBJECTS
+  BLOCKED_OBJECT_TYPES_FOR_CREATION = (DATABASES, TASKS);
+ALTER APPLICATION ZLENS_APP SET FEATURE POLICY MY_DB.MY_SCHEMA.ZLENS_NO_NEW_OBJECTS;
+```
+
+Snowflake's documentation on feature policies for Native Apps has the details.
 
 Its one Streamlit page, the launcher that **Launch app** opens, runs on that same warehouse and
 calls only the app's own procedures `app_public.launcher_status()`, `app_public.launcher_data()` and
