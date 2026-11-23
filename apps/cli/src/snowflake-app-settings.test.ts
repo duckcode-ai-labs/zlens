@@ -100,6 +100,8 @@ describe('reading the app settings', () => {
     expect(both).toContain('GRANT USAGE ON DATABASE MY_DB TO APPLICATION ZLENS_APP;');
     const onlyData = snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: [] });
     expect(onlyData).not.toContain('Configurations');
+    // V17 p9 tester: Snowsight's Run runs only the line at the cursor, as the launcher and README already warn.
+    expect(onlyData).toContain('Select all the lines, then press <em>Run</em>: Snowsight&#39;s Run on its own runs only the statement at the cursor.');
     expect(snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: ['A', 'B'] })).toContain('reads one');
   });
 

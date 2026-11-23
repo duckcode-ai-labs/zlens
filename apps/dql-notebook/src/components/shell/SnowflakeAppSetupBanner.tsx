@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type SnowflakeAppBackups, type SnowflakeAppSetupStatus } from '../../api/client';
+import { api, CONTEXT_PROPOSALS_CHANGED_EVENT, type SnowflakeAppBackups, type SnowflakeAppSetupStatus } from '../../api/client';
 import { useDispatch } from '../../store/NotebookStore';
 
 const POLL_MS = 3000;
@@ -72,6 +72,15 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
     if (!enabled) return;
     void load();
     void api.getSnowflakeAppBackups().then(setBackups);
+  }, [enabled, load]);
+
+  // Polling stops once setup is done, so saving or discarding the drafts (anywhere) asks again: the strip then
+  // stops saying "Nothing is saved until you review them" (Snowflake's review, 20 Nov 2026).
+  useEffect(() => {
+    if (!enabled) return;
+    const reload = () => { void load(); };
+    window.addEventListener(CONTEXT_PROPOSALS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(CONTEXT_PROPOSALS_CHANGED_EVENT, reload);
   }, [enabled, load]);
 
   const settled = status?.state === 'done' || status?.state === 'failed' || status?.managed === false;

@@ -159,7 +159,7 @@ export function snowflakeAppSetupPage(input: { appName?: string; needsUser: bool
       `GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ${app};`,
       `GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ${app};`,
     ];
-    steps.push(`<li><strong>What ZLens may read.</strong> Run this in a worksheet, with your database and schema in place of MY_DB and MY_SCHEMA:<pre>${escapeHtml(grants.join('\n'))}</pre></li>`);
+    steps.push(`<li><strong>What ZLens may read.</strong> Run this in a worksheet, with your database and schema in place of MY_DB and MY_SCHEMA. Select all the lines, then press <em>Run</em>: Snowsight&#39;s Run on its own runs only the statement at the cursor.<pre>${escapeHtml(grants.join('\n'))}</pre></li>`);
   } else if (input.databases.length > 1) {
     steps.push(`<li><strong>One database.</strong> This app can see ${input.databases.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}. ZLens reads one: revoke the others, so one is left.</li>`);
   }

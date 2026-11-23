@@ -24,6 +24,7 @@ app_public.launcher_start(), and the app's name, the time and the warehouse this
 
 import datetime
 import json
+import re
 import time
 
 import streamlit as st
@@ -128,14 +129,31 @@ def read_data():
 
 
 def grant_lines(app):
-    """The grants of the README's steps 2 and 4, with the app's name filled in."""
+    """The database grants of the README's step 2, with the app's name filled in.
+
+    Only the database: the Cortex grant (step 4) is optional and often already there, so a box about data that
+    also listed it read as if Cortex were missing (Snowflake's review and the V17 p9 tester, 20 Nov 2026).
+    """
     return (
         f"GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};\n"
         f"GRANT USAGE ON SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
         f"GRANT SELECT ON ALL TABLES IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
-        f"GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};\n"
-        f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};"
+        f"GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION {app};"
     )
+
+
+def cortex_line(app):
+    """The README's optional step 4: let ZLens ask Claude through Cortex."""
+    return f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};"
+
+
+def user_name(name):
+    """The user's name as Snowflake keeps it: an unquoted name is stored in capitals.
+
+    The configuration holds what the admin typed ("Test_admin"), and Snowflake shows that user as TEST_ADMIN
+    (V17 p8 and p9 tester). A name that needs quotes keeps its case.
+    """
+    return name.upper() if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name) else name
 
 
 RUN_ALL = "Select all the lines, then press Run: Snowsight's Run on its own runs only the statement at the cursor."
@@ -249,10 +267,15 @@ if not status["zlens_user"]:
     )
     st.code(f"ALTER APPLICATION {app} SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';", language="sql")
     st.write(
-        "If you have not yet granted it a database and Cortex (the README's steps 2 to 4), run these too, "
+        "If you have not yet granted it a database (the README's step 2), run these too, "
         "with your database and schema names. " + RUN_ALL
     )
     st.code(grant_lines(app), language="sql")
+    st.caption(
+        "To let ZLens ask Claude (optional), also run this if the app's **Permissions** tab does not show "
+        "CORTEX_USER as granted:"
+    )
+    st.code(cortex_line(app), language="sql")
     st.caption(
         f"If Snowsight asks you to select a warehouse before this page opens, pick {warehouse}, "
         "the app's own warehouse: this page runs on it."
@@ -277,7 +300,7 @@ state.pop("setup_since", None)
 signed_in = viewer()
 if signed_in and signed_in.upper() != status["zlens_user"].upper():
     st.warning(
-        f"ZLens serves {status['zlens_user']}, and you are signed in as {signed_in}. "
+        f"ZLens serves {user_name(status['zlens_user'])}, and you are signed in as {signed_in}. "
         "An admin can name you on the app's Configurations tab."
     )
     st.stop()
@@ -307,7 +330,7 @@ if name == "READY" and status["url"]:
     keeps = f"this page's own, {page_warehouse}" if page_warehouse else "this page's own"
     reads = f", and can read {', '.join(data)}" if data else ""
     st.caption(
-        f"ZLens serves {status['zlens_user']}{reads}. You can close this tab once ZLens is open: "
+        f"ZLens serves {user_name(status['zlens_user'])}{reads}. You can close this tab once ZLens is open: "
         f"while it stays open it keeps two warehouses running: {keeps}, and the one Snowsight shows at the top of the page. "
         "ZLens stops by itself after 60 idle minutes; Launch app starts it again."
     )

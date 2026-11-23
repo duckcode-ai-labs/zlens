@@ -4397,6 +4397,14 @@ function formatRequestError(res: Response, text: string): DqlApiError {
  */
 const inFlightGets = new Map<string, Promise<unknown>>();
 
+/** Fired after drafts are saved or discarded, so anything showing "drafts waiting" (the Snowflake app's setup strip) asks again. */
+export const CONTEXT_PROPOSALS_CHANGED_EVENT = 'dql:context-proposals-changed';
+
+function announceContextProposalsChanged(): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(new CustomEvent(CONTEXT_PROPOSALS_CHANGED_EVENT));
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const method = (options?.method ?? 'GET').toUpperCase();
   // Only idempotent, unaborted, bodyless reads are safe to share.
@@ -5513,6 +5521,7 @@ export const api = {
   /** Turn drafts down: nothing in the project changes, and they stop waiting for review. */
   async discardContextProposal(id: string): Promise<ContextAuthoringProposalV1> {
     const response = await request<{ proposal: ContextAuthoringProposalV1 }>(`/api/context-proposals/${encodeURIComponent(id)}/discard`, { method: 'POST', body: '{}' });
+    announceContextProposalsChanged();
     return response.proposal;
   },
 
@@ -5583,7 +5592,9 @@ export const api = {
   },
 
   async commitContextProposal(id: string, expectedProposalHash: string, idempotencyKey: string): Promise<{ proposal: ContextAuthoringProposalV1; snapshotId: string }> {
-    return request(`/api/context-proposals/${encodeURIComponent(id)}/commit`, { method: 'POST', body: JSON.stringify({ expectedProposalHash, idempotencyKey }) });
+    const result = await request<{ proposal: ContextAuthoringProposalV1; snapshotId: string }>(`/api/context-proposals/${encodeURIComponent(id)}/commit`, { method: 'POST', body: JSON.stringify({ expectedProposalHash, idempotencyKey }) });
+    announceContextProposalsChanged();
+    return result;
   },
 
   async createModelingImport(source: { mode: ModelingImportSession['source']['mode']; path?: string; content?: string; filename?: string }): Promise<ModelingImportSession> {
