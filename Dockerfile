@@ -80,7 +80,7 @@ RUN mkdir -p /out/workspace /out/home \
  && printf 'root:x:0:\nnobody:x:65534:\nnonroot:x:65532:\nzlens:x:1000:\n' > /out/group
 
 # gcr.io/distroless/nodejs24-debian13 (Debian 13, as the builder), pinned; Dependabot proposes new digests.
-FROM gcr.io/distroless/nodejs24-debian13@sha256:24bc0fe0225c7518f202a822587dad74fe143b96326b81fe5cc08c1df8bed03e AS snowflake-app
+FROM gcr.io/distroless/nodejs24-debian13@sha256:ba59ac9916b424cdfaaa8299695530251535843623a6d8f93d40b0a2ef69e390 AS snowflake-app
 ENV NODE_ENV=production \
     ZLENS_HOST=0.0.0.0 \
     ZLENS_CONNECTOR_PATH=/opt/zlens/drivers \
