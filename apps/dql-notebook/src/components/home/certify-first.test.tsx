@@ -79,6 +79,14 @@ describe('certify-first guide: the questions to certify come from what the perso
     expect(certifySteps(runs, 10)).toEqual([]);
   });
 
+  it('two wordings that share one draft saved query are one step', () => {
+    const steps = certifySteps([
+      run('How many games are in our data?', { reviewDraft: { path: 'blocks/_drafts/many_games_data.dql', askedTimes: 7 } }),
+      run('Total number of games we have?', { reviewDraft: { path: 'blocks/_drafts/many_games_data.dql', askedTimes: 8 } }),
+    ], 10);
+    expect(steps.map((step) => step.question)).toEqual(['Total number of games we have?']);
+  });
+
   it('a question whose last answer is Certified is done, even if earlier answers were not', () => {
     const runs = [
       run('How many teams are there?', { reviewDraft: { path: 'blocks/_drafts/teams.dql', askedTimes: 5 } }),

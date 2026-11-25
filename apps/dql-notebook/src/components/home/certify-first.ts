@@ -129,6 +129,8 @@ export function certifySteps(runs: ReadonlyArray<ListedRun>, limit: number): Cer
     })
     .filter((step) => step.label !== 'Certified')
     .sort((left, right) => right.askedTimes - left.askedTimes || right.lastAskedAt.localeCompare(left.lastAskedAt))
+    // Ask keeps one draft per answer, so two wordings with the same answer share it: one step certifies it.
+    .filter((step, index, all) => !step.draftPath || all.findIndex((other) => other.draftPath === step.draftPath) === index)
     .slice(0, limit);
 }
 
