@@ -12,6 +12,25 @@ describe('the Snowflake app setup strip', () => {
       .toBe('ZLens is reading the tables in NBA and drafting your models. This takes a minute or two.');
   });
 
+  it('says where the setup is, with numbers and the time, and offers Stop while it runs (onboarding P2)', () => {
+    const operation = {
+      id: 'op_1', type: 'warehouse-setup', scope: 'warehouse-setup:NBA', status: 'running' as const, phase: 'names', progress: 18,
+      message: 'Reading names in NBA: 420 tables so far (statement 1 of 1) · 12 s', cancellable: true, createdAt: '', updatedAt: '',
+    };
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'running', database: 'NBA', operation })).toEqual({
+      tone: 'info',
+      text: 'Setting up ZLens. Reading names in NBA: 420 tables so far (statement 1 of 1) · 12 s',
+      action: 'stop',
+    });
+    // Before its first phase, the plain words, still with Stop.
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'running', database: 'NBA', operation: { ...operation, phase: 'starting' } })?.action).toBe('stop');
+  });
+
+  it('says a stopped setup drafted nothing and offers to start again', () => {
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'stopped', database: 'NBA' }))
+      .toEqual({ tone: 'caution', text: 'Setup from NBA was stopped. Nothing was drafted.', action: 'start' });
+  });
+
   it('points to the drafts waiting for review', () => {
     const message = snowflakeAppSetupMessage({
       managed: true,

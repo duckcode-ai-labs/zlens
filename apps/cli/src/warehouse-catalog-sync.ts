@@ -21,7 +21,7 @@ import {
   type WarehouseCatalogSnapshotV1,
 } from '@zlens/core';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { duckdbCatalogScopePredicate, isAttachedDuckDBCatalog, sqliteColumnsOneByOne, type ConnectionMetadataScopeV1 } from './warehouse-metadata.js';
+import { duckdbCatalogScopePredicate, isAttachedDuckDBCatalog, sqliteColumnsOneByOne, type ConnectionMetadataScopeV1, type WarehouseReadProgress } from './warehouse-metadata.js';
 import { addLakeSizes } from './lake-sizes.js';
 
 const MAX_ROWS = 50_000;
@@ -381,16 +381,20 @@ export async function syncWarehouseCatalog(input: {
   executor: QueryExecutor;
   connection: ConnectionConfig;
   scope: ConnectionMetadataScopeV1;
+  /** Stops the read between statements and cancels the one running (onboarding design P2). */
+  signal?: AbortSignal;
+  onProgress?: (progress: WarehouseReadProgress) => void;
 }): Promise<WarehouseCatalogSyncResult> {
-  const { relations, warnings } = await readWarehouseCatalogRelations({ executor: input.executor, connection: input.connection, scopes: input.scope.scopes });
+  const { relations, warnings } = await readWarehouseCatalogRelations({ executor: input.executor, connection: input.connection, scopes: input.scope.scopes, signal: input.signal, onProgress: input.onProgress });
   if (relations.length === 0) {
     throw new Error('The warehouse catalog sync found no tables in the selected schemas. Check the schema selection and the connection role\'s permissions.');
   }
   // Lake tables (files, buckets, catalog services): their size from metadata, never a scan.
   let sizes: LakeSizesSummary | undefined;
   if (/^(duckdb|file)$/i.test(input.connection.driver)) {
-    const run = async (sql: string) => (await input.executor.executePositional(sql, [], input.connection, QUERY_OPTIONS)).rows as Row[];
+    const run = async (sql: string) => (await input.executor.executePositional(sql, [], input.connection, { ...QUERY_OPTIONS, ...(input.signal ? { signal: input.signal } : {}) })).rows as Row[];
     const found = await addLakeSizes(relations, run);
+    input.signal?.throwIfAborted();
     if (found.sized || found.notSized.length || found.timedOut) {
       const sized = relations.filter((relation) => relation.sizeFrom !== undefined);
       sizes = {
@@ -421,18 +425,36 @@ export async function readWarehouseCatalogRelations(input: {
   executor: QueryExecutor;
   connection: ConnectionConfig;
   scopes: ReadonlyArray<{ catalogOrDatabase: string; schemas: string[] }>;
+  signal?: AbortSignal;
+  onProgress?: (progress: WarehouseReadProgress) => void;
 }): Promise<{ relations: WarehouseCatalogRelationV1[]; warnings: string[] }> {
   const warnings: string[] = [];
   const results: Array<{ query: CatalogQuery; rows: Row[] }> = [];
-  for (const scope of input.scopes) {
-    for (const query of buildWarehouseCatalogQueries(input.connection.driver, scope)) {
+  const planned = input.scopes.map((scope) => ({ scope, queries: buildWarehouseCatalogQueries(input.connection.driver, scope) }));
+  const total = planned.reduce((count, item) => count + item.queries.length, 0);
+  const options = { ...QUERY_OPTIONS, ...(input.signal ? { signal: input.signal } : {}) };
+  let done = 0;
+  // Tables found so far: the columns statements name them.
+  const tablesFound = new Set<string>();
+  input.onProgress?.({ queriesDone: 0, queries: total, tables: 0, catalogOrDatabase: planned[0]?.scope.catalogOrDatabase });
+  for (const { scope, queries } of planned) {
+    for (const query of queries) {
+      input.signal?.throwIfAborted();
       try {
-        const result = await input.executor.executePositional(query.sql, [], input.connection, QUERY_OPTIONS);
+        const result = await input.executor.executePositional(query.sql, [], input.connection, options);
         if (query.kind === 'columns' && (result.truncated || result.rows.length >= MAX_ROWS)) {
           throw new Error('the selected schemas have more columns than one sync reads; narrow the schema selection');
         }
         results.push({ query, rows: result.rows as Row[] });
+        if (query.kind === 'columns') {
+          for (const row of result.rows as Row[]) {
+            const table = text(row, 'table_name');
+            if (table) tablesFound.add(`${scope.catalogOrDatabase}.${(text(row, 'table_schema') ?? '').toLowerCase()}.${table.toLowerCase()}`);
+          }
+        }
       } catch (error) {
+        // Stopped: nothing below runs, nothing is written.
+        if (input.signal?.aborted) throw error;
         const message = error instanceof Error ? error.message : String(error);
         // One broken SQLite view fails the one-statement column read: read
         // the relations one at a time and leave the broken ones out.
@@ -444,8 +466,12 @@ export async function readWarehouseCatalogRelations(input: {
         }
         if (query.kind === 'columns') throw new Error(`Reading columns of ${scope.catalogOrDatabase} failed: ${message}`);
         warnings.push(`${query.kind.replace('_', ' ')} of ${scope.catalogOrDatabase} not read: ${message.split('\n')[0]!.slice(0, 200)}`);
+      } finally {
+        done += 1;
       }
+      input.onProgress?.({ queriesDone: done, queries: total, tables: tablesFound.size, catalogOrDatabase: scope.catalogOrDatabase });
     }
   }
+  input.signal?.throwIfAborted();
   return { relations: assembleWarehouseCatalog(input.connection.driver, results), warnings };
 }

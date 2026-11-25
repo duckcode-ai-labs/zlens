@@ -29,6 +29,25 @@ describe('LocalOperationCoordinator', () => {
     coordinator.close();
   });
 
+  it('keeps the counts an operation reports as it goes, across a reopen (onboarding design P2)', async () => {
+    const coordinator = createCoordinator();
+    const operation = coordinator.create({ type: 'warehouse-setup', scope: 'warehouse-setup:SALES' });
+    let release: () => void = () => undefined;
+    void coordinator.run(operation.id, async (_signal, report) => {
+      report({ phase: 'names', progress: 18, message: 'Reading names', detail: { kind: 'warehouse-setup', tables: 420 } });
+      await new Promise<void>((resolve) => { release = resolve; });
+      return { relations: 420 };
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(coordinator.get(operation.id)).toMatchObject({ status: 'running', phase: 'names', detail: { kind: 'warehouse-setup', tables: 420 } });
+    expect(coordinator.list(5).find((item) => item.id === operation.id)?.detail).toEqual({ kind: 'warehouse-setup', tables: 420 });
+    release();
+    const complete = await waitForOperation(coordinator, operation.id, 'succeeded');
+    // The last counts stay with the finished operation.
+    expect(complete?.detail).toEqual({ kind: 'warehouse-setup', tables: 420 });
+    coordinator.close();
+  });
+
   it('propagates cancellation and never lets a late result overwrite it', async () => {
     const coordinator = createCoordinator();
     const operation = coordinator.create({ type: 'certification', scope: 'block:revenue' });

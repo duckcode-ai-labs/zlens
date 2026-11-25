@@ -57,6 +57,7 @@ import {
   type LocalOperationProgress,
 } from './local-operation-coordinator.js';
 import { ProjectRefreshCoordinator } from './project-refresh-coordinator.js';
+import { SetupOperationProgress } from './setup-operation-progress.js';
 import { createPhaseTimer, logSlowRequest, type PhaseTimer } from './phase-timing.js';
 import {
   buildMixedSourceWarehouseFallbackSql,
@@ -921,6 +922,7 @@ import {
   warehouseMetadataStatus,
   type ConnectionMetadataScopeInput,
   type ConnectionMetadataScopeV1,
+  type WarehouseReadProgress,
 } from './warehouse-metadata.js';
 import { readWarehouseCatalogRelations, syncWarehouseCatalog, type LakeSizesSummary } from './warehouse-catalog-sync.js';
 import { dbtModelSnapshot, dbtWarehouseNodes, dbtWarehouseScopes, readDbtManifest } from './dbt-model-discovery.js';
@@ -15373,7 +15375,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
   // Modeling » Draft from warehouse, callable on its own: the route below, and the ZLens app for Snowflake
   // drafting its models by itself after its first sync.
-  const draftWarehouseProposal = async (body: { validate?: boolean; queryHistory?: boolean; domain?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' }, snapshot: ReturnType<typeof projectSnapshot>) => {
+  const draftWarehouseProposal = async (body: { validate?: boolean; queryHistory?: boolean; domain?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' }, snapshot: ReturnType<typeof projectSnapshot>, signal?: AbortSignal) => {
     // Staging copies of a final table are left out unless the person asks
     // for them ("Show staging tables"), so the map has one Customer.
     const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
@@ -15383,7 +15385,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const projectMode = modelingModeOf(loadProjectConfig(projectRoot));
     const report = projectMode === 'dbt-first' || (projectMode === 'hybrid' && body.source === 'dbt')
       ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, scope: draftScopeFromBody(body.scope), executor })
-      : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
+      : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor, ...(signal ? { signal } : {}) });
+    // Stopped: no draft is written from a half-checked report.
+    signal?.throwIfAborted();
     // New Domains and subject areas are created by the proposal's own scope
     // step, as for dbt discovery, so the batch stays in dependency order.
     // A drafted join lives in the subject area of the entity it starts
@@ -15436,7 +15440,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
   // Settings » Database » Apply and synchronize, callable on its own: the route, and the ZLens app for
   // Snowflake reading its granted database by itself.
-  const syncConnectionMetadataScope = async (connectionId: string, selectedConnection: ConnectionConfig, cfg: ReturnType<typeof loadProjectConfig>, body: ConnectionMetadataScopeInput) => {
+  const syncConnectionMetadataScope = async (
+    connectionId: string,
+    selectedConnection: ConnectionConfig,
+    cfg: ReturnType<typeof loadProjectConfig>,
+    body: ConnectionMetadataScopeInput,
+    control: { signal?: AbortSignal; onNames?: (progress: WarehouseReadProgress) => void; onCatalog?: (progress: WarehouseReadProgress) => void } = {},
+  ) => {
     const scope = normalizeConnectionMetadataScope(
       connectionId,
       selectedConnection,
@@ -15452,10 +15462,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       executor,
       connection: selectedConnection,
       scope,
+      signal: control.signal,
+      onProgress: control.onNames,
     });
     persistConnectionMetadataScope(projectRoot, connectionId, scope);
     projectConfig = loadProjectConfig(projectRoot);
-    const warehouseCatalog = await refreshWarehouseCatalogAfterSync(projectRoot, projectConfig, executor, selectedConnection, connectionId, synced.scope, modelBeforeSync, Boolean(hostHooks));
+    const warehouseCatalog = await refreshWarehouseCatalogAfterSync(projectRoot, projectConfig, executor, selectedConnection, connectionId, synced.scope, modelBeforeSync, Boolean(hostHooks), { signal: control.signal, onProgress: control.onCatalog });
     return { synced, warehouseCatalog };
   };
 
@@ -15463,7 +15475,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // database granted to it, it reads every schema in it the app can see (the sync Settings » Database
   // runs) and drafts the models from them (Modeling » Draft from warehouse). The drafts wait for review
   // as always. Once per database: a marker in .dql/local remembers it across restarts.
-  type SnowflakeAppSetup = { state: 'idle' | 'running' | 'done' | 'failed'; database?: string; schemas?: string[]; relations?: number; drafted?: number; proposalId?: string; search?: 'meaning' | 'words'; searchNote?: string; error?: string; at?: string };
+  // It runs as a background operation (onboarding design P2): phases and counts in the background tasks
+  // panel and on the operations stream, and Stop cancels it within seconds. A stopped setup stays stopped
+  // (across restarts too) until someone starts it again.
+  type SnowflakeAppSetup = { state: 'idle' | 'running' | 'done' | 'failed' | 'stopped'; database?: string; schemas?: string[]; relations?: number; drafted?: number; proposalId?: string; search?: 'meaning' | 'words'; searchNote?: string; error?: string; at?: string; operationId?: string };
   let snowflakeAppSetup: SnowflakeAppSetup = { state: 'idle' };
   const snowflakeAppSetupMarker = join(projectRoot, '.dql', 'local', 'snowflake-app-setup.json');
   // In the ZLens app for Snowflake, the schema list offers only the databases granted to the app (approved
@@ -15492,69 +15507,116 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return { ...discovery, scopes, ...(message ? { message } : {}) };
   };
   const SNOWFLAKE_APP_SETUP_RETRY_MS = 10 * 60_000;
+  const writeSnowflakeAppSetupMarker = () => {
+    mkdirSync(dirname(snowflakeAppSetupMarker), { recursive: true });
+    writeFileSync(snowflakeAppSetupMarker, JSON.stringify(snowflakeAppSetup, null, 2) + '\n', 'utf-8');
+  };
   const runSnowflakeAppSetup = async (database: string, options: { again?: boolean } = {}): Promise<void> => {
     if (snowflakeAppSetup.state === 'running') return;
     if (!options.again && snowflakeAppSetup.database === database) {
-      if (snowflakeAppSetup.state === 'done') return;
+      if (snowflakeAppSetup.state === 'done' || snowflakeAppSetup.state === 'stopped') return;
       // A failed setup is not retried on every request: after a quiet spell, or when someone asks.
       if (snowflakeAppSetup.state === 'failed' && Date.now() - Date.parse(snowflakeAppSetup.at ?? '') < SNOWFLAKE_APP_SETUP_RETRY_MS) return;
     }
     if (!options.again) try {
       const marker = existsSync(snowflakeAppSetupMarker) ? JSON.parse(readFileSync(snowflakeAppSetupMarker, 'utf-8')) as SnowflakeAppSetup : undefined;
-      if (marker?.state === 'done' && marker.database === database) {
+      if ((marker?.state === 'done' || marker?.state === 'stopped') && marker.database === database) {
         snowflakeAppSetup = marker;
         return;
       }
     } catch {
       // An unreadable marker: set up again.
     }
-    snowflakeAppSetup = { state: 'running', database };
-    try {
-      const cfg = loadProjectConfig(projectRoot);
-      const connections = getStoredConnections(cfg as unknown as Record<string, unknown>);
-      const connectionId = resolveDefaultConnectionKey(cfg as unknown as Record<string, unknown>, connections) ?? Object.keys(connections)[0];
-      const selectedConnection = connectionId ? projectConnectionById(projectRoot, cfg, connectionId) : undefined;
-      if (!connectionId || !selectedConnection) throw new Error('ZLens has no Snowflake connection.');
-      const discovery = await discoverWarehouseMetadataScopes({ connectionId, executor, connection: selectedConnection, dbtRelations: metadataScopeDbtDefaults(projectRoot, cfg).relations });
-      const found = discovery.scopes.find((item) => item.catalogOrDatabase.toUpperCase() === database.toUpperCase());
-      const schemas = (found?.schemas ?? []).map((item) => item.name).filter((name) => name.toUpperCase() !== 'INFORMATION_SCHEMA');
-      if (!found || schemas.length === 0) throw new Error("the app can see no schemas there. Grant it USAGE on the schemas to read.");
-      const { warehouseCatalog } = await syncConnectionMetadataScope(connectionId, selectedConnection, cfg, { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: found.catalogOrDatabase, schemas }] } as ConnectionMetadataScopeInput);
-      if (warehouseCatalog?.error) throw new Error(warehouseCatalog.error);
-      if (warehouseCatalog?.skipped) throw new Error(warehouseCatalog.skipped);
-      const { report, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot());
-      // Meaning search through Cortex (approved design S3): a refresh gives the embedder only a few seconds,
-      // so the first index is built here, whole. Later refreshes re-embed only new text (the vector cache).
-      const embedder = projectEmbeddingProvider(projectRoot);
-      let search: { search: 'meaning' | 'words'; searchNote?: string } = { search: 'words' };
-      if (!isHashedEmbeddingProvider(embedder)) {
-        try {
-          await ensureMetadataCatalogFresh(projectRoot);
-          const indexed = await upgradeVectorIndexForProject(projectRoot, embedder);
-          search = indexed.upgraded || indexed.reason === 'index already embedded with this provider'
-            ? { search: 'meaning' }
-            : { search: 'words', ...(indexed.reason ? { searchNote: indexed.reason } : {}) };
-        } catch (error) {
-          search = { search: 'words', searchNote: error instanceof Error ? error.message : String(error) };
+    const operation = operationCoordinator.create({
+      type: 'warehouse-setup',
+      scope: `warehouse-setup:${database}`,
+      phase: 'queued',
+      message: `Setting up from ${database}.`,
+      cancellable: true,
+    });
+    snowflakeAppSetup = { state: 'running', database, operationId: operation.id };
+    let finished: SnowflakeAppSetup | undefined;
+    await operationCoordinator.run(operation.id, async (signal, report) => {
+      const progress = new SetupOperationProgress(report, { database });
+      const stopHeartbeat = progress.heartbeat();
+      try {
+        progress.phase('find');
+        const cfg = loadProjectConfig(projectRoot);
+        const connections = getStoredConnections(cfg as unknown as Record<string, unknown>);
+        const connectionId = resolveDefaultConnectionKey(cfg as unknown as Record<string, unknown>, connections) ?? Object.keys(connections)[0];
+        const selectedConnection = connectionId ? projectConnectionById(projectRoot, cfg, connectionId) : undefined;
+        if (!connectionId || !selectedConnection) throw new Error('ZLens has no Snowflake connection.');
+        const discovery = await discoverWarehouseMetadataScopes({ connectionId, executor, connection: selectedConnection, dbtRelations: metadataScopeDbtDefaults(projectRoot, cfg).relations, signal });
+        signal.throwIfAborted();
+        const found = discovery.scopes.find((item) => item.catalogOrDatabase.toUpperCase() === database.toUpperCase());
+        const schemas = (found?.schemas ?? []).map((item) => item.name).filter((name) => name.toUpperCase() !== 'INFORMATION_SCHEMA');
+        if (!found || schemas.length === 0) throw new Error("the app can see no schemas there. Grant it USAGE on the schemas to read.");
+        progress.phase('names', { schemas: schemas.length });
+        const { warehouseCatalog } = await syncConnectionMetadataScope(
+          connectionId,
+          selectedConnection,
+          cfg,
+          { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: found.catalogOrDatabase, schemas }] } as ConnectionMetadataScopeInput,
+          {
+            signal,
+            onNames: (read) => progress.read(read),
+            onCatalog: (read) => {
+              if (progress.current.phase !== 'catalog') progress.phase('catalog');
+              progress.read(read);
+            },
+          },
+        );
+        if (warehouseCatalog?.error) throw new Error(warehouseCatalog.error);
+        if (warehouseCatalog?.skipped) throw new Error(warehouseCatalog.skipped);
+        progress.phase('check', { ...(typeof warehouseCatalog?.relations === 'number' ? { tables: warehouseCatalog.relations } : {}) });
+        const { report: drafted, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot(), signal);
+        signal.throwIfAborted();
+        // Meaning search through Cortex (approved design S3): a refresh gives the embedder only a few seconds,
+        // so the first index is built here, whole. Later refreshes re-embed only new text (the vector cache).
+        const embedder = projectEmbeddingProvider(projectRoot);
+        let search: { search: 'meaning' | 'words'; searchNote?: string } = { search: 'words' };
+        if (!isHashedEmbeddingProvider(embedder)) {
+          progress.phase('index');
+          try {
+            await ensureMetadataCatalogFresh(projectRoot);
+            const indexed = await upgradeVectorIndexForProject(projectRoot, embedder);
+            search = indexed.upgraded || indexed.reason === 'index already embedded with this provider'
+              ? { search: 'meaning' }
+              : { search: 'words', ...(indexed.reason ? { searchNote: indexed.reason } : {}) };
+          } catch (error) {
+            search = { search: 'words', searchNote: error instanceof Error ? error.message : String(error) };
+          }
         }
+        finished = {
+          state: 'done',
+          database,
+          schemas,
+          relations: typeof warehouseCatalog?.relations === 'number' ? warehouseCatalog.relations : undefined,
+          drafted: proposal ? drafted.entities.length : 0,
+          ...(proposal ? { proposalId: proposal.id } : {}),
+          ...search,
+          at: new Date().toISOString(),
+          operationId: operation.id,
+        };
+        return { relations: finished.relations, drafted: finished.drafted, ...(proposal ? { proposalId: proposal.id } : {}) };
+      } finally {
+        stopHeartbeat();
       }
-      snowflakeAppSetup = {
-        state: 'done',
-        database,
-        schemas,
-        relations: typeof warehouseCatalog?.relations === 'number' ? warehouseCatalog.relations : undefined,
-        drafted: proposal ? report.entities.length : 0,
-        ...(proposal ? { proposalId: proposal.id } : {}),
-        ...search,
-        at: new Date().toISOString(),
-      };
-      mkdirSync(dirname(snowflakeAppSetupMarker), { recursive: true });
-      writeFileSync(snowflakeAppSetupMarker, JSON.stringify(snowflakeAppSetup, null, 2) + '\n', 'utf-8');
-      console.log(`[zlens] Read ${snowflakeAppSetup.relations ?? 0} tables and views in ${database} (${schemas.join(', ')}) and drafted ${snowflakeAppSetup.drafted} models for review.`);
+    });
+    const outcome = operationCoordinator.get(operation.id);
+    if (outcome?.status === 'succeeded' && finished) {
+      snowflakeAppSetup = finished;
+      writeSnowflakeAppSetupMarker();
+      console.log(`[zlens] Read ${snowflakeAppSetup.relations ?? 0} tables and views in ${database} (${(snowflakeAppSetup.schemas ?? []).join(', ')}) and drafted ${snowflakeAppSetup.drafted} models for review.`);
       // What the set-up wrote into the project is ZLens's version, not the next person's (V15 History).
       void snowflakeHistory?.commitPending(ZLENS_AUTHOR, 'setup', `Set up from ${database}: drafted models for review`).catch(() => undefined);
-    } catch (error) {
-      snowflakeAppSetup = { state: 'failed', database, error: error instanceof Error ? error.message : String(error), at: new Date().toISOString() };
+    } else if (outcome?.status === 'cancelled') {
+      // Someone pressed Stop: nothing is drafted, and nothing starts again by itself.
+      snowflakeAppSetup = { state: 'stopped', database, at: new Date().toISOString(), operationId: operation.id };
+      writeSnowflakeAppSetupMarker();
+      console.log(`[zlens] Setup from ${database} was stopped.`);
+    } else {
+      snowflakeAppSetup = { state: 'failed', database, error: outcome?.error?.message ?? 'the setup did not finish', at: new Date().toISOString(), operationId: operation.id };
       console.warn(`[zlens] Could not set up from ${database} by itself: ${snowflakeAppSetup.error}`);
     }
   };
@@ -15904,11 +15966,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } catch {
         // The project cannot be read yet: no drafts to point to.
       }
+      // The setup's own operation, with its phase and counts while it runs (onboarding design P2).
+      const operation = snowflakeAppSetup.operationId ? operationVisible(operationCoordinator.get(snowflakeAppSetup.operationId), operationReader()) : null;
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...snowflakeAppSetup, waitingDraft: waiting ?? null }));
+      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...snowflakeAppSetup, waitingDraft: waiting ?? null, operation }));
       return;
     }
-    // Try again (the banner's button after a failed setup): reads the tables and drafts the models anew.
+    // Try again, or Start again after a Stop (the banner's buttons): reads the tables and drafts the models anew.
     if (req.method === 'POST' && path === '/api/snowflake-app/setup') {
       const database = snowflakeAppDatabase ?? (typeof connection?.database === 'string' ? connection.database : undefined);
       if (!snowflakeApp || !database) {
@@ -17427,33 +17491,35 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
 
     if (req.method === 'POST' && path === '/api/modeling/warehouse/discover/proposal') {
-      const requestId = apiRequestId('modeling-warehouse-proposal');
-      const snapshot = projectSnapshot();
-      try {
-        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' };
-        if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
-          throw Object.assign(new Error('Project sources changed. Refresh Modeling and draft again.'), { code: 'PROPOSAL_STALE' });
+      // Drafting checks the data and can outlast the Snowflake ingress's 90 s: a page that asks for it is answered
+      // as a long request it polls (onboarding design P2, long-request.ts).
+      await answerLongRequest(req, res as unknown as ServerResponse, async () => {
+        const requestId = apiRequestId('modeling-warehouse-proposal');
+        const snapshot = projectSnapshot();
+        try {
+          const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' };
+          if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
+            throw Object.assign(new Error('Project sources changed. Refresh Modeling and draft again.'), { code: 'PROPOSAL_STALE' });
+          }
+          const { report, proposal } = await draftWarehouseProposal(body, snapshot);
+          return proposal
+            ? { status: 201, body: { requestId, report, proposal } }
+            : { status: 200, body: { requestId, report, proposal: null } };
+        } catch (error) {
+          const code = apiErrorCode(error, 'WAREHOUSE_DISCOVERY_FAILED');
+          const status = code === 'PROPOSAL_STALE' ? 409 : code === 'WAREHOUSE_MODELING_NOT_ENABLED' ? 404 : code === 'WAREHOUSE_CATALOG_MISSING' ? 409 : 400;
+          return {
+            status,
+            body: apiErrorEnvelope({
+              requestId,
+              snapshotId: snapshot.snapshotId,
+              code,
+              message: apiErrorMessage(error),
+              nextActions: code === 'WAREHOUSE_CATALOG_MISSING' ? ['Open Settings → Connections and Sync schema, or run `zlens sync warehouse --schemas <schema>`.'] : [],
+            }),
+          };
         }
-        const { report, proposal } = await draftWarehouseProposal(body, snapshot);
-        if (!proposal) {
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ requestId, report, proposal: null }));
-          return;
-        }
-        res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ requestId, report, proposal }));
-      } catch (error) {
-        const code = apiErrorCode(error, 'WAREHOUSE_DISCOVERY_FAILED');
-        const status = code === 'PROPOSAL_STALE' ? 409 : code === 'WAREHOUSE_MODELING_NOT_ENABLED' ? 404 : code === 'WAREHOUSE_CATALOG_MISSING' ? 409 : 400;
-        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON(apiErrorEnvelope({
-          requestId,
-          snapshotId: snapshot.snapshotId,
-          code,
-          message: apiErrorMessage(error),
-          nextActions: code === 'WAREHOUSE_CATALOG_MISSING' ? ['Open Settings → Connections and Sync schema, or run `zlens sync warehouse --schemas <schema>`.'] : [],
-        })));
-      }
+      }, { serialize: serializeJSON });
       return;
     }
 
@@ -30440,23 +30506,27 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
 
     if (metadataScopeMatch && req.method === 'PUT') {
-      try {
-        const connectionId = decodeURIComponent(metadataScopeMatch[1]!);
-        const cfg = loadProjectConfig(projectRoot);
-        const selectedConnection = projectConnectionById(projectRoot, cfg, connectionId);
-        if (!selectedConnection) throw new Error(`Unknown connection "${connectionId}".`);
-        const body = await readJSON(req) as ConnectionMetadataScopeInput;
-        const { synced, warehouseCatalog } = await syncConnectionMetadataScope(connectionId, selectedConnection, cfg, body);
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({
-          scope: synced.scope,
-          status: warehouseMetadataStatus(projectRoot, synced.scope.scopeFingerprint, connectionId),
-          ...(warehouseCatalog ? { warehouseCatalog } : {}),
-        }));
-      } catch (error) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
-      }
+      // A large scope can outlast the Snowflake ingress's 90 s: a page that asks is answered as a long request.
+      await answerLongRequest(req, res as unknown as ServerResponse, async () => {
+        try {
+          const connectionId = decodeURIComponent(metadataScopeMatch[1]!);
+          const cfg = loadProjectConfig(projectRoot);
+          const selectedConnection = projectConnectionById(projectRoot, cfg, connectionId);
+          if (!selectedConnection) throw new Error(`Unknown connection "${connectionId}".`);
+          const body = await readJSON(req) as ConnectionMetadataScopeInput;
+          const { synced, warehouseCatalog } = await syncConnectionMetadataScope(connectionId, selectedConnection, cfg, body);
+          return {
+            status: 200,
+            body: {
+              scope: synced.scope,
+              status: warehouseMetadataStatus(projectRoot, synced.scope.scopeFingerprint, connectionId),
+              ...(warehouseCatalog ? { warehouseCatalog } : {}),
+            },
+          };
+        } catch (error) {
+          return { status: 400, body: { error: error instanceof Error ? error.message : String(error) } };
+        }
+      }, { serialize: serializeJSON });
       return;
     }
 
@@ -39831,6 +39901,8 @@ async function refreshWarehouseCatalogAfterSync(
   manifest?: DQLManifest,
   /** An RFC 0010 host serves this runtime: column values are never profiled. */
   hosted = false,
+  /** Stop and progress for a setup that runs as an operation (onboarding design P2). */
+  control: { signal?: AbortSignal; onProgress?: (progress: WarehouseReadProgress) => void } = {},
 ): Promise<WarehouseCatalogSummary | undefined> {
   if (!warehouseCatalogModeling(config)) return undefined;
   const path = readWarehouseCatalog(projectRoot).path;
@@ -39840,7 +39912,8 @@ async function refreshWarehouseCatalogAfterSync(
   }
   try {
     const previous = readWarehouseCatalog(projectRoot).snapshot;
-    const { snapshot, warnings, sizes } = await syncWarehouseCatalog({ projectRoot, executor, connection, scope });
+    const { snapshot, warnings, sizes } = await syncWarehouseCatalog({ projectRoot, executor, connection, scope, signal: control.signal, onProgress: control.onProgress });
+    control.signal?.throwIfAborted();
     // What the columns hold, read only when the project opted in.
     const valueProfile = await refreshValueProfile({ projectRoot, config, executor, connection, snapshot, hosted });
     const drift = previous && previous.fingerprint !== snapshot.fingerprint ? diffWarehouseCatalogs(previous, snapshot) : undefined;
@@ -39857,6 +39930,8 @@ async function refreshWarehouseCatalogAfterSync(
       ...(sizes ? { sizes } : {}),
     };
   } catch (error) {
+    // Stopped: the caller says so; it is not a catalog that failed.
+    if (control.signal?.aborted) throw error;
     return { path, error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -39934,6 +40009,8 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   /** Read views that join or aggregate on a warehouse other than DuckDB or SQLite (decision M4: off unless asked). */
   readViews?: boolean;
   executor?: QueryExecutor;
+  /** Cancels the check running and stops the ones after it (onboarding design P2). */
+  signal?: AbortSignal;
 }): Promise<WarehouseDiscoveryReport> {
   const cfg = loadProjectConfig(projectRoot);
   const mode = modelingModeOf(cfg);
@@ -39994,7 +40071,10 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   const leftToDbt = hybrid?.leftToDbt.length ? { dbtLeftOut: hybrid.leftToDbt } : {};
   const report = { ...drafted, ...(queryHistory ? { queryHistory } : {}), ...leftToDbt };
   if (!options.validate || !connection || !options.executor) return report;
-  return { ...(await checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest })), ...leftToDbt };
+  const checked = await checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest, ...(options.signal ? { signal: options.signal } : {}) });
+  // A check stopped part way fails the ones after it: such a report is never a draft.
+  options.signal?.throwIfAborted();
+  return { ...checked, ...leftToDbt };
 }
 
 /**
@@ -40036,10 +40116,17 @@ async function checkDraftOnWarehouse(
   snapshot: Parameters<typeof validateWarehouseDiscovery>[1],
   connection: ConnectionConfig,
   executor: QueryExecutor,
-  options: { readViews?: boolean; manifest?: DQLManifest } = {},
+  options: { readViews?: boolean; manifest?: DQLManifest; signal?: AbortSignal } = {},
 ): Promise<WarehouseDiscoveryReport> {
   // Lake tables are read within the read budget: a sample of files, or not at all (open-formats plan L4).
-  const bounded = boundedReads({ run: (sql: string) => executor.executeQuery(sql, [], {}, connection), snapshot });
+  const signal = options.signal;
+  const bounded = boundedReads({
+    run: (sql: string) => {
+      signal?.throwIfAborted();
+      return executor.executeQuery(sql, [], {}, connection, signal ? { signal } : undefined);
+    },
+    snapshot,
+  });
   const run = bounded.run;
   const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
   const allViews = options.readViews === true || /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);

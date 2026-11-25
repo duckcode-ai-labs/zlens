@@ -761,7 +761,8 @@ export interface SetupLaunchResponse {
 /** The ZLens app for Snowflake setting itself up: reading the granted database's tables, drafting the models. */
 export interface SnowflakeAppSetupStatus {
   managed: boolean;
-  state: 'idle' | 'running' | 'done' | 'failed';
+  /** `stopped`: someone pressed Stop; it starts again only when asked. */
+  state: 'idle' | 'running' | 'done' | 'failed' | 'stopped';
   database?: string;
   schemas?: string[];
   relations?: number;
@@ -770,6 +771,9 @@ export interface SnowflakeAppSetupStatus {
   error?: string;
   at?: string;
   waitingDraft?: WaitingWarehouseDrafts | null;
+  operationId?: string;
+  /** The setup's background operation: its phase, counts and time so far. */
+  operation?: LocalOperation | null;
 }
 
 export type DbtOnboardingErrorCode =
@@ -4210,6 +4214,8 @@ export interface LocalOperation<TResult = unknown> {
   progress: number;
   message: string;
   cancellable: boolean;
+  /** Counts a long operation reports as it goes (the setup's tables read and checked). */
+  detail?: Record<string, unknown>;
   result?: TResult;
   error?: { code: string; message: string; retryable: boolean };
   createdAt: string;
@@ -5520,7 +5526,8 @@ export const api = {
    * nothing new to draft.
    */
   async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean; includeStaging?: boolean; scope?: DraftScopeRequest; source?: 'dbt' | 'warehouse' } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
-    return request('/api/modeling/warehouse/discover/proposal', { method: 'POST', body: JSON.stringify({ validate: true, ...input }) });
+    // Checking the data can outlast the Snowflake ingress's 90 s: asked as a long request (onboarding design P2).
+    return requestLong('/api/modeling/warehouse/discover/proposal', { method: 'POST', body: JSON.stringify({ validate: true, ...input }) });
   },
 
   /**
@@ -7515,7 +7522,8 @@ export const api = {
     connectionId: string,
     input: ConnectionMetadataScopeInput,
   ): Promise<{ scope: ConnectionMetadataScopeV1; status: WarehouseMetadataStatus; warehouseCatalog?: WarehouseCatalogSummary }> {
-    return request(`/api/connections/${encodeURIComponent(connectionId)}/metadata-scope`, {
+    // A large scope can outlast the Snowflake ingress's 90 s: asked as a long request (onboarding design P2).
+    return requestLong(`/api/connections/${encodeURIComponent(connectionId)}/metadata-scope`, {
       method: 'PUT',
       body: JSON.stringify(input),
     });

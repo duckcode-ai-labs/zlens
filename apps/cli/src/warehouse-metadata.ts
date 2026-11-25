@@ -201,11 +201,22 @@ export function normalizeConnectionMetadataScope(
   };
 }
 
+/** How far a metadata read has got: statements run of all, and tables found so far. */
+export interface WarehouseReadProgress {
+  queriesDone: number;
+  queries: number;
+  tables: number;
+  catalogOrDatabase?: string;
+}
+
 export async function syncWarehouseMetadata(input: {
   projectRoot: string;
   executor: QueryExecutor;
   connection: ConnectionConfig;
   scope: ConnectionMetadataScopeV1;
+  /** Stops the read between statements and cancels the one running (onboarding design P2). */
+  signal?: AbortSignal;
+  onProgress?: (progress: WarehouseReadProgress) => void;
 }): Promise<WarehouseMetadataSyncResult> {
   const startedAt = Date.now();
   const observedIdentity = await observeWarehouseTargetIdentity(input.executor, input.connection);
@@ -222,7 +233,9 @@ export async function syncWarehouseMetadata(input: {
   const tables = new Map<string, RuntimeSchemaTable>();
   let queryCount = 0;
   let truncated = false;
+  input.onProgress?.({ queriesDone: 0, queries: queries.length, tables: 0, catalogOrDatabase: queries[0]?.catalogOrDatabase });
   for (const query of queries) {
+    input.signal?.throwIfAborted();
     const options = {
       maxRows: MAX_METADATA_ROWS_PER_QUERY,
       maxBytes: MAX_METADATA_BYTES_PER_QUERY,
@@ -230,6 +243,7 @@ export async function syncWarehouseMetadata(input: {
       deadlineMs: METADATA_QUERY_DEADLINE_MS,
       // Schema only: a host's row policy (RFC 0010) can tell it from data.
       purpose: 'metadata' as const,
+      ...(input.signal ? { signal: input.signal } : {}),
     };
     let result: Awaited<ReturnType<QueryExecutor['executePositional']>>;
     try {
@@ -239,7 +253,7 @@ export async function syncWarehouseMetadata(input: {
       // broken view (one naming a column that no longer exists) fails them
       // all. Read the relations one at a time instead and leave the broken
       // ones out: they cannot be queried anyway.
-      if (input.connection.driver !== 'sqlite') throw error;
+      if (input.connection.driver !== 'sqlite' || input.signal?.aborted) throw error;
       result = await sqliteColumnsOneByOne(input.executor, input.connection, query.catalogOrDatabase, options);
     }
     queryCount += 1;
@@ -251,8 +265,10 @@ export async function syncWarehouseMetadata(input: {
         break;
       }
     }
+    input.onProgress?.({ queriesDone: queryCount, queries: queries.length, tables: tables.size, catalogOrDatabase: queries[queryCount]?.catalogOrDatabase });
     if (tables.size >= MAX_TABLES) break;
   }
+  input.signal?.throwIfAborted();
   const capturedAt = new Date().toISOString();
   const normalizedTables = Array.from(tables.values())
     .sort((left, right) => left.relation.localeCompare(right.relation))
