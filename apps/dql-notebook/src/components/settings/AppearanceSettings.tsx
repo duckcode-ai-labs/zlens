@@ -2,6 +2,7 @@ import React from 'react';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 import type { ThemeMode } from '../../store/types';
+import { CertifyGuideSetting } from './CertifyGuideSetting';
 
 /** The three themes, by what they look like. The choice is kept in this browser. */
 export const APPEARANCE_CHOICES: ReadonlyArray<{ mode: 'paper' | 'white' | 'obsidian'; label: string; detail: string; swatch: string }> = [
@@ -17,7 +18,7 @@ export function appearanceChoice(mode: ThemeMode): 'paper' | 'white' | 'obsidian
   return 'paper';
 }
 
-/** Settings » Appearance: the theme (it used to sit in every page's header). */
+/** Settings » Appearance: the theme (it used to sit in every page's header), and whether Ask's home shows the certify guide. */
 export function AppearanceSettings() {
   const themeMode = useNotebookStore((state) => state.themeMode);
   const dispatch = useDispatch();
@@ -57,6 +58,7 @@ export function AppearanceSettings() {
           );
         })}
       </div>
+      <CertifyGuideSetting t={t} />
     </div>
   );
 }
