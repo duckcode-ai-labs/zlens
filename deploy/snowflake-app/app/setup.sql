@@ -286,6 +286,18 @@ CREATE OR REPLACE VIEW app_public.history AS
   FROM core.history_log;
 GRANT SELECT ON VIEW app_public.history TO APPLICATION ROLE app_admin;
 
+-- Setup's status (onboarding design P5): while ZLens reads the chosen schemas and checks the data in the
+-- background, the container keeps one row here (stage, one line, a percent), so the launcher page can say
+-- "ZLens is ready to ask. Background checks: 25%." before ZLens opens. No data, no SQL, no names of the
+-- person's tables: the stage and counts only. Written only while setup works; kept through upgrades.
+CREATE TABLE IF NOT EXISTS core.setup_status (
+  id NUMBER,
+  updated_at TIMESTAMP_TZ,
+  stage VARCHAR,
+  line VARCHAR,
+  percent NUMBER
+);
+
 -- Launch app (V2): Snowsight's Launch app button opens this page (manifest default_streamlit). It
 -- starts ZLens when it has stopped, waits until Snowflake reports it READY, and only then offers
 -- Open ZLens and its address, so no one lands on Snowflake's "service is not yet running" page. It
@@ -295,8 +307,8 @@ GRANT SELECT ON VIEW app_public.history TO APPLICATION ROLE app_admin;
 -- Once ZLens is ready it checks again every minute for 10 minutes, then stops so the warehouse can
 -- suspend, and every state says when it was checked. app_url() stays for SQL.
 
--- The state the launcher shows: the service status, its address and the configured ZLens user.
--- Starts nothing. READY means the service is RUNNING and its container reports READY (a service
+-- The state the launcher shows: the service status, its address, the configured ZLens user, and setup's
+-- status when there is one (onboarding design P5). Starts nothing. READY means the service is RUNNING and its container reports READY (a service
 -- reports RUNNING; READY is its container's state); RUNNING with a container not ready yet is PENDING.
 CREATE OR REPLACE PROCEDURE app_public.launcher_status()
 RETURNS VARIANT
@@ -307,6 +319,7 @@ DECLARE
   svc_status VARCHAR DEFAULT '';
   url VARCHAR DEFAULT '';
   zlens_user VARCHAR DEFAULT '';
+  setup VARIANT DEFAULT NULL;
   ready_containers INTEGER DEFAULT 0;
   other_containers INTEGER DEFAULT 0;
   services RESULTSET;
@@ -354,7 +367,16 @@ BEGIN
   EXCEPTION WHEN OTHER THEN
     NULL;
   END;
-  RETURN OBJECT_CONSTRUCT('status', :svc_status, 'url', :url, 'zlens_user', :zlens_user);
+  BEGIN
+    SELECT OBJECT_CONSTRUCT('stage', stage, 'line', line, 'percent', percent, 'updated_at', updated_at)
+      INTO :setup
+      FROM core.setup_status
+      ORDER BY updated_at DESC
+      LIMIT 1;
+  EXCEPTION WHEN OTHER THEN
+    NULL;
+  END;
+  RETURN OBJECT_CONSTRUCT('status', :svc_status, 'url', :url, 'zlens_user', :zlens_user, 'setup', :setup);
 END;
 $$;
 GRANT USAGE ON PROCEDURE app_public.launcher_status() TO APPLICATION ROLE app_user;

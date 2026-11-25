@@ -771,7 +771,23 @@ export interface WarehouseSetupStatus {
     scopes: Array<{ catalogOrDatabase: string; schemas: string[] }>;
     check: boolean;
     read: { state: 'running' | 'done' | 'failed' | 'stopped'; operationId?: string; startedAt?: string; at?: string; relations?: number; warnings?: string[]; error?: string };
-    checks?: { state: 'running' | 'done' | 'failed' | 'stopped' | 'off'; operationId?: string; startedAt?: string; at?: string; proposalId?: string; drafted?: number; search?: 'meaning' | 'words'; searchNote?: string; error?: string };
+    checks?: {
+      state: 'running' | 'done' | 'failed' | 'stopped' | 'off';
+      operationId?: string;
+      startedAt?: string;
+      at?: string;
+      proposalId?: string;
+      drafted?: number;
+      search?: 'meaning' | 'words';
+      searchNote?: string;
+      error?: string;
+      /** What could not be checked, by table. */
+      problems?: Array<{ relations: string[]; kind: string; text: string }>;
+      /** Tables checked on a block sample. */
+      sampled?: number;
+      /** Statements an earlier run answered that this run did not ask again. */
+      resumed?: number;
+    };
   } | null;
   /** The stage running, with its phase and counts. */
   operation: LocalOperation | null;
@@ -7550,9 +7566,12 @@ export const api = {
     return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/read`, { method: 'POST', body: JSON.stringify(input) });
   },
 
-  /** Stage 2: check the data in the background (again). */
-  async startSetupCheck(connectionId: string): Promise<WarehouseSetupStatus> {
-    return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/check`, { method: 'POST', body: '{}' });
+  /**
+   * Stage 2: check the data in the background (again). It resumes where it stopped; `fresh` asks the warehouse
+   * everything again; `anyway` checks those tables without the background time limit.
+   */
+  async startSetupCheck(connectionId: string, options: { fresh?: boolean; anyway?: string[] } = {}): Promise<WarehouseSetupStatus> {
+    return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/check`, { method: 'POST', body: JSON.stringify(options) });
   },
 
   async applyConnectionMetadataScope(

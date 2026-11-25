@@ -149,6 +149,10 @@ describe('the app package for Snowflake', () => {
     expect(status).toContain("svc_status := IFF(ready_containers > 0 AND other_containers = 0, 'READY', 'PENDING');");
     expect(status).toContain("SYS_CONTEXT('SNOWFLAKE$APPLICATION', 'GET_CONFIGURATION_VALUE', 'ZLENS_USER')");
     expect(status).not.toMatch(/RESUME|SUSPEND;|CREATE /);
+    // Setup's status (onboarding design P5): the row ZLens keeps in core.setup_status, returned as `setup`.
+    expect(setup).toMatch(/CREATE TABLE IF NOT EXISTS core\.setup_status \(\s+id NUMBER,\s+updated_at TIMESTAMP_TZ,\s+stage VARCHAR,\s+line VARCHAR,\s+percent NUMBER\s+\);/);
+    expect(status).toContain('FROM core.setup_status');
+    expect(status).toContain("RETURN OBJECT_CONSTRUCT('status', :svc_status, 'url', :url, 'zlens_user', :zlens_user, 'setup', :setup);");
     // Start only resumes a stopped ZLens and returns at once: no long wait inside a page's call.
     const start = procedure('launcher_start');
     expect(start).toMatch(/IF \(svc_status = 'SUSPENDED'\) THEN\s+BEGIN\s+ALTER COMPUTE POOL IDENTIFIER\(:pool\) RESUME;[\s\S]*?ALTER SERVICE core\.zlens RESUME;/);
@@ -171,6 +175,8 @@ describe('the app package for Snowflake', () => {
     // The address is offered only once READY, with a copy of it in case the browser blocks the tab.
     expect(page).toMatch(/if name == "READY" and status\["url"\]:[\s\S]*?st\.link_button[\s\S]*?st\.code\(status\["url"\]/);
     expect(page.indexOf('st.link_button')).toBeGreaterThan(page.indexOf('if name == "READY"'));
+    // Once ready, setup's line from launcher_status() (onboarding design P5).
+    expect(page).toMatch(/setup_line = str\(\(status\.get\("setup"\) or \{\}\)\.get\("line"\) or ""\)\n\s+if setup_line:\n\s+st\.info\(setup_line\)/);
     const env = yaml.load(read('launcher/environment.yml')) as { channels: string[]; dependencies: string[] };
     expect(env.channels).toEqual(['snowflake']);
     const pin = env.dependencies.find((dep) => dep.startsWith('streamlit='));
