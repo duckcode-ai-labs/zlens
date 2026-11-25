@@ -15468,7 +15468,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const snowflakeAppSetupMarker = join(projectRoot, '.dql', 'local', 'snowflake-app-setup.json');
   // In the ZLens app for Snowflake, the schema list offers only the databases granted to the app (approved
   // design D4): not Snowflake's own SNOWFLAKE database, the app's own schemas or INFORMATION_SCHEMA.
-  const onlyGrantedScopes = async <T extends { scopes: Array<{ catalogOrDatabase: string; schemas: Array<{ name: string }> }>; dbtScopes?: unknown[]; supported?: boolean; message?: string }>(discovery: T): Promise<T> => {
+  const grantedDatabases = async (): Promise<string[]> => {
     let granted: string[] = [];
     try {
       granted = (await snowflakeApp!.current()).databases;
@@ -15476,6 +15476,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // The settings could not be read: keep to the database ZLens reads now.
     }
     if (granted.length === 0 && typeof connection?.database === 'string') granted = [connection.database];
+    return granted;
+  };
+  const onlyGrantedScopes = async <T extends { scopes: Array<{ catalogOrDatabase: string; schemas: Array<{ name: string }> }>; dbtScopes?: unknown[]; supported?: boolean; message?: string }>(discovery: T, granted?: string[]): Promise<T> => {
+    granted ??= await grantedDatabases();
     const wanted = new Set(granted.map((name) => name.toUpperCase()));
     const scopes = discovery.scopes
       .filter((scope) => wanted.has(scope.catalogOrDatabase.toUpperCase()))
@@ -30366,14 +30370,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const selectedConnection = projectConnectionById(projectRoot, cfg, connectionId);
         if (!selectedConnection) throw new Error(`Unknown connection "${connectionId}".`);
         const defaults = metadataScopeDbtDefaults(projectRoot, cfg);
+        // Sizes too, for the picker (onboarding design P1); in the app, of the granted databases only.
+        const granted = snowflakeApp ? await grantedDatabases() : undefined;
         const discovery = await discoverWarehouseMetadataScopes({
           connectionId,
           executor,
           connection: selectedConnection,
           dbtRelations: defaults.relations,
+          sizes: granted ? { databases: granted } : true,
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON(snowflakeApp ? await onlyGrantedScopes(discovery) : discovery));
+        res.end(serializeJSON(granted ? await onlyGrantedScopes(discovery, granted) : discovery));
       } catch (error) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));

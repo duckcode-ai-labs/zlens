@@ -5280,12 +5280,31 @@ export interface WarehouseMetadataDiscovery {
       name: string;
       inDbtProject: boolean;
       dbtRelationCount: number;
+      /** From the warehouse's catalog, when it could say (Snowflake, DuckDB, PostgreSQL). */
+      size?: WarehouseSchemaSize;
     }>;
   }>;
   dbtScopes: Array<{ catalogOrDatabase: string; schemas: string[] }>;
   queryCount: number;
   truncated: boolean;
   message: string;
+  /** What one Apply and synchronize can read. */
+  limits?: { tables: number; columnsPerDatabase: number; checkRowBudget: number };
+  /** Databases whose sizes could not be read. */
+  sizesUnavailable?: string[];
+}
+
+/** How big a schema is, from the warehouse's catalog (onboarding design P1). */
+export interface WarehouseSchemaSize {
+  tables: number;
+  views: number;
+  columns?: number;
+  rows?: number;
+  bytes?: number;
+  tablesWithKeys: number;
+  foreignKeys: number;
+  largeTables?: number;
+  largestTableRows?: number;
 }
 
 export type ContextAuthoringOrigin = 'manual' | 'yaml_import' | 'dbt_discovery' | 'warehouse_discovery' | 'ai' | 'correction';

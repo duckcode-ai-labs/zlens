@@ -60,10 +60,34 @@ export interface WarehouseMetadataStatus {
   observedTarget?: RuntimeSchemaObservedTarget;
 }
 
+/**
+ * How big a schema is, from the warehouse's own catalog (no table is read):
+ * what the schema picker shows so a person can start small (onboarding
+ * design P1). Rows and bytes are what the warehouse reports for its tables;
+ * a view has neither.
+ */
+export interface WarehouseSchemaSize {
+  /** Tables and views. */
+  tables: number;
+  views: number;
+  /** Columns of those tables and views, when the warehouse lists them. */
+  columns?: number;
+  rows?: number;
+  bytes?: number;
+  /** Tables with a declared primary key or unique constraint: their keys need no check. */
+  tablesWithKeys: number;
+  foreignKeys: number;
+  /** Tables over the full-check row budget (CHECK_ROW_BUDGET). */
+  largeTables?: number;
+  largestTableRows?: number;
+}
+
 export interface WarehouseMetadataDiscoveredSchema {
   name: string;
   inDbtProject: boolean;
   dbtRelationCount: number;
+  /** Present when the warehouse could say (Snowflake, DuckDB, PostgreSQL). */
+  size?: WarehouseSchemaSize;
 }
 
 export interface WarehouseMetadataDiscoveredScope {
@@ -82,7 +106,14 @@ export interface WarehouseMetadataDiscoveryResult {
   queryCount: number;
   truncated: boolean;
   message: string;
+  /** What one Apply and synchronize can read, so the picker says so before a choice fails. */
+  limits?: { tables: number; columnsPerDatabase: number; checkRowBudget: number };
+  /** Databases whose sizes could not be read (their schemas are listed without sizes). */
+  sizesUnavailable?: string[];
 }
+
+/** The row budget of a full data check (onboarding design D5); the picker counts the tables above it. */
+export const CHECK_ROW_BUDGET = 10_000_000;
 
 // The scope a sync reads matches what discovery can list (40 databases, 1,000
 // schemas). A scope past these limits fails with a message; nothing is
@@ -271,6 +302,13 @@ export async function discoverWarehouseMetadataScopes(input: {
   executor: QueryExecutor;
   connection: ConnectionConfig;
   dbtRelations?: string[];
+  /**
+   * Also read each schema's size from the warehouse's catalog: one query per
+   * database (one in all on DuckDB). `databases` limits it to those named
+   * (the ZLens app for Snowflake sizes only the databases granted to it).
+   */
+  sizes?: boolean | { databases?: string[] };
+  signal?: AbortSignal;
 }): Promise<WarehouseMetadataDiscoveryResult> {
   const observedIdentity = await observeWarehouseTargetIdentity(input.executor, input.connection);
   assertObservedScopeCompatible(input.connection, observedIdentity.redactedContext);
@@ -362,17 +400,31 @@ export async function discoverWarehouseMetadataScopes(input: {
     }
   }
 
+  let sized: Awaited<ReturnType<typeof readSchemaSizes>> | undefined;
+  if (input.sizes && supported) {
+    const only = typeof input.sizes === 'object' && input.sizes.databases
+      ? new Set(input.sizes.databases.map(normalizeIdentifierKey))
+      : undefined;
+    const catalogs = Array.from(discovered.values())
+      .map((scope) => scope.catalogOrDatabase)
+      .filter((catalog) => !only || only.has(normalizeIdentifierKey(catalog)));
+    sized = await readSchemaSizes(input.executor, input.connection, catalogs, input.signal);
+    queryCount += sized.queryCount;
+  }
+
   const scopes = Array.from(discovered.values())
     .map((scope) => ({
       catalogOrDatabase: scope.catalogOrDatabase,
       schemas: Array.from(scope.schemas.values())
         .sort((left, right) => left.localeCompare(right))
-        .map((schema) => {
+        .map((schema): WarehouseMetadataDiscoveredSchema => {
           const count = dbtCounts.get(scopeKey(scope.catalogOrDatabase, schema)) ?? 0;
+          const size = sized?.sizes.get(scopeKey(scope.catalogOrDatabase, schema));
           return {
             name: schema,
             inDbtProject: count > 0,
             dbtRelationCount: count,
+            ...(size ? { size } : {}),
           };
         }),
     }))
@@ -399,7 +451,178 @@ export async function discoverWarehouseMetadataScopes(input: {
       : dbtScopes.length > 0
         ? `Found ${additionalCount} additional schema${additionalCount === 1 ? '' : 's'} outside the dbt project. Nothing was added or synchronized.`
         : `Found ${additionalCount} schema${additionalCount === 1 ? '' : 's'}. Choose the ones ZLens should read, then Apply and synchronize.`,
+    limits: { tables: MAX_TABLES, columnsPerDatabase: MAX_METADATA_ROWS_PER_QUERY, checkRowBudget: CHECK_ROW_BUDGET },
+    ...(sized?.unavailable.length ? { sizesUnavailable: sized.unavailable } : {}),
   };
+}
+
+const SIZE_QUERY_DEADLINE_MS = 20_000;
+const SIZE_QUERY_CONCURRENCY = 4;
+
+/**
+ * Each schema's size, from the catalog only: Snowflake's INFORMATION_SCHEMA
+ * (TABLES, TABLE_CONSTRAINTS, COLUMNS) in one statement per database, DuckDB's
+ * duckdb_tables() and duckdb_views() in one statement, PostgreSQL's pg_class
+ * estimates in one statement. Other warehouses list no sizes. A database whose
+ * sizes cannot be read is named in `unavailable`; its schemas are still listed.
+ */
+export async function readSchemaSizes(
+  executor: QueryExecutor,
+  connection: ConnectionConfig,
+  catalogs: string[],
+  signal?: AbortSignal,
+): Promise<{ sizes: Map<string, WarehouseSchemaSize>; queryCount: number; unavailable: string[] }> {
+  const sizes = new Map<string, WarehouseSchemaSize>();
+  const unavailable: string[] = [];
+  let queryCount = 0;
+  const options = {
+    maxRows: MAX_DISCOVERY_SCHEMAS,
+    maxBytes: 2 * 1024 * 1024,
+    batchSize: 500,
+    deadlineMs: SIZE_QUERY_DEADLINE_MS,
+    purpose: 'metadata' as const,
+    ...(signal ? { signal } : {}),
+  };
+  const take = (rows: Array<Record<string, unknown>>, fallbackCatalog?: string) => {
+    for (const row of rows) {
+      const catalog = rowString(row, 'table_catalog') ?? fallbackCatalog;
+      const schema = rowString(row, 'table_schema');
+      if (!catalog || !schema || isSystemSchema(schema)) continue;
+      sizes.set(scopeKey(catalog, schema), schemaSizeFromRow(row));
+    }
+  };
+  const driver = connection.driver;
+  if (driver === 'snowflake') {
+    const queue = [...catalogs];
+    const worker = async () => {
+      for (let catalog = queue.shift(); catalog !== undefined; catalog = queue.shift()) {
+        if (signal?.aborted) return;
+        // With the column counts first; INFORMATION_SCHEMA.COLUMNS can refuse a very large database, so then without.
+        let done = false;
+        for (const withColumns of [true, false]) {
+          try {
+            queryCount += 1;
+            const result = await executor.executePositional(snowflakeSchemaSizeSql(catalog, withColumns), [], connection, options);
+            take(result.rows, catalog);
+            done = true;
+            break;
+          } catch {
+            if (signal?.aborted) return;
+          }
+        }
+        if (!done) unavailable.push(catalog);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(SIZE_QUERY_CONCURRENCY, queue.length) }, worker));
+  } else if (driver === 'duckdb' || driver === 'file') {
+    try {
+      queryCount += 1;
+      const result = await executor.executePositional(DUCKDB_SCHEMA_SIZE_SQL, [], connection, options);
+      const wanted = new Set(catalogs.map(normalizeIdentifierKey));
+      take(result.rows.filter((row) => {
+        const catalog = rowString(row, 'table_catalog');
+        return catalog !== undefined && wanted.has(normalizeIdentifierKey(catalog));
+      }));
+    } catch {
+      unavailable.push(...catalogs);
+    }
+  } else if (driver === 'postgresql') {
+    try {
+      queryCount += 1;
+      const result = await executor.executePositional(POSTGRES_SCHEMA_SIZE_SQL, [], connection, options);
+      take(result.rows);
+    } catch {
+      unavailable.push(...catalogs);
+    }
+  }
+  return { sizes, queryCount, unavailable };
+}
+
+function snowflakeSchemaSizeSql(catalog: string, withColumns: boolean): string {
+  const db = quoteIdentifier(catalog, '"');
+  return [
+    'WITH t AS (',
+    `  SELECT table_schema, table_name, table_type, row_count, bytes FROM ${db}.INFORMATION_SCHEMA.TABLES WHERE table_schema <> 'INFORMATION_SCHEMA'`,
+    '), k AS (',
+    "  SELECT table_schema, table_name, MAX(IFF(constraint_type IN ('PRIMARY KEY', 'UNIQUE'), 1, 0)) AS has_key, SUM(IFF(constraint_type = 'FOREIGN KEY', 1, 0)) AS foreign_keys",
+    `  FROM ${db}.INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE table_schema <> 'INFORMATION_SCHEMA' GROUP BY table_schema, table_name`,
+    ...(withColumns
+      ? ['), c AS (', `  SELECT table_schema, COUNT(*) AS column_count FROM ${db}.INFORMATION_SCHEMA.COLUMNS WHERE table_schema <> 'INFORMATION_SCHEMA' GROUP BY table_schema`]
+      : []),
+    ')',
+    `SELECT ${sqlLiteral(catalog)} AS table_catalog, t.table_schema, COUNT(*) AS table_count, COUNT_IF(t.table_type ILIKE '%VIEW%') AS view_count,`,
+    '  SUM(t.row_count) AS row_count, SUM(t.bytes) AS bytes, COUNT_IF(k.has_key = 1) AS keyed_table_count, COALESCE(SUM(k.foreign_keys), 0) AS foreign_key_count,',
+    `  COUNT_IF(t.row_count > ${CHECK_ROW_BUDGET}) AS large_table_count, MAX(t.row_count) AS largest_table_rows`,
+    withColumns ? '  , MAX(c.column_count) AS column_count' : '',
+    'FROM t LEFT JOIN k ON k.table_schema = t.table_schema AND k.table_name = t.table_name',
+    withColumns ? 'LEFT JOIN c ON c.table_schema = t.table_schema' : '',
+    'GROUP BY t.table_schema',
+    `LIMIT ${MAX_DISCOVERY_SCHEMAS}`,
+  ].filter(Boolean).join('\n');
+}
+
+// DuckDB: estimated_size is DuckDB's own row estimate; a view (a data file read in place) has none.
+const DUCKDB_SCHEMA_SIZE_SQL = [
+  'SELECT database_name AS table_catalog, schema_name AS table_schema, COUNT(*) AS table_count, SUM(is_view) AS view_count,',
+  '  SUM(estimated_size) AS row_count, SUM(has_key) AS keyed_table_count, SUM(column_count) AS column_count,',
+  `  SUM(CASE WHEN estimated_size > ${CHECK_ROW_BUDGET} THEN 1 ELSE 0 END) AS large_table_count, MAX(estimated_size) AS largest_table_rows,`,
+  "  (SELECT COUNT(*) FROM duckdb_constraints() AS k WHERE k.database_name = s.database_name AND k.schema_name = s.schema_name AND k.constraint_type = 'FOREIGN KEY') AS foreign_key_count",
+  'FROM (',
+  '  SELECT database_name, schema_name, 0 AS is_view, estimated_size, CASE WHEN has_primary_key THEN 1 ELSE 0 END AS has_key, column_count FROM duckdb_tables() WHERE NOT internal AND NOT temporary',
+  '  UNION ALL',
+  '  SELECT database_name, schema_name, 1 AS is_view, NULL AS estimated_size, 0 AS has_key, column_count FROM duckdb_views() WHERE NOT internal AND NOT temporary',
+  ') AS s',
+  "WHERE database_name NOT IN ('system', 'temp')",
+  'GROUP BY database_name, schema_name',
+  `LIMIT ${MAX_DISCOVERY_SCHEMAS}`,
+].join('\n');
+
+// PostgreSQL: reltuples is the planner's row estimate (-1 before a first ANALYZE).
+const POSTGRES_SCHEMA_SIZE_SQL = [
+  'SELECT current_database() AS table_catalog, n.nspname AS table_schema,',
+  '  COUNT(*) AS table_count,',
+  "  COUNT(*) FILTER (WHERE c.relkind IN ('v', 'm')) AS view_count,",
+  "  SUM(GREATEST(c.reltuples, 0)) FILTER (WHERE c.relkind IN ('r', 'p', 'm')) AS row_count,",
+  "  SUM(pg_total_relation_size(c.oid)) FILTER (WHERE c.relkind IN ('r', 'p', 'm')) AS bytes,",
+  "  COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM pg_constraint AS k WHERE k.conrelid = c.oid AND k.contype IN ('p', 'u'))) AS keyed_table_count,",
+  "  (SELECT COUNT(*) FROM pg_constraint AS f JOIN pg_class AS fc ON fc.oid = f.conrelid WHERE f.contype = 'f' AND fc.relnamespace = n.oid) AS foreign_key_count,",
+  "  (SELECT COUNT(*) FROM pg_attribute AS a JOIN pg_class AS ac ON ac.oid = a.attrelid WHERE ac.relnamespace = n.oid AND ac.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT ac.relispartition AND a.attnum > 0 AND NOT a.attisdropped) AS column_count,",
+  `  COUNT(*) FILTER (WHERE c.reltuples > ${CHECK_ROW_BUDGET}) AS large_table_count,`,
+  '  MAX(GREATEST(c.reltuples, 0)) AS largest_table_rows',
+  'FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace',
+  "WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition",
+  "  AND n.nspname NOT IN ('information_schema', 'pg_catalog', 'pg_toast') AND n.nspname NOT LIKE 'pg_temp_%' AND n.nspname NOT LIKE 'pg_toast_temp_%'",
+  'GROUP BY n.oid, n.nspname',
+  `LIMIT ${MAX_DISCOVERY_SCHEMAS}`,
+].join('\n');
+
+function schemaSizeFromRow(row: Record<string, unknown>): WarehouseSchemaSize {
+  const count = (key: string): number | undefined => {
+    const value = rowValue(row, key);
+    if (value === null || value === undefined || value === '') return undefined;
+    const number = typeof value === 'bigint' ? Number(value) : Number(value);
+    return Number.isFinite(number) ? Math.max(0, Math.round(number)) : undefined;
+  };
+  const optional = (key: string, value: number | undefined) => (value === undefined ? {} : { [key]: value });
+  return {
+    tables: count('table_count') ?? 0,
+    views: count('view_count') ?? 0,
+    ...optional('columns', count('column_count')),
+    ...optional('rows', count('row_count')),
+    ...optional('bytes', count('bytes')),
+    tablesWithKeys: count('keyed_table_count') ?? 0,
+    foreignKeys: count('foreign_key_count') ?? 0,
+    ...optional('largeTables', count('large_table_count')),
+    ...optional('largestTableRows', count('largest_table_rows')),
+  };
+}
+
+function rowValue(row: Record<string, unknown>, key: string): unknown {
+  const expected = key.toLowerCase();
+  for (const [rowKey, value] of Object.entries(row)) {
+    if (rowKey.toLowerCase() === expected) return value;
+  }
+  return undefined;
 }
 
 export function warehouseMetadataStatus(

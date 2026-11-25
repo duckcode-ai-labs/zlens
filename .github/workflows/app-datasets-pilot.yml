@@ -114,3 +114,17 @@ jobs:
           fi
         env:
           ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/app-datasets-connectors
+
+      - name: First-open onboarding on DuckDB
+        # Onboarding design (pick your data, fast first, details later): the
+        # schema picker's sizes come from DuckDB's own catalog, no table read.
+        working-directory: apps/cli
+        shell: bash
+        run: |
+          npx vitest run src/warehouse-metadata.sizes.test.ts --reporter=verbose | tee "$RUNNER_TEMP/onboarding.log"
+          if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/onboarding.log"; then
+            echo "An onboarding test skipped although a DuckDB connector root was configured." >&2
+            exit 1
+          fi
+        env:
+          ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/app-datasets-connectors
