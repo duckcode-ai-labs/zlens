@@ -26,6 +26,17 @@ export interface SetupDetail {
   /** Statements of the current read: done of all. */
   statementsDone?: number;
   statements?: number;
+  /** The background checks' counts (onboarding design P4). */
+  checks?: {
+    tablesChecked: number;
+    tables: number;
+    keys: { done: number; total: number };
+    joins: { done: number; total: number };
+    /** Tables over the row budget: checked on a block sample. */
+    largeTables: number;
+    /** Statements answered from an earlier run. */
+    resumed: number;
+  };
   startedAt: string;
   phaseStartedAt: string;
   elapsedMs: number;
@@ -113,9 +124,12 @@ export class SetupOperationProgress {
 
 export function setupPercent(detail: SetupDetail): number {
   const [from, to] = SPAN[detail.phase];
-  const part = detail.statements && detail.statements > 0
-    ? Math.min(1, (detail.statementsDone ?? 0) / detail.statements)
-    : 0;
+  const checks = detail.phase === 'check' ? detail.checks : undefined;
+  const part = checks && checks.tables > 0
+    ? Math.min(1, (checks.tablesChecked / checks.tables) * 0.6 + (checks.joins.total > 0 ? (checks.joins.done / checks.joins.total) * 0.4 : 0))
+    : detail.statements && detail.statements > 0
+      ? Math.min(1, (detail.statementsDone ?? 0) / detail.statements)
+      : 0;
   return Math.round(from + (to - from) * part);
 }
 
@@ -146,8 +160,15 @@ export function setupMessage(detail: SetupDetail): string {
       return `Reading names${where}: ${tables} so far${statements} · ${time}`;
     case 'catalog':
       return `Reading keys and comments${where}${statements}: ${tables} · ${time}`;
-    case 'check':
-      return `Checking keys and joins on the data${where} · ${time}`;
+    case 'check': {
+      const checks = detail.checks;
+      if (!checks || checks.tables === 0) return `Checking keys and joins on the data${where} · ${time}`;
+      const parts = [`${checks.tablesChecked.toLocaleString('en-US')} of ${count(checks.tables, 'table', 'tables')}`];
+      if (checks.joins.total > 0) parts.push(`${checks.joins.done.toLocaleString('en-US')} of ${count(checks.joins.total, 'join', 'joins')}`);
+      if (checks.largeTables > 0) parts.push(`${checks.largeTables.toLocaleString('en-US')} on samples`);
+      if (checks.resumed > 0) parts.push('resumed');
+      return `Checking keys and joins${where}: ${parts.join(' · ')} · ${time}`;
+    }
     case 'index':
       return `Building the search index · ${time}`;
   }

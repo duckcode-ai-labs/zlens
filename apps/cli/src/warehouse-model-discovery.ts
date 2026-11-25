@@ -778,12 +778,17 @@ export function recordDiscoveryDecisions(projectRoot: string, decisions: Discove
  * a column is a key is decided by the data, never by how it is spelled.
  * Aggregates only.
  */
+/** A table's size for ordering checks small first: its rows when known, else last. */
+function sizeOf(relation: WarehouseCatalogRelationV1 | undefined): number {
+  return relation?.rowCountEstimate ?? Number.MAX_SAFE_INTEGER;
+}
+
 export async function inferSharedKeyJoins(
   report: WarehouseDiscoveryReport,
   snapshot: WarehouseCatalogSnapshotV1,
   execute: (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>,
   quote: (identifier: string) => string,
-  options: { maxChecks?: number } = {},
+  options: { maxChecks?: number; smallFirst?: boolean } = {},
 ): Promise<WarehouseDiscoveryReport> {
   const quoteRelation = (relation: string) => relation.split('.').map(quote).join('.');
   // Tables and simple views alike (dbt builds models as views by default);
@@ -809,7 +814,9 @@ export async function inferSharedKeyJoins(
   const unique = new Set<string>();
   const byTable = new Map<string, Array<{ relation: WarehouseCatalogRelationV1; column: string }>>();
   for (const [, list] of shared) for (const item of list) byTable.set(item.relation.id, [...(byTable.get(item.relation.id) ?? []), item]);
-  for (const items of byTable.values()) {
+  // In the background setup, small tables first (onboarding design P4): the most joins land early.
+  const tableOrder = options.smallFirst ? [...byTable.values()].sort((a, b) => sizeOf(a[0]!.relation) - sizeOf(b[0]!.relation)) : [...byTable.values()];
+  for (const items of tableOrder) {
     if (checks++ >= budget) break;
     const relation = items[0]!.relation;
     const parts = items.map((item, index) => `COUNT(${quote(item.column)}) AS nn_${index}, COUNT(DISTINCT ${quote(item.column)}) AS nd_${index}`);
@@ -930,16 +937,26 @@ export async function validateWarehouseDiscovery(
     dialect?: string;
     /** Which relations the checks may read; default: tables and views that only project one relation. */
     readable?: (relation: WarehouseCatalogRelationV1) => boolean;
+    /**
+     * The background setup's order (onboarding design P4): small tables first, and joins with a declared
+     * foreign key, then from small tables, first. What is drafted keeps the report's order.
+     */
+    smallFirst?: boolean;
+    /** A key or join check is done: its counts so far. */
+    onProgress?: (step: { kind: 'keys' | 'joins'; done: number; total: number }) => void;
   } = {},
 ): Promise<WarehouseDiscoveryReport> {
   // Joins the data proves come first, then every draft is checked the same way.
-  report = await inferSharedKeyJoins(report, snapshot, execute, quote);
+  report = await inferSharedKeyJoins(report, snapshot, execute, quote, { smallFirst: options.smallFirst === true });
   const typesOf = new Map(snapshot.relations.map((relation) => [relation.relation, new Map(relation.columns.map((column) => [column.name.toLowerCase(), column.type?.toLowerCase()]))]));
   const quoteRelation = (relation: string) => relation.split('.').map(quote).join('.');
   const relationById = new Map(snapshot.relations.map((relation) => [relation.relation, relation]));
   const cheap = (relation: string) => { const found = relationById.get(relation); return found ? (options.readable ?? cheapToRead)(found) : false; };
-  const entities: DiscoveredEntity[] = [];
-  for (const entity of report.entities) {
+  const entities: DiscoveredEntity[] = new Array(report.entities.length);
+  const entityOrder = report.entities.map((entity, index) => ({ entity, index }));
+  if (options.smallFirst) entityOrder.sort((a, b) => sizeOf(relationById.get(a.entity.relation)) - sizeOf(relationById.get(b.entity.relation)));
+  let keysDone = 0;
+  for (const { entity, index: at } of entityOrder) {
     // The naming-convention key first, then the table's other identity
     // columns (`<table>_uuid`, `uuid`, `<table>_key`): supplies repeat
     // `supply_id` once per product, and `supply_uuid` is the row's identity.
@@ -947,7 +964,8 @@ export async function validateWarehouseDiscovery(
     const candidates = [...(entity.grainCandidate ? [entity.grainCandidate] : []), ...(catalogRelation ? identityColumns(catalogRelation) : [])]
       .filter((column, index, all) => all.findIndex((other) => other.toLowerCase() === column.toLowerCase()) === index);
     if (entity.grain || candidates.length === 0 || !cheap(entity.relation)) {
-      entities.push(entity);
+      entities[at] = entity;
+      options.onProgress?.({ kind: 'keys', done: ++keysDone, total: report.entities.length });
       continue;
     }
     try {
@@ -956,22 +974,32 @@ export async function validateWarehouseDiscovery(
       const read = (name: string) => Number(row[name] ?? row[name.toUpperCase()]);
       const rows = read('row_count');
       const grain = candidates.find((_, index) => rows > 0 && read(`nn_${index}`) === rows && read(`nd_${index}`) === rows);
-      entities.push(grain ? { ...entity, grain, keys: [grain], grainSource: 'unique_column' } : entity);
+      entities[at] = grain ? { ...entity, grain, keys: [grain], grainSource: 'unique_column' } : entity;
     } catch {
-      entities.push(entity);
+      entities[at] = entity;
     }
+    options.onProgress?.({ kind: 'keys', done: ++keysDone, total: report.entities.length });
   }
   const limit = options.maxRelationships ?? 200;
-  const relationships: DiscoveredRelationship[] = [];
-  const withheld: WithheldRelationship[] = [...(report.withheld ?? [])];
+  const checkedAt: Array<DiscoveredRelationship | undefined> = new Array(report.relationships.length);
+  const withheldAt: Array<WithheldRelationship | undefined> = new Array(report.relationships.length);
   const columnsOf = new Map(snapshot.relations.map((relation) => [relation.relation, relation.columns]));
-  for (const [index, relationship] of report.relationships.entries()) {
-    if (index >= limit) {
-      relationships.push({ ...relationship, validationError: `not validated: discovery validates at most ${limit} relationships per run` });
+  // Which joins are checked within the limit, and in what order: as drafted; in the background setup, joins with
+  // a declared foreign key first, then from the smallest tables (onboarding design P4).
+  const declared = (relationship: DiscoveredRelationship) => relationship.evidence.some((item) => item.source === 'declared_foreign_key') ? 0 : 1;
+  const joinOrder = report.relationships.map((relationship, index) => ({ relationship, index }));
+  if (options.smallFirst) joinOrder.sort((a, b) => declared(a.relationship) - declared(b.relationship) || sizeOf(relationById.get(a.relationship.fromRelation)) - sizeOf(relationById.get(b.relationship.fromRelation)) || a.index - b.index);
+  const joinsTotal = Math.min(limit, report.relationships.length);
+  let joinsDone = 0;
+  for (const [position, { relationship, index }] of joinOrder.entries()) {
+    const push = (value: DiscoveredRelationship) => { checkedAt[index] = value; };
+    if (position >= limit) {
+      push({ ...relationship, validationError: `not validated: discovery validates at most ${limit} relationships per run` });
       continue;
     }
     if (!cheap(relationship.fromRelation) || !cheap(relationship.toRelation)) {
-      relationships.push({ ...relationship, validationError: 'not validated: a view that joins or aggregates is only checked when a person validates it' });
+      push({ ...relationship, validationError: 'not validated: a view that joins or aggregates is only checked when a person validates it' });
+      options.onProgress?.({ kind: 'joins', done: ++joinsDone, total: joinsTotal });
       continue;
     }
     try {
@@ -983,14 +1011,17 @@ export async function validateWarehouseDiscovery(
       // suggests is proposed when the data backs it as a reference.
       const nameOnly = relationship.evidence.every((item) => NAME_ONLY_EVIDENCE.has(item.source));
       const objection = nameOnly ? await nameOnlyObjection(checked, columnsOf, fromSide, quote) : undefined;
-      if (objection) withheld.push({ ...checked, reason: objection });
-      else relationships.push(checked);
+      if (objection) withheldAt[index] = { ...checked, reason: objection };
+      else push(checked);
     } catch (error) {
       // A read over the budget names the table and its size in full: it is the reason, not an error.
       const message = error instanceof ReadBudgetError ? `not validated: ${error.message}` : error instanceof Error ? error.message.split('\n')[0]!.slice(0, 200) : String(error);
-      relationships.push({ ...relationship, validationError: message });
+      push({ ...relationship, validationError: message });
     }
+    options.onProgress?.({ kind: 'joins', done: ++joinsDone, total: joinsTotal });
   }
+  const relationships = checkedAt.filter((item): item is DiscoveredRelationship => item !== undefined);
+  const withheld: WithheldRelationship[] = [...(report.withheld ?? []), ...withheldAt.filter((item): item is WithheldRelationship => item !== undefined)];
   return { ...report, entities, relationships, ...(withheld.length ? { withheld } : {}), validated: true };
 }
 

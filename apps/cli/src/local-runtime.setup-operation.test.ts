@@ -87,7 +87,7 @@ async function startApp(executor: QueryExecutor, existingRoot?: string) {
     captureServer: (created) => { servers.push(created); },
   });
   const call = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers: { 'Sf-Context-Current-User': 'JSMITH', 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
-  type Setup = { state: string; stage?: string; database?: string; relations?: number; operationId?: string; operation?: { id: string; type: string; status: string; phase: string; message: string; cancellable: boolean; detail?: SetupDetail } | null };
+  type Setup = { state: string; stage?: string; checks?: string; database?: string; relations?: number; operationId?: string; operation?: { id: string; type: string; status: string; phase: string; message: string; cancellable: boolean; detail?: SetupDetail } | null };
   const setup = async (): Promise<Setup> => (await call('/api/snowflake-app/setup')).json() as Promise<Setup>;
   const until = async (done: (value: Setup) => boolean, ms = 15_000): Promise<Setup> => {
     const deadline = Date.now() + ms;
@@ -276,5 +276,120 @@ describe('long schema syncs and drafts are answered as long requests (onboarding
     // Without the header: one request, as before.
     const plain = await fetch(`http://127.0.0.1:${port}/api/connections/default/metadata-scope`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body });
     expect(plain.status).toBe(200);
+  }, 30_000);
+});
+
+/** Three tables with no declared keys; the checks can be held on a statement until Stop, or one table can run over its time limit. */
+function fakeCheckedWarehouse() {
+  const tables = ['CUSTOMERS', 'ORDERS', 'EVENTS'];
+  const checks: string[] = [];
+  const control = { holdOn: undefined as RegExp | undefined, timeoutOn: undefined as RegExp | undefined };
+  const executePositional = async (sql: string, _params: unknown[], config: { database?: string }, queryOptions?: QueryExecutionOptions): Promise<QueryResult> => {
+    if (sql.includes('CURRENT_ACCOUNT()')) {
+      return result([{ DQL_ACCOUNT_LOCATOR: 'XY1', DQL_ACCOUNT_NAME: 'TEST', DQL_ORGANIZATION: 'ORG', DQL_ACCOUNT: 'ORG-TEST', DQL_DATABASE: config.database, DQL_ROLE: 'APP', DQL_WAREHOUSE: 'WH' }]);
+    }
+    if (sql.startsWith('SHOW TERSE SCHEMAS')) return result([{ database_name: 'SALES', name: 'PUBLIC' }]);
+    if (sql.includes('INFORMATION_SCHEMA.COLUMNS')) {
+      return result(tables.flatMap((table) => [
+        { TABLE_CATALOG: 'SALES', TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: table, COLUMN_NAME: `${table.slice(0, -1)}_ID`, DATA_TYPE: 'NUMBER', ORDINAL_POSITION: 1, IS_NULLABLE: 'NO' },
+        { TABLE_CATALOG: 'SALES', TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: table, COLUMN_NAME: 'CUSTOMER_ID', DATA_TYPE: 'NUMBER', ORDINAL_POSITION: 2, IS_NULLABLE: 'YES' },
+      ]));
+    }
+    if (sql.includes('INFORMATION_SCHEMA.TABLES')) return result(tables.map((table, index) => ({ TABLE_CATALOG: 'SALES', TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: table, TABLE_TYPE: 'BASE TABLE', ROW_COUNT: 1000 * (index + 1) })));
+    if (sql.startsWith('SHOW')) return result([]);
+    // A data check.
+    checks.push(sql);
+    if (control.timeoutOn?.test(sql)) throw Object.assign(new Error('Snowflake query exceeded the 60000ms deadline.'), { vendorCode: 'TIMEOUT' });
+    if (control.holdOn?.test(sql)) {
+      return new Promise<QueryResult>((_resolve, reject) => {
+        const signal = queryOptions?.signal;
+        if (signal?.aborted) reject(new Error('cancelled'));
+        signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      });
+    }
+    return result([{ ROW_COUNT: 100, NN_0: 100, ND_0: 100, NN_1: 100, ND_1: 40, REFERENCING: 100, UNMATCHED: 0 }]);
+  };
+  const executor = {
+    executePositional,
+    executeQuery: (sql: string, _params: unknown[], _variables: unknown, config: { database?: string }, queryOptions?: QueryExecutionOptions) => executePositional(sql, [], config, queryOptions),
+    disconnect: async () => undefined,
+  } as unknown as QueryExecutor;
+  return { executor, checks, control };
+}
+
+describe('the background checks resume where they stopped (onboarding design P4)', () => {
+  it('a check stopped part way repeats no finished statement when it runs again, and counts tables as it goes', async () => {
+    const warehouse = fakeCheckedWarehouse();
+    // Hold on the first check that reads the largest table: the smaller ones are checked first.
+    warehouse.control.holdOn = /"EVENTS"/;
+    const app = await startApp(warehouse.executor);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect((await read(app, { check: true })).status).toBe(202);
+    const held = await app.until((value) => value.state === 'ready' && value.operation?.type === 'warehouse-check' && (value.operation.detail as SetupDetail | undefined)?.checks?.tablesChecked === 2, 15_000);
+    expect(held.operation!.message).toMatch(/^Checking keys and joins in SALES: 2 of 3 tables · \d+ s$/);
+    const firstRun = [...warehouse.checks];
+    expect(firstRun.some((sql) => sql.includes('"CUSTOMERS"'))).toBe(true);
+    await app.call(`/api/operations/${encodeURIComponent(held.operation!.id)}`, { method: 'DELETE' });
+    await app.until((value) => value.state === 'ready' && value.checks === 'stopped', 5_000);
+    expect(existsSync(join(app.projectRoot, '.dql', 'local', 'setup-checks.jsonl'))).toBe(true);
+
+    // Check the data again: what was answered is not asked again.
+    warehouse.control.holdOn = undefined;
+    const before = warehouse.checks.length;
+    expect((await app.call('/api/snowflake-app/setup', { method: 'POST', body: '{}' })).status).toBe(202);
+    const done = await app.until((value) => value.state === 'done', 15_000);
+    expect(done.stage).toBe('checked');
+    const secondRun = warehouse.checks.slice(before);
+    const answered = firstRun.slice(0, -1);
+    expect(secondRun.filter((sql) => answered.includes(sql))).toEqual([]);
+    expect(secondRun.length).toBeGreaterThan(0);
+    const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { resumed: number } } };
+    expect(status.setup.checks.resumed).toBe(new Set(answered).size);
+  }, 30_000);
+
+  it('after a restart (the idle stop, an upgrade), checks that were running resume by themselves and repeat nothing', async () => {
+    const warehouse = fakeCheckedWarehouse();
+    warehouse.control.holdOn = /"EVENTS"/;
+    const first = await startApp(warehouse.executor);
+    expect((await first.call('/api/connections')).status).toBe(200);
+    expect((await read(first, { check: true })).status).toBe(202);
+    await first.until((value) => (value.operation?.detail as SetupDetail | undefined)?.checks?.tablesChecked === 2, 15_000);
+    const answered = new Set(warehouse.checks.slice(0, -1));
+    // ZLens stops with the checks running.
+    const server = servers.pop()!;
+    await new Promise<void>((done) => { server.closeAllConnections?.(); server.close(() => done()); });
+
+    warehouse.control.holdOn = undefined;
+    const before = warehouse.checks.length;
+    const second = await startApp(warehouse.executor, first.projectRoot);
+    roots.push(first.projectRoot);
+    expect((await second.call('/api/connections')).status).toBe(200);
+    const done = await second.until((value) => value.state === 'done', 15_000);
+    expect(done.stage).toBe('checked');
+    expect(warehouse.checks.slice(before).filter((sql) => answered.has(sql))).toEqual([]);
+  }, 30_000);
+
+  it('a table that runs over the time limit is listed, not waited for again; check it anyway asks again', async () => {
+    const warehouse = fakeCheckedWarehouse();
+    warehouse.control.timeoutOn = /COUNT\(DISTINCT[^)]*\) AS nd_0 FROM "SALES"\."PUBLIC"\."EVENTS"/;
+    const app = await startApp(warehouse.executor);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect((await read(app, { check: true })).status).toBe(202);
+    await app.until((value) => value.state === 'done', 15_000);
+    const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ relations: string[]; kind: string; text: string }> } } };
+    expect(status.setup.checks.problems).toContainEqual({ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked: a check ran over 60 s, too big for the background check.' });
+    const timedOut = warehouse.checks.filter((sql) => warehouse.control.timeoutOn!.test(sql)).length;
+
+    // Checking again keeps the answer: the slow statement is not run again.
+    expect((await app.call('/api/connections/default/setup/check', { method: 'POST', body: '{}' })).status).toBe(202);
+    await app.until((value) => value.state === 'done', 15_000);
+    expect(warehouse.checks.filter((sql) => warehouse.control.timeoutOn!.test(sql)).length).toBe(timedOut);
+
+    // Check it anyway: asked again (with no background time limit).
+    warehouse.control.timeoutOn = undefined;
+    expect((await app.call('/api/connections/default/setup/check', { method: 'POST', body: JSON.stringify({ anyway: ['SALES.PUBLIC.EVENTS'] }) })).status).toBe(202);
+    await app.until((value) => value.state === 'done', 15_000);
+    const after = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ kind: string }> } } };
+    expect(after.setup.checks.problems.filter((problem) => problem.kind === 'too_big')).toEqual([]);
   }, 30_000);
 });

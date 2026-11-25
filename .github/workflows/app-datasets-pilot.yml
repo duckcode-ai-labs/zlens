@@ -117,11 +117,12 @@ jobs:
 
       - name: First-open onboarding on DuckDB
         # Onboarding design (pick your data, fast first, details later): the
-        # schema picker's sizes come from DuckDB's own catalog, no table read.
+        # schema picker's sizes come from DuckDB's own catalog, no table read;
+        # the background checks read a block sample of a table over the row budget.
         working-directory: apps/cli
         shell: bash
         run: |
-          npx vitest run src/warehouse-metadata.sizes.test.ts --reporter=verbose | tee "$RUNNER_TEMP/onboarding.log"
+          npx vitest run src/warehouse-metadata.sizes.test.ts src/setup-checks.test.ts --reporter=verbose | tee "$RUNNER_TEMP/onboarding.log"
           if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/onboarding.log"; then
             echo "An onboarding test skipped although a DuckDB connector root was configured." >&2
             exit 1
