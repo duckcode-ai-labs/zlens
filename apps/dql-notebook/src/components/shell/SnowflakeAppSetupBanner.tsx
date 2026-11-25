@@ -18,9 +18,24 @@ function plural(count: number, one: string, many: string): string {
 }
 
 /** What the strip says, or nothing. Exported for tests. */
-export function snowflakeAppSetupMessage(status: SnowflakeAppSetupStatus | null): { tone: 'info' | 'caution'; text: string; action?: 'review' | 'retry' | 'stop' | 'start'; key?: string } | null {
+export function snowflakeAppSetupMessage(status: SnowflakeAppSetupStatus | null): { tone: 'info' | 'caution'; text: string; action?: 'review' | 'retry' | 'stop' | 'start' | 'choose' | 'check'; key?: string } | null {
   if (!status?.managed) return null;
   const database = status.database ?? 'your database';
+  // Nothing read yet: the person chooses what ZLens reads (onboarding design P3).
+  if (status.state === 'idle' && status.stage === 'choose') {
+    return { tone: 'info', text: 'Choose the data ZLens reads to start asking.', action: 'choose' };
+  }
+  // Names are read, so Ask works; the data checks run, or ran, in the background (onboarding design P3).
+  if (status.state === 'ready') {
+    const checking = status.operation && (status.operation.status === 'running' || status.operation.status === 'queued') ? status.operation : null;
+    if (checking) {
+      const live = checking.message && checking.phase !== 'queued' && checking.phase !== 'starting' ? ` ${checking.message}.` : ' Checking keys and joins on the data.';
+      return { tone: 'info', text: `Ready to ask.${live} Answers get better as the checks land.`, ...(checking.cancellable ? { action: 'stop' as const } : {}) };
+    }
+    if (status.error) return { tone: 'caution', text: `Ready to ask. The data checks did not finish: ${status.error}`, action: 'check' };
+    const why = status.checks === 'stopped' ? 'The data checks were stopped' : status.checks === 'off' ? 'The data checks are off' : 'The data checks are not running';
+    return { tone: 'info', text: `Ready to ask. ${why}: answers stay labeled AI-generated until they run and you review the drafts.`, action: 'check' };
+  }
   if (status.state === 'idle' || status.state === 'running') {
     // The setup's own operation says where it is, with numbers and the time so far (onboarding design P2).
     const live = status.operation && (status.operation.status === 'running' || status.operation.status === 'queued') ? status.operation : null;
@@ -91,7 +106,8 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
     return () => window.removeEventListener(CONTEXT_PROPOSALS_CHANGED_EVENT, reload);
   }, [enabled, load]);
 
-  const settled = status?.state === 'done' || status?.state === 'failed' || status?.state === 'stopped' || status?.managed === false;
+  const checking = status?.state === 'ready' && Boolean(status.operation && (status.operation.status === 'running' || status.operation.status === 'queued'));
+  const settled = status?.state === 'done' || status?.state === 'failed' || status?.state === 'stopped' || (status?.state === 'ready' && !checking) || status?.managed === false;
   useEffect(() => {
     if (!enabled || settled) return;
     const timer = window.setInterval(() => { void load(); }, POLL_MS);
@@ -151,8 +167,11 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
       {message.action === 'review' && (
         <button type="button" style={linkStyle} onClick={() => dispatch({ type: 'SET_MAIN_VIEW', view: 'modeling' })}>Review the drafts</button>
       )}
-      {(message.action === 'retry' || message.action === 'start') && (
-        <button type="button" style={linkStyle} onClick={() => { void api.retrySnowflakeAppSetup().then(setStatus).catch(() => undefined); }}>{message.action === 'start' ? 'Start again' : 'Try again'}</button>
+      {(message.action === 'retry' || message.action === 'start' || message.action === 'check') && (
+        <button type="button" style={linkStyle} onClick={() => { void api.retrySnowflakeAppSetup().then(setStatus).catch(() => undefined); }}>{message.action === 'start' ? 'Start again' : message.action === 'check' ? 'Check the data' : 'Try again'}</button>
+      )}
+      {message.action === 'choose' && (
+        <button type="button" style={linkStyle} onClick={() => dispatch({ type: 'OPEN_SETUP' })}>Choose your data</button>
       )}
       {message.action === 'stop' && status?.operation && (
         <button

@@ -58,6 +58,14 @@ import {
 } from './local-operation-coordinator.js';
 import { ProjectRefreshCoordinator } from './project-refresh-coordinator.js';
 import { SetupOperationProgress } from './setup-operation-progress.js';
+import {
+  readWarehouseSetupState,
+  settleInterruptedStages,
+  warehouseSetupStage,
+  writeWarehouseSetupState,
+  type WarehouseSetupStage,
+  type WarehouseSetupStateV1,
+} from './warehouse-setup-state.js';
 import { createPhaseTimer, logSlowRequest, type PhaseTimer } from './phase-timing.js';
 import {
   buildMixedSourceWarehouseFallbackSql,
@@ -15471,14 +15479,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return { synced, warehouseCatalog };
   };
 
-  // The ZLens app for Snowflake sets itself up (approved design D1, D2, 2026-11-09): once it knows the
-  // database granted to it, it reads every schema in it the app can see (the sync Settings » Database
-  // runs) and drafts the models from them (Modeling » Draft from warehouse). The drafts wait for review
-  // as always. Once per database: a marker in .dql/local remembers it across restarts.
-  // It runs as a background operation (onboarding design P2): phases and counts in the background tasks
-  // panel and on the operations stream, and Stop cancels it within seconds. A stopped setup stays stopped
-  // (across restarts too) until someone starts it again.
-  type SnowflakeAppSetup = { state: 'idle' | 'running' | 'done' | 'failed' | 'stopped'; database?: string; schemas?: string[]; relations?: number; drafted?: number; proposalId?: string; search?: 'meaning' | 'words'; searchNote?: string; error?: string; at?: string; operationId?: string };
+  // The ZLens app for Snowflake: until 25 Nov 2026 it set itself up in one go, on every schema of the database
+  // granted to it (approved design D1, D2, 2026-11-09); its marker in .dql/local says an install did, and such an
+  // install keeps its model (nothing is read or drafted again on upgrade). Now the person chooses what it reads
+  // and setup runs in two stages (onboarding design P3, below).
+  type SnowflakeAppSetup = { state: 'idle' | 'running' | 'ready' | 'done' | 'failed' | 'stopped'; database?: string; schemas?: string[]; relations?: number; drafted?: number; proposalId?: string; search?: 'meaning' | 'words'; searchNote?: string; error?: string; at?: string; operationId?: string };
   let snowflakeAppSetup: SnowflakeAppSetup = { state: 'idle' };
   const snowflakeAppSetupMarker = join(projectRoot, '.dql', 'local', 'snowflake-app-setup.json');
   // In the ZLens app for Snowflake, the schema list offers only the databases granted to the app (approved
@@ -15506,73 +15511,68 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       : discovery.message;
     return { ...discovery, scopes, ...(message ? { message } : {}) };
   };
-  const SNOWFLAKE_APP_SETUP_RETRY_MS = 10 * 60_000;
-  const writeSnowflakeAppSetupMarker = () => {
-    mkdirSync(dirname(snowflakeAppSetupMarker), { recursive: true });
-    writeFileSync(snowflakeAppSetupMarker, JSON.stringify(snowflakeAppSetup, null, 2) + '\n', 'utf-8');
-  };
-  const runSnowflakeAppSetup = async (database: string, options: { again?: boolean } = {}): Promise<void> => {
-    if (snowflakeAppSetup.state === 'running') return;
-    if (!options.again && snowflakeAppSetup.database === database) {
-      if (snowflakeAppSetup.state === 'done' || snowflakeAppSetup.state === 'stopped') return;
-      // A failed setup is not retried on every request: after a quiet spell, or when someone asks.
-      if (snowflakeAppSetup.state === 'failed' && Date.now() - Date.parse(snowflakeAppSetup.at ?? '') < SNOWFLAKE_APP_SETUP_RETRY_MS) return;
-    }
-    if (!options.again) try {
+  // An install that finished the one-go setup before the two stages: its marker, read once.
+  const legacySnowflakeAppSetup = ((): SnowflakeAppSetup | null => {
+    try {
       const marker = existsSync(snowflakeAppSetupMarker) ? JSON.parse(readFileSync(snowflakeAppSetupMarker, 'utf-8')) as SnowflakeAppSetup : undefined;
-      if ((marker?.state === 'done' || marker?.state === 'stopped') && marker.database === database) {
-        snowflakeAppSetup = marker;
-        return;
-      }
+      return marker?.state === 'done' ? marker : null;
     } catch {
-      // An unreadable marker: set up again.
+      return null;
     }
+  })();
+  if (legacySnowflakeAppSetup) snowflakeAppSetup = legacySnowflakeAppSetup;
+
+  // Setup in two stages (onboarding design P3, decisions D3 and D8), for the app and for any warehouse project:
+  // 1. "read": names, types, comments and declared keys of the schemas the person chose; no table is scanned.
+  //    When it is done the project is Ready: Ask answers from the catalog ("draft first").
+  // 2. "check": the data checks behind the drafted models, then the search index, in the background. When they
+  //    land the drafts wait for review.
+  // Each is a background operation (Stop cancels it within seconds); what they did is kept in
+  // .dql/local/warehouse-setup.json. A stage running when ZLens stopped did not finish, and says so.
+  let warehouseSetup: WarehouseSetupStateV1 | null = (() => {
+    const saved = readWarehouseSetupState(projectRoot);
+    if (!saved) return null;
+    const settled = settleInterruptedStages(saved, () => false);
+    if (settled !== saved) writeWarehouseSetupState(projectRoot, settled);
+    return settled;
+  })();
+  const saveWarehouseSetup = (next: WarehouseSetupStateV1): WarehouseSetupStateV1 => {
+    warehouseSetup = next;
+    writeWarehouseSetupState(projectRoot, next);
+    return next;
+  };
+  const setupOperationRunning = () => warehouseSetup?.read.state === 'running' || warehouseSetup?.checks?.state === 'running';
+  const currentSetupOperation = (): LocalOperation | null => {
+    const id = warehouseSetup?.read.state === 'running'
+      ? warehouseSetup.read.operationId
+      : warehouseSetup?.checks?.state === 'running' ? warehouseSetup.checks.operationId : undefined;
+    return id ? operationCoordinator.get(id) : null;
+  };
+  /** The data checks and the search index, in the background (stage 2). Null when there is nothing read to check. */
+  const startSetupCheck = (): LocalOperation | null => {
+    const state = warehouseSetup;
+    if (!state || state.read.state !== 'done') return null;
+    if (state.checks?.state === 'running' && state.checks.operationId) return operationCoordinator.get(state.checks.operationId);
+    const database = state.scopes[0]?.catalogOrDatabase;
     const operation = operationCoordinator.create({
-      type: 'warehouse-setup',
-      scope: `warehouse-setup:${database}`,
+      type: 'warehouse-check',
+      scope: `warehouse-setup:${state.connectionId}`,
       phase: 'queued',
-      message: `Setting up from ${database}.`,
+      message: 'Checking keys and joins on the data.',
       cancellable: true,
     });
-    snowflakeAppSetup = { state: 'running', database, operationId: operation.id };
-    let finished: SnowflakeAppSetup | undefined;
-    await operationCoordinator.run(operation.id, async (signal, report) => {
-      const progress = new SetupOperationProgress(report, { database });
+    const startedAt = new Date().toISOString();
+    saveWarehouseSetup({ ...state, checks: { state: 'running', operationId: operation.id, startedAt } });
+    let outcome: { proposalId?: string; drafted: number; search: 'meaning' | 'words'; searchNote?: string } | undefined;
+    void operationCoordinator.run(operation.id, async (signal, report) => {
+      const progress = new SetupOperationProgress(report, { ...(database ? { database } : {}) });
       const stopHeartbeat = progress.heartbeat();
       try {
-        progress.phase('find');
-        const cfg = loadProjectConfig(projectRoot);
-        const connections = getStoredConnections(cfg as unknown as Record<string, unknown>);
-        const connectionId = resolveDefaultConnectionKey(cfg as unknown as Record<string, unknown>, connections) ?? Object.keys(connections)[0];
-        const selectedConnection = connectionId ? projectConnectionById(projectRoot, cfg, connectionId) : undefined;
-        if (!connectionId || !selectedConnection) throw new Error('ZLens has no Snowflake connection.');
-        const discovery = await discoverWarehouseMetadataScopes({ connectionId, executor, connection: selectedConnection, dbtRelations: metadataScopeDbtDefaults(projectRoot, cfg).relations, signal });
-        signal.throwIfAborted();
-        const found = discovery.scopes.find((item) => item.catalogOrDatabase.toUpperCase() === database.toUpperCase());
-        const schemas = (found?.schemas ?? []).map((item) => item.name).filter((name) => name.toUpperCase() !== 'INFORMATION_SCHEMA');
-        if (!found || schemas.length === 0) throw new Error("the app can see no schemas there. Grant it USAGE on the schemas to read.");
-        progress.phase('names', { schemas: schemas.length });
-        const { warehouseCatalog } = await syncConnectionMetadataScope(
-          connectionId,
-          selectedConnection,
-          cfg,
-          { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: found.catalogOrDatabase, schemas }] } as ConnectionMetadataScopeInput,
-          {
-            signal,
-            onNames: (read) => progress.read(read),
-            onCatalog: (read) => {
-              if (progress.current.phase !== 'catalog') progress.phase('catalog');
-              progress.read(read);
-            },
-          },
-        );
-        if (warehouseCatalog?.error) throw new Error(warehouseCatalog.error);
-        if (warehouseCatalog?.skipped) throw new Error(warehouseCatalog.skipped);
-        progress.phase('check', { ...(typeof warehouseCatalog?.relations === 'number' ? { tables: warehouseCatalog.relations } : {}) });
+        progress.phase('check', { tables: state.read.relations ?? 0, schemas: state.scopes.reduce((count, scope) => count + scope.schemas.length, 0) });
         const { report: drafted, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot(), signal);
         signal.throwIfAborted();
-        // Meaning search through Cortex (approved design S3): a refresh gives the embedder only a few seconds,
-        // so the first index is built here, whole. Later refreshes re-embed only new text (the vector cache).
+        // Meaning search through the configured embedder (Cortex in the app, approved design S3): a refresh gives
+        // the embedder only a few seconds, so the first index is built here, whole. Words search works meanwhile.
         const embedder = projectEmbeddingProvider(projectRoot);
         let search: { search: 'meaning' | 'words'; searchNote?: string } = { search: 'words' };
         if (!isHashedEmbeddingProvider(embedder)) {
@@ -15587,38 +15587,172 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             search = { search: 'words', searchNote: error instanceof Error ? error.message : String(error) };
           }
         }
-        finished = {
-          state: 'done',
-          database,
-          schemas,
-          relations: typeof warehouseCatalog?.relations === 'number' ? warehouseCatalog.relations : undefined,
-          drafted: proposal ? drafted.entities.length : 0,
-          ...(proposal ? { proposalId: proposal.id } : {}),
-          ...search,
-          at: new Date().toISOString(),
-          operationId: operation.id,
-        };
-        return { relations: finished.relations, drafted: finished.drafted, ...(proposal ? { proposalId: proposal.id } : {}) };
+        outcome = { ...(proposal ? { proposalId: proposal.id } : {}), drafted: proposal ? drafted.entities.length : 0, ...search };
+        return outcome;
       } finally {
         stopHeartbeat();
       }
+    }).then(() => {
+      const final = operationCoordinator.get(operation.id);
+      const latest = warehouseSetup;
+      // A new read replaced this check meanwhile: its outcome is no one's now.
+      if (!latest || latest.checks?.operationId !== operation.id) return;
+      const at = new Date().toISOString();
+      if (final?.status === 'succeeded' && outcome) {
+        saveWarehouseSetup({ ...latest, checks: { state: 'done', operationId: operation.id, startedAt, at, ...outcome } });
+        if (snowflakeApp && database) {
+          // The app's own record of a finished setup: the strip points to the drafts, and an upgrade drafts nothing again.
+          snowflakeAppSetup = {
+            state: 'done',
+            database,
+            schemas: latest.scopes.flatMap((scope) => scope.schemas),
+            ...(typeof latest.read.relations === 'number' ? { relations: latest.read.relations } : {}),
+            drafted: outcome.drafted,
+            ...(outcome.proposalId ? { proposalId: outcome.proposalId } : {}),
+            search: outcome.search,
+            ...(outcome.searchNote ? { searchNote: outcome.searchNote } : {}),
+            at,
+            operationId: operation.id,
+          };
+          try {
+            mkdirSync(dirname(snowflakeAppSetupMarker), { recursive: true });
+            writeFileSync(snowflakeAppSetupMarker, JSON.stringify(snowflakeAppSetup, null, 2) + '\n', 'utf-8');
+          } catch (error) {
+            console.warn(`[zlens] Could not record the finished setup: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          // What the set-up wrote into the project is ZLens's version, not the next person's (V15 History).
+          void snowflakeHistory?.commitPending(ZLENS_AUTHOR, 'setup', `Set up from ${database}: drafted models for review`).catch(() => undefined);
+        }
+        console.log(`[zlens] Checked the data and drafted ${outcome.drafted} models for review.`);
+      } else if (final?.status === 'cancelled') {
+        saveWarehouseSetup({ ...latest, checks: { state: 'stopped', operationId: operation.id, startedAt, at } });
+      } else {
+        saveWarehouseSetup({ ...latest, checks: { state: 'failed', operationId: operation.id, startedAt, at, error: final?.error?.message ?? 'the checks did not finish' } });
+        console.warn(`[zlens] The background checks did not finish: ${final?.error?.message ?? 'unknown error'}`);
+      }
     });
-    const outcome = operationCoordinator.get(operation.id);
-    if (outcome?.status === 'succeeded' && finished) {
-      snowflakeAppSetup = finished;
-      writeSnowflakeAppSetupMarker();
-      console.log(`[zlens] Read ${snowflakeAppSetup.relations ?? 0} tables and views in ${database} (${(snowflakeAppSetup.schemas ?? []).join(', ')}) and drafted ${snowflakeAppSetup.drafted} models for review.`);
-      // What the set-up wrote into the project is ZLens's version, not the next person's (V15 History).
-      void snowflakeHistory?.commitPending(ZLENS_AUTHOR, 'setup', `Set up from ${database}: drafted models for review`).catch(() => undefined);
-    } else if (outcome?.status === 'cancelled') {
-      // Someone pressed Stop: nothing is drafted, and nothing starts again by itself.
-      snowflakeAppSetup = { state: 'stopped', database, at: new Date().toISOString(), operationId: operation.id };
-      writeSnowflakeAppSetupMarker();
-      console.log(`[zlens] Setup from ${database} was stopped.`);
-    } else {
-      snowflakeAppSetup = { state: 'failed', database, error: outcome?.error?.message ?? 'the setup did not finish', at: new Date().toISOString(), operationId: operation.id };
-      console.warn(`[zlens] Could not set up from ${database} by itself: ${snowflakeAppSetup.error}`);
+    return operation;
+  };
+  /**
+   * Read the names of what the person chose (stage 1). A new read replaces the setup before it: a check still
+   * running is stopped, since it checks what was read before.
+   */
+  const startSetupRead = (input: {
+    connectionId: string;
+    scopes: Array<{ catalogOrDatabase: string; schemas: string[] }>;
+    mode?: ConnectionMetadataScopeInput['mode'];
+    check: boolean;
+    tablesExpected?: number;
+  }): LocalOperation => {
+    if (warehouseSetup?.read.state === 'running' && warehouseSetup.read.operationId) {
+      const running = operationCoordinator.get(warehouseSetup.read.operationId);
+      if (running && (running.status === 'running' || running.status === 'queued')) return running;
     }
+    if (warehouseSetup?.checks?.state === 'running' && warehouseSetup.checks.operationId) operationCoordinator.cancel(warehouseSetup.checks.operationId);
+    const database = input.scopes[0]?.catalogOrDatabase;
+    const operation = operationCoordinator.create({
+      type: 'warehouse-read',
+      scope: `warehouse-setup:${input.connectionId}`,
+      phase: 'queued',
+      message: 'Reading names.',
+      cancellable: true,
+    });
+    const startedAt = new Date().toISOString();
+    saveWarehouseSetup({
+      version: 1,
+      connectionId: input.connectionId,
+      scopes: input.scopes,
+      check: input.check,
+      read: { state: 'running', operationId: operation.id, startedAt },
+      // Nothing to check until the read is done; `check` says whether a check follows it.
+      checks: { state: 'off' },
+    });
+    let read: { relations?: number; warnings: string[] } | undefined;
+    void operationCoordinator.run(operation.id, async (signal, report) => {
+      const progress = new SetupOperationProgress(report, {
+        ...(database ? { database } : {}),
+        ...(input.tablesExpected !== undefined ? { tablesExpected: input.tablesExpected } : {}),
+      });
+      const stopHeartbeat = progress.heartbeat();
+      try {
+        const cfg = loadProjectConfig(projectRoot);
+        const selectedConnection = projectConnectionById(projectRoot, cfg, input.connectionId);
+        if (!selectedConnection) throw new Error(`Unknown connection "${input.connectionId}".`);
+        progress.phase('names', { schemas: input.scopes.reduce((count, scope) => count + scope.schemas.length, 0) });
+        const { warehouseCatalog } = await syncConnectionMetadataScope(
+          input.connectionId,
+          selectedConnection,
+          cfg,
+          { mode: input.mode ?? 'selected_scopes', scopes: input.scopes } as ConnectionMetadataScopeInput,
+          {
+            signal,
+            onNames: (step) => progress.read(step),
+            onCatalog: (step) => {
+              if (progress.current.phase !== 'catalog') progress.phase('catalog');
+              progress.read(step);
+            },
+          },
+        );
+        if (warehouseCatalog?.error) throw new Error(warehouseCatalog.error);
+        if (warehouseCatalog?.skipped) throw new Error(warehouseCatalog.skipped);
+        read = {
+          ...(typeof warehouseCatalog?.relations === 'number' ? { relations: warehouseCatalog.relations } : {}),
+          warnings: warehouseCatalog?.warnings ?? [],
+        };
+        return read;
+      } finally {
+        stopHeartbeat();
+      }
+    }).then(() => {
+      const final = operationCoordinator.get(operation.id);
+      const latest = warehouseSetup;
+      if (!latest || latest.read.operationId !== operation.id) return;
+      const at = new Date().toISOString();
+      if (final?.status === 'succeeded' && read) {
+        saveWarehouseSetup({ ...latest, read: { state: 'done', operationId: operation.id, startedAt, at, ...read } });
+        console.log(`[zlens] Read ${read.relations ?? 0} tables and views: ready to ask.`);
+        if (latest.check) startSetupCheck();
+      } else if (final?.status === 'cancelled') {
+        saveWarehouseSetup({ ...latest, read: { state: 'stopped', operationId: operation.id, startedAt, at } });
+      } else {
+        saveWarehouseSetup({ ...latest, read: { state: 'failed', operationId: operation.id, startedAt, at, error: final?.error?.message ?? 'the read did not finish' } });
+        console.warn(`[zlens] Could not read the chosen schemas: ${final?.error?.message ?? 'unknown error'}`);
+      }
+    });
+    return operation;
+  };
+  /** Setup as a page shows it: where it stands, both stages, and the operation running. */
+  const warehouseSetupStatus = () => ({
+    stage: warehouseSetupStage(warehouseSetup),
+    setup: warehouseSetup,
+    operation: currentSetupOperation(),
+  });
+  /** The app's setup, for its strip: a finished one-go setup, else the two stages in the strip's words. */
+  const snowflakeAppSetupView = (): SnowflakeAppSetup & { stage?: WarehouseSetupStage; checks?: string } => {
+    if (legacySnowflakeAppSetup && !warehouseSetup) return { ...snowflakeAppSetup, stage: 'checked' };
+    const state = warehouseSetup;
+    const stage = warehouseSetupStage(state);
+    if (!state) return { state: 'idle', ...(snowflakeAppDatabase ? { database: snowflakeAppDatabase } : {}), stage };
+    const base = {
+      database: state.scopes[0]?.catalogOrDatabase,
+      schemas: state.scopes.flatMap((scope) => scope.schemas),
+      ...(typeof state.read.relations === 'number' ? { relations: state.read.relations } : {}),
+      ...(state.checks?.proposalId ? { proposalId: state.checks.proposalId } : {}),
+      ...(typeof state.checks?.drafted === 'number' ? { drafted: state.checks.drafted } : {}),
+      ...(state.checks?.search ? { search: state.checks.search } : {}),
+      stage,
+    };
+    if (stage === 'reading') return { ...base, state: 'running', operationId: state.read.operationId };
+    if (stage === 'failed') return { ...base, state: 'failed', error: state.read.error, at: state.read.at };
+    if (stage === 'stopped') return { ...base, state: 'stopped', at: state.read.at };
+    if (stage === 'checked') return { ...base, state: 'done', at: state.checks?.at };
+    return {
+      ...base,
+      state: 'ready',
+      checks: state.checks?.state ?? 'off',
+      ...(state.checks?.operationId ? { operationId: state.checks.operationId } : {}),
+      ...(state.checks?.error ? { error: state.checks.error } : {}),
+    } as SnowflakeAppSetup & { stage: WarehouseSetupStage; checks: string };
   };
 
   const server = createServer((req, res) => withServerScope(scope, () => {
@@ -15687,8 +15821,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             console.warn(`[zlens] Could not switch to the granted database: ${error instanceof Error ? error.message : String(error)}`);
           }
         }
-        // Then it reads the tables and drafts the models by itself, in the background (once per database).
-        if (database && (snowflakeAppDatabase === database || connection?.database === database)) void runSnowflakeAppSetup(database);
+        // Nothing is read until the person chooses what (onboarding design P3): the setup wizard asks.
         const refusal = state.user ? snowflakeIngressRefusal({ appUser: state.user }, req.headers[SNOWFLAKE_USER_HEADER]) : undefined;
         if (refusal) {
           if (path.startsWith('/api/')) {
@@ -15966,23 +16099,35 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } catch {
         // The project cannot be read yet: no drafts to point to.
       }
-      // The setup's own operation, with its phase and counts while it runs (onboarding design P2).
-      const operation = snowflakeAppSetup.operationId ? operationVisible(operationCoordinator.get(snowflakeAppSetup.operationId), operationReader()) : null;
+      // Where the two stages stand, and the operation running with its phase and counts (onboarding design P2, P3).
+      const view = snowflakeAppSetupView();
+      const operation = operationVisible(currentSetupOperation() ?? (view.operationId ? operationCoordinator.get(view.operationId) : null), operationReader());
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...snowflakeAppSetup, waitingDraft: waiting ?? null, operation }));
+      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...view, waitingDraft: waiting ?? null, operation }));
       return;
     }
-    // Try again, or Start again after a Stop (the banner's buttons): reads the tables and drafts the models anew.
+    // Try again, Start again after a Stop, or Check the data (the strip's buttons): a read that failed or was stopped
+    // runs again on what was chosen; after a read, the checks run (again).
     if (req.method === 'POST' && path === '/api/snowflake-app/setup') {
-      const database = snowflakeAppDatabase ?? (typeof connection?.database === 'string' ? connection.database : undefined);
-      if (!snowflakeApp || !database) {
-        res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ error: 'Only the ZLens app for Snowflake sets itself up, once it has a database.' }));
+      const send = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      if (!snowflakeApp) {
+        send(409, { error: 'Only the ZLens app for Snowflake sets itself up.' });
         return;
       }
-      void runSnowflakeAppSetup(database, { again: true });
-      res.writeHead(202, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ managed: true, ...snowflakeAppSetup }));
+      const stage = warehouseSetupStage(warehouseSetup);
+      if (!warehouseSetup || stage === 'choose') {
+        send(409, { code: 'SETUP_CHOOSE_FIRST', error: 'Choose the data ZLens reads first: open Settings » Database.' });
+        return;
+      }
+      if (stage === 'failed' || stage === 'stopped') {
+        startSetupRead({ connectionId: warehouseSetup.connectionId, scopes: warehouseSetup.scopes, check: warehouseSetup.check });
+      } else if (stage !== 'reading' && stage !== 'checking') {
+        startSetupCheck();
+      }
+      send(202, { managed: true, ...snowflakeAppSetupView(), operation: currentSetupOperation() });
       return;
     }
 
@@ -16045,10 +16190,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // With a host (RFC 0010 HH-9) the host sets up the project; the
       // installer's first-run review never opens for the people it signs in.
       const hostManaged = Boolean(hostIdentity);
-      // The ZLens app for Snowflake sets up its own project (its connection, locked, and the database
-      // granted to it): the first-run questions have nothing left to ask there.
+      // The ZLens app for Snowflake sets up its own connection (locked) and the database granted to it. What it
+      // reads is the person's choice (onboarding design P3, decision D1): the setup wizard opens until the chosen
+      // schemas are read, without the questions the app answers itself (where the model lives, which AI). An
+      // install set up before keeps its model and never sees it again.
       const snowflakeAppManaged = Boolean(snowflakeApp);
-      const shouldOpen = !hostManaged && !snowflakeAppManaged && acknowledgedVersion !== runtimeVersion;
+      const snowflakeAppSetUp = snowflakeAppManaged && (
+        Boolean(legacySnowflakeAppSetup)
+        || warehouseSetup?.read.state === 'done'
+        || (!warehouseSetup && (() => { try { return (readWarehouseCatalog(projectRoot).snapshot?.relations.length ?? 0) > 0; } catch { return false; } })())
+      );
+      const shouldOpen = !hostManaged && !snowflakeAppSetUp && acknowledgedVersion !== runtimeVersion;
       const dbtConfigured = dbtProjectConfigured(projectRoot, projectConfig);
       const requiresDbtReapply = Boolean(
         shouldOpen
@@ -16066,7 +16218,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         shouldOpen,
         reason: shouldOpen ? (acknowledgedVersion ? 'version_upgrade' : 'first_install') : null,
         ...(hostManaged ? { hostManaged: true } : {}),
-        ...(snowflakeAppManaged ? { snowflakeAppManaged: true } : {}),
+        ...(snowflakeAppManaged ? { snowflakeAppManaged: true, setupStage: warehouseSetupStage(warehouseSetup) } : {}),
       }));
       return;
     }
@@ -30429,6 +30581,59 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const metadataScopeMatch = path.match(/^\/api\/connections\/([^/]+)\/metadata-scope$/);
     const metadataSyncMatch = path.match(/^\/api\/connections\/([^/]+)\/metadata-sync$/);
 
+    // Setup in two stages (onboarding design P3): where it stands, read the names of what was chosen, check the data.
+    const setupStageMatch = path.match(/^\/api\/connections\/([^/]+)\/setup(?:\/(read|check))?$/);
+    if (setupStageMatch) {
+      const send = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      const connectionId = decodeURIComponent(setupStageMatch[1]!);
+      const action = setupStageMatch[2];
+      const status = () => {
+        const current = warehouseSetupStatus();
+        return { ...current, operation: operationVisible(current.operation, operationReader()) };
+      };
+      if (!action && req.method === 'GET') {
+        send(200, status());
+        return;
+      }
+      if (action === 'read' && req.method === 'POST') {
+        try {
+          const cfg = loadProjectConfig(projectRoot);
+          const selectedConnection = projectConnectionById(projectRoot, cfg, connectionId);
+          if (!selectedConnection) throw new Error(`Unknown connection "${connectionId}".`);
+          const body = await readJSON(req).catch(() => ({})) as ConnectionMetadataScopeInput & { check?: boolean; tablesExpected?: number };
+          const mode = body.mode ?? 'selected_scopes';
+          // The same checks Apply and synchronize makes, before anything runs: a scope too large is refused here.
+          const scope = normalizeConnectionMetadataScope(connectionId, selectedConnection, { ...body, mode }, metadataScopeDbtDefaults(projectRoot, cfg));
+          if (scope.selectedScopes.length === 0 && mode === 'selected_scopes') throw new Error('Choose at least one schema to read.');
+          const operation = startSetupRead({
+            connectionId,
+            scopes: scope.selectedScopes.length > 0 ? scope.selectedScopes : scope.scopes,
+            mode,
+            check: body.check !== false,
+            ...(typeof body.tablesExpected === 'number' && Number.isFinite(body.tablesExpected) ? { tablesExpected: Math.max(0, Math.round(body.tablesExpected)) } : {}),
+          });
+          send(202, { ...status(), operation });
+        } catch (error) {
+          send(400, { error: error instanceof Error ? error.message : String(error) });
+        }
+        return;
+      }
+      if (action === 'check' && req.method === 'POST') {
+        const operation = startSetupCheck();
+        if (!operation) {
+          send(409, { code: 'SETUP_READ_FIRST', error: 'Read the names of the chosen schemas first.' });
+          return;
+        }
+        send(202, { ...status(), operation });
+        return;
+      }
+      send(405, { error: 'Method not allowed' });
+      return;
+    }
+
     if (metadataDiscoveryMatch && req.method === 'POST') {
       try {
         const connectionId = decodeURIComponent(metadataDiscoveryMatch[1]!);
@@ -34050,7 +34255,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   idleSuspender?.holdWhile(() => longRequestsRunning() > 0
     || activeAgentRunControllers.size > 0
     || snowflakeBackupRunning
-    || snowflakeAppSetup.state === 'running'
+    || setupOperationRunning()
     || meaningDraftJob?.running === true);
   idleSuspender?.start();
   if (idleSuspender) opts.snowflakeIdleSuspend?.capture?.(idleSuspender);

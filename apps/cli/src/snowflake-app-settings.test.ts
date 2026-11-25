@@ -184,22 +184,15 @@ describe('the server, set up from Snowsight', () => {
     expect((await call('/api/connections', 'OTHER')).status).toBe(403);
     const saved = JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf8'));
     expect(saved.connections.default.database).toBe('SALES');
-    // The app set up its own project: the installer's first-run questions never open there.
+    // The app sets up its own connection; what it reads is the person's choice: the setup wizard opens (onboarding design P3).
     const launch = await (await call('/api/onboarding/launch', 'JSMITH')).json();
-    expect(launch).toMatchObject({ shouldOpen: false, snowflakeAppManaged: true });
-    // Then it reads the tables and drafts the models by itself. The warehouse here is a stub, so the setup fails and says so.
-    let setup: { managed?: boolean; state?: string; database?: string; error?: string; at?: string } = {};
-    for (let tries = 0; tries < 100 && setup.state !== 'failed' && setup.state !== 'done'; tries += 1) {
-      setup = await (await call('/api/snowflake-app/setup', 'JSMITH')).json();
-      if (setup.state !== 'failed') await new Promise((done) => setTimeout(done, 20));
-    }
-    expect(setup).toMatchObject({ managed: true, state: 'failed', database: 'SALES' });
-    expect(setup.error).toBeTruthy();
-    // A failed setup is not retried on every request, only when someone asks.
-    await call('/api/connections', 'JSMITH');
-    expect((await (await call('/api/snowflake-app/setup', 'JSMITH')).json()).at).toBe(setup.at);
+    expect(launch).toMatchObject({ shouldOpen: true, snowflakeAppManaged: true, setupStage: 'choose' });
+    // Nothing is read until the person chooses.
+    const setup = await (await call('/api/snowflake-app/setup', 'JSMITH')).json();
+    expect(setup).toMatchObject({ managed: true, state: 'idle', stage: 'choose' });
     const again = await fetch(`http://127.0.0.1:${port}/api/snowflake-app/setup`, { method: 'POST', headers: { 'Sf-Context-Current-User': 'JSMITH', 'Content-Type': 'application/json' }, body: '{}' });
-    expect(again.status).toBe(202);
+    expect(again.status).toBe(409);
+    expect(await again.json()).toMatchObject({ code: 'SETUP_CHOOSE_FIRST' });
     expect((await call('/api/snowflake-app/setup', 'OTHER')).status).toBe(403);
     // Snowflake's readiness probe is never held up by the setup.
     expect((await fetch(`http://127.0.0.1:${port}/api/health`)).status).toBe(200);

@@ -170,5 +170,9 @@ function operationLabel(type: string): string {
   if (type === 'project_refresh') return 'Project metadata refresh';
   if (type === 'agent_run') return 'AI request';
   if (type === 'app_ai_build') return 'App proposal';
+  // Setup in two stages (onboarding design P3); `warehouse-setup` is the one-go setup before it.
+  if (type === 'warehouse-read') return 'Reading names';
+  if (type === 'warehouse-check') return 'Checking the data';
+  if (type === 'warehouse-setup') return 'Setting up';
   return type.replace(/_/g, ' ');
 }

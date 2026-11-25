@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WarehouseMetadataDiscovery } from '../../api/client';
-import { compactCount, onlyDiscoveredSchema, schemaSizeWords, scopeOverLimits, selectedScopeTotals, selectedScopeWords } from './connection-metadata-scope';
+import { compactCount, onlyDiscoveredSchema, preselectedScopes, schemaSizeWords, scopeOverLimits, selectedScopeTotals, selectedScopeWords, setupEstimates } from './connection-metadata-scope';
 
 const discovery = (scopes: WarehouseMetadataDiscovery['scopes'], dbtScopes: WarehouseMetadataDiscovery['dbtScopes'] = []): WarehouseMetadataDiscovery => ({
   version: 1, connectionId: 'default', driver: 'file', discoveredAt: '2026-10-30T00:00:00Z', supported: true,
@@ -57,5 +57,29 @@ describe('sizes in the schema picker (onboarding design P1)', () => {
     expect(scopeOverLimits(selectedScopeTotals(found, [{ catalogOrDatabase: 'BIG', schemas: ['A'] }]), limits)).toBeNull();
     // Without limits (an older server), nothing is said.
     expect(scopeOverLimits(selectedScopeTotals(found, [{ catalogOrDatabase: 'BIG', schemas: ['A', 'B'] }]), undefined)).toBeNull();
+  });
+});
+
+describe('two-stage setup in the picker (onboarding design P3)', () => {
+  const sized = (name: string, tables: number) => ({ name, inDbtProject: false, dbtRelationCount: 0, size: { tables, views: 0, tablesWithKeys: 0, foreignKeys: 0 } });
+
+  it('ticks every schema when they hold 100 tables or fewer in all (decision D4), else none', () => {
+    expect(preselectedScopes(discovery([{ catalogOrDatabase: 'SALES', schemas: [sized('A', 60), sized('B', 40)] }])))
+      .toEqual([{ catalogOrDatabase: 'SALES', schemas: ['A', 'B'] }]);
+    expect(preselectedScopes(discovery([{ catalogOrDatabase: 'SALES', schemas: [sized('A', 60), sized('B', 41)] }]))).toEqual([]);
+    // Sizes unknown for one: the person chooses.
+    expect(preselectedScopes(discovery([{ catalogOrDatabase: 'SALES', schemas: [sized('A', 6), schema('B')] }]))).toEqual([]);
+    // The one schema there is, whatever its size.
+    expect(preselectedScopes(discovery([{ catalogOrDatabase: 'SALES', schemas: [sized('A', 900)] }]))).toEqual([{ catalogOrDatabase: 'SALES', schemas: ['A'] }]);
+  });
+
+  it('estimates reading names and the background checks, and says they are estimates', () => {
+    const totals = { schemas: 3, sized: 3, tables: 1240, rows: 3.1e9, bytes: 0, tablesWithKeys: 200, largeTables: 26, columnsByDatabase: [{ catalogOrDatabase: 'SALES', columns: 31_000 }] };
+    const estimate = setupEstimates(totals, { credits: true });
+    expect(estimate.names).toBe('Reading names: about 15 s.');
+    expect(estimate.checks).toMatch(/^Checking the data in the background: about \d+ min, about [\d.]+ credits on the app's X-Small warehouse \(estimate\)\.$/);
+    expect(setupEstimates({ ...totals, tables: 5, tablesWithKeys: 5, rows: 1000, columnsByDatabase: [] }, { credits: true }).checks)
+      .toBe("Checking the data in the background: about 5 s, under 0.05 credits on the app's X-Small warehouse (estimate).");
+    expect(setupEstimates(totals).checks).not.toContain('credits');
   });
 });
