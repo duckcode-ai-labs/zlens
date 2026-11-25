@@ -16199,6 +16199,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         Boolean(legacySnowflakeAppSetup)
         || warehouseSetup?.read.state === 'done'
         || (!warehouseSetup && (() => { try { return (readWarehouseCatalog(projectRoot).snapshot?.relations.length ?? 0) > 0; } catch { return false; } })())
+        // A project with work of its own (saved queries, a semantic layer) is not a new install, whatever it recorded.
+        || (!warehouseSetup && projectHasOwnWork(projectRoot))
       );
       const shouldOpen = !hostManaged && !snowflakeAppSetUp && acknowledgedVersion !== runtimeVersion;
       const dbtConfigured = dbtProjectConfigured(projectRoot, projectConfig);
@@ -40314,6 +40316,27 @@ function hybridWarehouseTables(snapshot: WarehouseCatalogSnapshotV1, manifest: D
  * the picks' row identities. A local file warehouse reads every view;
  * elsewhere a view that joins or aggregates is read only when asked.
  */
+/**
+ * Whether a project holds work of its own: a saved query (`blocks/**.dql`) or a semantic layer file. A new
+ * install has neither (`zlens init` writes skills and a welcome notebook only).
+ */
+export function projectHasOwnWork(projectRoot: string): boolean {
+  const found = (dir: string, pattern: RegExp, depth: number): boolean => {
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      if (entry.isFile() && pattern.test(entry.name)) return true;
+      if (entry.isDirectory() && depth > 0 && !entry.name.startsWith('.') && found(join(dir, entry.name), pattern, depth - 1)) return true;
+    }
+    return false;
+  };
+  return found(join(projectRoot, 'blocks'), /\.dql$/i, 4) || found(join(projectRoot, 'semantic-layer'), /\.ya?ml$/i, 4);
+}
+
 async function checkDraftOnWarehouse(
   projectRoot: string,
   cfg: ProjectConfig,

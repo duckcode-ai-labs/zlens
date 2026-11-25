@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { QueryExecutionOptions, QueryExecutor, QueryResult } from '@zlens/connectors';
-import { startLocalServer } from './local-runtime.js';
+import { projectHasOwnWork, startLocalServer } from './local-runtime.js';
 import type { SnowflakeAppQuery } from './snowflake-app-settings.js';
 import { SetupOperationProgress, formatDuration, setupMessage, setupPercent, type SetupDetail } from './setup-operation-progress.js';
 
@@ -176,6 +176,23 @@ describe('setup in two stages, run as background operations (onboarding design P
     expect((await app.setup()).state).toBe('ready');
     expect((await app.call('/api/connections/default/setup/check', { method: 'POST', body: '{}' })).status).toBe(202);
     expect(await app.until((value) => value.state === 'done', 15_000)).toMatchObject({ stage: 'checked' });
+  }, 30_000);
+
+  it('a project with work of its own (a saved query) opens no wizard, whatever it recorded', async () => {
+    const warehouse = fakeWarehouse({ hang: false });
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-own-work-'));
+    roots.push(projectRoot);
+    mkdirSync(join(projectRoot, 'blocks', 'nba'), { recursive: true });
+    writeFileSync(join(projectRoot, 'blocks', 'nba', 'wins.dql'), 'block "wins" {\n  query = "SELECT 1"\n}\n');
+    const app = await startApp(warehouse.executor, projectRoot);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect(await (await app.call('/api/onboarding/launch')).json()).toMatchObject({ shouldOpen: false, snowflakeAppManaged: true });
+    expect(projectHasOwnWork(projectRoot)).toBe(true);
+    const fresh = mkdtempSync(join(tmpdir(), 'zlens-setup-fresh-'));
+    roots.push(fresh);
+    mkdirSync(join(fresh, 'notebooks'), { recursive: true });
+    writeFileSync(join(fresh, 'notebooks', 'welcome.dqlnb'), '{}');
+    expect(projectHasOwnWork(fresh)).toBe(false);
   }, 30_000);
 
   it('an install set up before keeps its model: no wizard, nothing read or drafted again', async () => {
