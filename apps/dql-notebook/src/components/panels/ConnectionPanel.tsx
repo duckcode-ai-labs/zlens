@@ -56,6 +56,7 @@ import {
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { StagedReadCard } from './StagedReadCard';
 import { SetupStatusPanel } from './SetupStatusPanel';
+import { NotListedGrants } from './NotListedGrants';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
 import { AppearanceSettings } from '../settings/AppearanceSettings';
 import { connectionDetailRows } from './connection-values';
@@ -1359,6 +1360,7 @@ export function ConnectionPanel({
             {scopeTooBig ? (
               <div role="alert" style={{ fontSize: 11, color: 'var(--status-warning)', fontFamily: t.font }}>{scopeTooBig}</div>
             ) : null}
+            {snowflakeApp && stagedSetup ? <NotListedGrants t={t} /> : null}
             {metadataDiscovery.sizesUnavailable?.length ? (
               <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: t.font }}>
                 Sizes could not be read for {metadataDiscovery.sizesUnavailable.join(', ')}; its schemas are listed without them.

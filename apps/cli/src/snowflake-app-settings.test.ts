@@ -78,11 +78,12 @@ describe('reading the app settings', () => {
     expect((await settings.current()).user).toBe('B');
   });
 
-  it('picks the database: the current one while still granted, else the only one granted', () => {
-    expect(chooseDatabase(['SALES'], undefined)).toBe('SALES');
-    expect(chooseDatabase(['FINANCE', 'SALES'], 'sales')).toBe('sales');
-    expect(chooseDatabase(['FINANCE', 'SALES'], undefined)).toBeUndefined();
-    expect(chooseDatabase([], 'SALES')).toBeUndefined();
+  it('reads every database granted; the session default is the current one while still granted, else the first (onboarding P6)', () => {
+    expect(chooseDatabase(['SALES'], undefined)).toEqual(['SALES']);
+    expect(chooseDatabase(['FINANCE', 'SALES'], 'sales')).toEqual(['sales', 'FINANCE']);
+    expect(chooseDatabase(['FINANCE', 'SALES'], undefined)).toEqual(['FINANCE', 'SALES']);
+    expect(chooseDatabase(['FINANCE', 'SALES'], 'GONE')).toEqual(['FINANCE', 'SALES']);
+    expect(chooseDatabase([], 'SALES')).toEqual([]);
   });
 
   it('turns on only when asked, and the idle stop only with a minute count and a full service name', () => {
@@ -102,7 +103,8 @@ describe('reading the app settings', () => {
     expect(onlyData).not.toContain('Configurations');
     // V17 p9 tester: Snowsight's Run runs only the line at the cursor, as the launcher and README already warn.
     expect(onlyData).toContain('Select all the lines, then press <em>Run</em>: Snowsight&#39;s Run on its own runs only the statement at the cursor.');
-    expect(snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: ['A', 'B'] })).toContain('reads one');
+    // Several databases granted are all read (onboarding design P6): no step asks the admin to revoke one.
+    expect(snowflakeAppSetupPage({ appName: 'ZLENS_APP', needsUser: false, databases: ['A', 'B'] })).not.toContain('revoke');
   });
 
   it('wears the ZLens brand: the lockup on the page, the mark as the browser icon, no plan to sell', () => {
