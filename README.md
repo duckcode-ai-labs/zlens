@@ -14,6 +14,12 @@
 </p>
 
 <p align="center">
+  <b>On Snowflake?</b> Get <a href="https://app.snowflake.com/marketplace/listing/GZT1Z603GBK/duckcode-ai-labs-inc-zlens-governed-analytics-with-certified-answers">ZLens for Snowflake</a> on Snowflake Marketplace:<br>
+  a Native App that runs inside your own account, free for one person.<br>
+  Step by step: <a href="https://www.snowflake.com/en/developers/guides/check-ai-answers-against-your-old-report-with-zlens/">Snowflake's developer guide</a>.
+</p>
+
+<p align="center">
   <a href="https://github.com/duckcode-ai-labs/zlens/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/duckcode-ai-labs/zlens/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://www.npmjs.com/package/@zlens/cli"><img alt="npm @zlens/cli" src="https://img.shields.io/npm/v/@zlens/cli?label=%40zlens%2Fcli"></a>
   <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
@@ -22,6 +28,7 @@
 
 <p align="center">
   <a href="https://zlens.app/"><b>Website</b></a> ·
+  <a href="https://zlens.app/snowflake.html"><b>Snowflake app</b></a> ·
   <a href="https://docs.zlens.app/"><b>Docs</b></a> ·
   <a href="#try-it-in-one-click"><b>Try it in one click</b></a> ·
   <a href="#quickstart"><b>Quickstart</b></a> ·
@@ -53,7 +60,7 @@ labels what it used:
 |---|---|---|
 | ● **Certified** | a certified saved query | Ran a saved query a person reviewed and certified, exactly as certified. |
 | ◐ **From Metrics** | your semantic layer | Built from approved metrics and dimensions. Not certified. |
-| ○ **Needs review** | SQL written by AI | Grounded in your schema and checked before it runs, then saved as a draft saved query until someone certifies it. |
+| ○ **AI-generated** | SQL written by AI | Grounded in your schema and checked before it runs, then saved as a draft saved query until someone certifies it. |
 
 If none of these can answer safely, Ask refuses and says why. It never dresses
 an unreviewed number up as a trusted one.
