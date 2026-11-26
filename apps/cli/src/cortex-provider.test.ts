@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
-import { isCortexClaudeProvider, resetCortexRoute } from '@zlens/agent';
+import { isCortexClaudeProvider, resetCortexModelChoice, resetCortexRoute } from '@zlens/agent';
+import { routeAction } from './host/route-actions.js';
 import { meaningDraftProvider, startLocalServer } from './local-runtime.js';
 import { listProviderSettings, saveProviderSettings } from './settings/provider-settings.js';
 
@@ -20,6 +21,7 @@ const roots: string[] = [];
 afterEach(async () => {
   // A refusal is remembered per account host: each test starts on the REST API.
   resetCortexRoute();
+  resetCortexModelChoice();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((done) => { server.closeAllConnections?.(); server.close(() => done()); })));
@@ -94,7 +96,7 @@ describe('Snowflake Cortex chosen as the model', () => {
       sent.push(String(input));
       return new Response('{"code":"003001","message":"not allowed"}', { status: 403 });
     }));
-    await expect(selected!.provider.generate([{ role: 'user', content: 'Why did revenue rise?' }])).rejects.toThrow('Snowflake refuses the Cortex REST API for this account (HTTP 403, error 003001)');
+    await expect(selected!.provider.generate([{ role: 'user', content: 'Why did revenue rise?' }])).rejects.toThrow('Snowflake keeps the Cortex REST API off for this account (HTTP 403, error 003001)');
     expect(sent.every((url) => url.startsWith('https://myorg-test-acct.snowflakecomputing.com/'))).toBe(true);
   });
 
@@ -213,5 +215,72 @@ describe('meaning search through Snowflake Cortex (Settings » AI » Search)', (
     expect(statements).toHaveLength(1);
     expect(statements[0]).toMatchObject({ driver: 'snowflake' });
     expect(statements[0]!.sql).toContain("AI_EMBED('snowflake-arctic-embed-m-v1.5'");
+  });
+});
+
+describe('Ask readiness (GET and POST /api/ask/readiness)', () => {
+  /** Answers each Cortex request by the model it names; everything to this machine goes through. */
+  function cortexAnswers(answer: (model: string) => Response): Array<{ url: string; model: string }> {
+    const nativeFetch = globalThis.fetch;
+    const sent: Array<{ url: string; model: string }> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (LOOPBACK.has(new URL(url).hostname)) return nativeFetch(input, init);
+      const model = JSON.parse(String(init?.body)).model as string;
+      sent.push({ url, model });
+      return answer(model);
+    }));
+    return sent;
+  }
+  const ok = () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'OK' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  it('is not applicable without Cortex, and checking is an ask (one model call), not a change', async () => {
+    const call = await start(project({ driver: 'duckdb', filepath: ':memory:' }));
+    expect((await call('GET', '/api/ask/readiness')).json).toEqual({ askReadiness: { state: 'not_applicable' } });
+    expect(routeAction('POST', '/api/ask/readiness').action).toBe('ask');
+  });
+
+  it('names the grant with the installed app\'s name when CORTEX_USER is missing, and "Check again" sees the grant', async () => {
+    vi.stubEnv('ZLENS_SNOWFLAKE_APP_SETTINGS', '1');
+    vi.stubEnv('ZLENS_SNOWFLAKE_APP_NAME', 'ZLENS_APP');
+    const projectRoot = keyPairProject();
+    saveProviderSettings(projectRoot, { id: 'cortex', enabled: true });
+    let granted = false;
+    const sent = cortexAnswers(() => (granted ? ok() : new Response(JSON.stringify({ message: 'Not Authorized' }), { status: 403 })));
+    const call = await start(projectRoot);
+    const first = await call('GET', '/api/ask/readiness');
+    expect(['checking', 'missing_grant']).toContain(first.json.askReadiness.state);
+    await vi.waitFor(async () => expect((await call('GET', '/api/ask/readiness')).json.askReadiness.state).toBe('missing_grant'));
+    const notReady = (await call('GET', '/api/ask/readiness')).json.askReadiness;
+    expect(notReady).toMatchObject({
+      headline: 'Ask is not ready: ZLens may not use Snowflake Cortex yet.',
+      fixSql: 'GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;',
+      fixIntro: 'An ACCOUNTADMIN runs this one line in Snowsight:',
+    });
+    // Kept: reading again sends nothing.
+    const calls = sent.length;
+    await call('GET', '/api/ask/readiness');
+    expect(sent).toHaveLength(calls);
+    granted = true;
+    const again = await call('POST', '/api/ask/readiness');
+    expect(again.json.askReadiness).toMatchObject({ state: 'ready', headline: 'Ask is ready: it uses claude-sonnet-5-5 through Snowflake Cortex.' });
+    expect(sent.every((request) => request.url === 'https://myorg-test-acct.snowflakecomputing.com/api/v2/cortex/v1/messages')).toBe(true);
+  });
+
+  it('falls back to a Claude model the region offers, and Settings says "Ask uses" it', async () => {
+    const projectRoot = keyPairProject();
+    saveProviderSettings(projectRoot, { id: 'cortex', enabled: true });
+    const sent = cortexAnswers((model) => (model === 'claude-sonnet-5-5'
+      ? new Response(JSON.stringify({ message: 'Model claude-sonnet-5-5 is not available in your region.' }), { status: 400 })
+      : ok()));
+    const call = await start(projectRoot);
+    const before = ((await call('GET', '/api/settings/providers')).json.providers as Array<Record<string, any>>).find((provider) => provider.id === 'cortex');
+    expect(before).toMatchObject({ modelInUse: 'claude-sonnet-5-5', modelRoute: 'rest' });
+    expect(before?.modelFallbackFrom).toBeUndefined();
+    const checked = await call('POST', '/api/ask/readiness');
+    expect(checked.json.askReadiness).toMatchObject({ state: 'ready', model: 'claude-opus-5-5', fellBackFrom: 'claude-sonnet-5-5' });
+    expect(sent.map((request) => request.model)).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5']);
+    const after = ((await call('GET', '/api/settings/providers')).json.providers as Array<Record<string, any>>).find((provider) => provider.id === 'cortex');
+    expect(after).toMatchObject({ modelInUse: 'claude-opus-5-5', modelFallbackFrom: 'claude-sonnet-5-5', defaultModel: 'claude-sonnet-5-5' });
   });
 });

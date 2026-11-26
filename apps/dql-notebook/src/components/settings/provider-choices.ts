@@ -62,9 +62,16 @@ export function cortexSignInLine(provider?: Pick<ProviderSettings, 'connectionSi
  * Which model a provider asks, said under its Model field (V4 tester: after a refused save the field came back
  * blank, and nothing said which model was in use): the saved model, else the default the server names.
  */
-export function modelInUseLine(provider?: Pick<ProviderSettings, 'model' | 'defaultModel'>): string | null {
-  const model = provider?.model?.trim();
-  if (model) return `In use: ${model}`;
+export function modelInUseLine(provider?: Pick<ProviderSettings, 'model' | 'defaultModel' | 'modelInUse' | 'modelFallbackFrom' | 'modelRoute'>): string | null {
+  const named = provider?.model?.trim();
+  const inUse = provider?.modelInUse?.trim();
+  // Snowflake Cortex: the server says which model Ask uses, and how it reaches Cortex.
+  if (inUse) {
+    const through = provider?.modelRoute === 'sql' ? ' through Cortex SQL (AI_COMPLETE)' : '';
+    if (provider?.modelFallbackFrom) return `Ask uses ${inUse}${through}: Snowflake Cortex does not offer ${provider.modelFallbackFrom} to your account.`;
+    return `Ask uses ${inUse}${named ? '' : ' (the default)'}${through}.`;
+  }
+  if (named) return `In use: ${named}`;
   const fallback = provider?.defaultModel?.trim();
   return fallback ? `In use: ${fallback} (the default)` : null;
 }

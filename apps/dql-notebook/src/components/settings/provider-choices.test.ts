@@ -95,4 +95,12 @@ describe('Test, save & activate says the outcome of both steps', () => {
     expect(modelInUseLine({})).toBeNull();
     expect(modelInUseLine(undefined)).toBeNull();
   });
+
+  it('says which model Ask uses through Cortex, how it reaches it, and a region fallback, so the switch is never silent', () => {
+    expect(modelInUseLine({ defaultModel: 'claude-sonnet-5-5', modelInUse: 'claude-sonnet-5-5', modelRoute: 'rest' })).toBe('Ask uses claude-sonnet-5-5 (the default).');
+    expect(modelInUseLine({ defaultModel: 'claude-sonnet-5-5', modelInUse: 'claude-sonnet-5-5', modelRoute: 'sql' })).toBe('Ask uses claude-sonnet-5-5 (the default) through Cortex SQL (AI_COMPLETE).');
+    expect(modelInUseLine({ model: 'claude-opus-5', defaultModel: 'claude-sonnet-5-5', modelInUse: 'claude-opus-5' })).toBe('Ask uses claude-opus-5.');
+    expect(modelInUseLine({ defaultModel: 'claude-sonnet-5-5', modelInUse: 'claude-opus-5-5', modelFallbackFrom: 'claude-sonnet-5-5', modelRoute: 'sql' }))
+      .toBe('Ask uses claude-opus-5-5 through Cortex SQL (AI_COMPLETE): Snowflake Cortex does not offer claude-sonnet-5-5 to your account.');
+  });
 });

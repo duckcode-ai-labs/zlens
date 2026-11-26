@@ -784,6 +784,8 @@ import {
   type RedactedProviderSettings,
 } from './settings/provider-settings.js';
 import { cortexInProjectAccount, cortexSignIn, createCortexProvider, setProjectConnectionLookup, useCortexSqlExecutor } from './settings/cortex-sign-in.js';
+import { AskReadinessCheck } from './settings/ask-readiness.js';
+import { askReadinessWriter } from './snowflake-app-ask-readiness.js';
 import { ClaudeCodeCliProvider, CodexCliProvider } from './providers/subscription-cli.js';
 import { createFailoverProvider } from './providers/failover-provider.js';
 import {
@@ -1326,6 +1328,11 @@ export interface LocalServerOptions {
   snowflakeAppSettings?: SnowflakeAppSettingsOptions;
   /** Tests: how the app's settings are read (defaults to the project's connection). */
   snowflakeAppQuery?: SnowflakeAppQuery;
+  /**
+   * Check Ask's Snowflake Cortex setup once at start (one tiny Cortex call; settings/ask-readiness.ts). Defaults to
+   * on inside Snowflake (the ZLens app); elsewhere the first page that shows Ask asks for it.
+   */
+  askReadinessAtStart?: boolean;
   /**
    * Tests: the idle stop of the app for Snowflake in place of ZLENS_SNOWFLAKE_IDLE_SUSPEND_MINUTES and
    * ZLENS_SNOWFLAKE_SERVICE (only with the Snowflake sign-in on), with its clock and a handle on it.
@@ -5612,6 +5619,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return (await executor.executeQuery(sql, [], {}, connection)).rows as Array<Record<string, unknown>>;
   });
   const snowflakeApp = snowflakeAppOptions ? new SnowflakeAppSettings(snowflakeAppOptions, snowflakeAppQuery) : undefined;
+  // Ask readiness (fix plan risk 3): is Ask's Snowflake Cortex set up? Checked with one tiny Cortex call at start in
+  // Snowflake, kept for a few minutes, checked again on demand; in the app, kept where the launcher reads it.
+  const askReadiness = new AskReadinessCheck({
+    provider: async () => {
+      const selected = await selectAssistProvider(projectRoot, undefined, { availability: 'defer' }).catch(() => null);
+      return selected && isCortexClaudeProvider(selected.provider) ? selected.provider : null;
+    },
+    ...(snowflakeAppOptions?.appName ? { onResult: askReadinessWriter({ appName: snowflakeAppOptions.appName, query: snowflakeAppQuery }) } : {}),
+  });
+  if (opts.askReadinessAtStart ?? Boolean(snowflakeIngress)) {
+    // A few seconds in, so the check does not slow the start itself.
+    const askReadinessStart = setTimeout(() => askReadiness.start(), 5_000);
+    askReadinessStart.unref?.();
+  }
   // Point the project's connection at the database the app was granted (written to dql.config.json, as Settings does).
   let snowflakeAppDatabase: string | undefined;
   const useSnowflakeAppDatabase = async (database: string): Promise<void> => {
@@ -20690,6 +20711,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         await refreshUnifiedProjectIndexes(projectRoot);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ ok: true, ...(recovered ? { recovered } : {}) }));
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
+      }
+      return;
+    }
+
+    // ── Ask readiness — whether Ask's Snowflake Cortex is set up, and the one
+    //    line of SQL an admin runs when it is not. POST checks again now. ────
+    if ((req.method === 'GET' || req.method === 'POST') && path === '/api/ask/readiness') {
+      try {
+        const view = req.method === 'POST' ? await askReadiness.check({ fresh: true }) : await askReadiness.read();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(serializeJSON({ askReadiness: view }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
@@ -54114,7 +54149,7 @@ async function testCortexProviderConfig(
     if (isCortexClaudeProvider(provider) && provider.route() === 'sql') {
       return {
         ok: true,
-        message: `${label} answered through Cortex SQL${details}. Snowflake refuses the Cortex REST API for this account, so ZLens asks Cortex through SQL (AI_COMPLETE): Ask works, with no prompt caching.`,
+        message: `${label} answered through Cortex SQL${details}. Snowflake keeps the Cortex REST API off for this account, as it does for most accounts, so ZLens asks Cortex through SQL (AI_COMPLETE): Ask works, with no prompt caching.`,
       };
     }
     return {

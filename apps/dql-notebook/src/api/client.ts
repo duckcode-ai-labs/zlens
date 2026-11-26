@@ -4193,7 +4193,32 @@ export interface ProviderSettings {
   connectionSignIn?: { connection?: string; method?: string; problem?: string };
   /** Snowflake Cortex: the model it asks when none is named (the server's CORTEX_DEFAULT_MODEL). */
   defaultModel?: string;
+  /** Snowflake Cortex: the model Ask uses now (after a region fallback, not the default). */
+  modelInUse?: string;
+  /** Snowflake Cortex: the default Ask fell back from, because Cortex does not offer it to the account. */
+  modelFallbackFrom?: string;
+  /** Snowflake Cortex: how Ask reaches it; `sql` (AI_COMPLETE) is the usual route where Snowflake keeps REST off. */
+  modelRoute?: 'rest' | 'sql';
 }
+
+/**
+ * Whether Ask's Snowflake Cortex is set up (GET /api/ask/readiness; apps/cli settings/ask-readiness.ts). The words,
+ * the fix line and who runs it are the server's, so Ask, Settings and the launcher say the same thing.
+ */
+export type AskReadiness =
+  | { state: 'not_applicable' }
+  | { state: 'checking'; headline: string }
+  | {
+    state: 'ready' | 'missing_grant' | 'region' | 'model_unavailable' | 'other';
+    headline: string;
+    message?: string;
+    fixSql?: string;
+    fixIntro?: string;
+    model?: string;
+    fellBackFrom?: string;
+    route?: 'rest' | 'sql';
+    checkedAt: string;
+  };
 
 /** Subscription providers that support browser OAuth sign-in. */
 export type OAuthProviderId = 'claude' | 'codex';
@@ -9900,6 +9925,18 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ domain }),
     });
+  },
+
+  /** Whether Ask's Snowflake Cortex is set up, as last checked. → GET /api/ask/readiness */
+  async getAskReadiness(): Promise<AskReadiness> {
+    const response = await request<{ askReadiness: AskReadiness }>('/api/ask/readiness');
+    return response.askReadiness;
+  },
+
+  /** Check again now (one tiny Cortex call). → POST /api/ask/readiness */
+  async checkAskReadinessAgain(): Promise<AskReadiness> {
+    const response = await request<{ askReadiness: AskReadiness }>('/api/ask/readiness', { method: 'POST', body: '{}' });
+    return response.askReadiness;
   },
 
   /** Domains, subject areas and purposes Ask can be scoped to. → GET /api/ask/scopes */

@@ -74,6 +74,7 @@ import {
 import { themes, type Theme, type ThemeMode } from '../../themes/notebook-theme';
 import { controlStyle } from '../../themes/control-tokens';
 import { AskComposerOptions } from './AskComposerOptions';
+import { AskReadinessStrip } from './AskReadinessStrip';
 import { ASK_NEEDS_AI_PROVIDER_HEADING, answerCardTrustTitle, answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading, askNeedsAiProvider } from './answer-trust';
 import { StructuredAnswerText } from './AgentAnswerCard';
 import { AppBuildProposalPanel, OPEN_IN_APP_STUDIO_LABEL, defaultProposalSelection, type AppBuildBriefEdits } from '../apps/AppBuildProposalPanel';
@@ -1356,6 +1357,8 @@ export function UnifiedAgentRunPanel({
                 begins, so the end of an answer (its action row) is never covered. */}
             {askRefusal ? null : (
             <div data-testid="ask-composer-dock" style={{ flexShrink: 0, width: 'min(720px, 100% - 48px)', margin: '0 auto', padding: '10px 0 16px', background: 'var(--bg-canvas)' }}>
+              {/* Ask's Snowflake Cortex is not set up: said before anyone asks, with the line an admin runs. */}
+              <AskReadinessStrip t={t} />
               {error ? <div style={{ color: t.error, fontSize: 12, marginBottom: 8 }}>{error}</div> : null}
               {scopeControl ? <div style={{ marginBottom: 7 }}>{scopeControl}</div> : onClearScope ? (
                 <div style={{ width: 'fit-content', maxWidth: '100%', marginBottom: 7, padding: '4px 7px 4px 9px', border: '1px solid var(--border-default)', borderRadius: 999, background: 'var(--bg-2)', color: t.textMuted, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1534,6 +1537,7 @@ export function UnifiedAgentRunPanel({
         {running && <RunProgress events={runningEvents} t={t} streamingAnswer={streamingAnswer} thinkingMode={thinkingMode} backgroundRun={backgroundRun} />}
       </div>
 
+      {askRefusal ? null : <AskReadinessStrip t={t} style={{ margin: '0 16px 8px' }} />}
       {error ? <div style={{ margin: '0 16px 8px', color: t.error, fontSize: 12 }}>{error}</div> : null}
 
       <div style={{ padding: '10px 16px 14px', borderTop: `1px solid ${t.headerBorder}`, display: 'grid', gap: 8 }}>

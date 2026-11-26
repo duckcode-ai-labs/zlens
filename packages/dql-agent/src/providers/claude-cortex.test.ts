@@ -15,9 +15,13 @@ import {
   snowflakeKeyPairToken,
   snowflakeTokenFileToken,
   cortexFailureInWords,
+  cortexFailureKind,
+  cortexModelChoice,
   cortexSqlComplete,
+  CORTEX_CLAUDE_FALLBACK_MODELS,
   isCortexRestRefusal,
   messagesRequestAsPrompt,
+  resetCortexModelChoice,
   resetCortexRoute,
 } from './claude-cortex.js';
 import { retiresSampling } from './claude.js';
@@ -264,10 +268,11 @@ describe('when Snowflake refuses the Cortex REST API', () => {
 
   it('says what went wrong in plain words, keeping the HTTP status the diagnostics read', async () => {
     const restOnly = 'claude: 403 {"code":"003001","message":"This account is not allowed to access this endpoint. Please contact Snowflake support."}';
-    expect(cortexFailureInWords(restOnly)).toBe('Snowflake refuses the Cortex REST API for this account (HTTP 403, error 003001). Ask Snowflake support to enable it.');
+    // REST off (003001) is the usual case, never told as a step to take: only that SQL, the usual route, is missing here.
+    expect(cortexFailureInWords(restOnly)).toBe('Snowflake keeps the Cortex REST API off for this account (HTTP 403, error 003001), as it does for most accounts, and here ZLens has no Snowflake connection to ask Cortex through SQL (AI_COMPLETE) instead, the usual route. Ask from the ZLens server or app.');
     expect(cortexFailureInWords('claude: 403 {"code":"003001","message":"not allowed"}')).toContain('error 003001');
     const sqlToo = 'claude: 502 {"type":"error","error":{"type":"api_error","message":"Cortex through SQL failed: Warehouse is suspended."}}';
-    expect(cortexFailureInWords(sqlToo)).toBe('Snowflake refuses the Cortex REST API for this account, and Cortex through SQL failed too: Warehouse is suspended (HTTP 502).');
+    expect(cortexFailureInWords(sqlToo)).toBe('Cortex through SQL (AI_COMPLETE) failed: Warehouse is suspended (HTTP 502).');
     const noGrant = 'claude: 502 {"type":"error","error":{"type":"api_error","message":"Cortex through SQL failed: SQL compilation error: Unknown function AI_COMPLETE"}}';
     expect(cortexFailureInWords(noGrant)).toContain('grant it the SNOWFLAKE.CORTEX_USER database role');
     expect(cortexFailureInWords(noGrant)).toContain('(HTTP 502)');
@@ -281,5 +286,153 @@ describe('when Snowflake refuses the Cortex REST API', () => {
     vi.stubGlobal('fetch', vi.fn(async () => refused()));
     const provider = new CortexClaudeProvider({ host: 'h3.snowflakecomputing.com', token: staticToken('t'), sql: async () => { throw new Error('SQL compilation error: Unknown function AI_COMPLETE'); } });
     await expect(provider.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5 })).rejects.toThrow(/cannot use Cortex.*CORTEX_USER.*HTTP 502/);
+  });
+});
+
+/**
+ * Snowflake's error shapes, as its docs give them (Cortex REST API status codes, 25 Nov 2026) and as seen live:
+ * - REST, CORTEX_USER missing: 403 "Not Authorized" ("the default role ... does not have the snowflake.cortex_user
+ *   database role"); the 003001 refusal is the account, not the role (live, 9 Nov 2026).
+ * - REST, a model Cortex does not offer: 400 "unknown model <name>".
+ * - SQL, CORTEX_USER missing: "SQL compilation error: Unknown function AI_COMPLETE".
+ */
+const restNoGrant = () => new Response(JSON.stringify({ message: 'Not Authorized. The default role for the calling user does not have the snowflake.cortex_user database role.' }), { status: 403 });
+const restUnknownModel = (model: string) => new Response(JSON.stringify({ message: `unknown model "${model}"` }), { status: 400 });
+const restNotInRegion = (model: string) => new Response(JSON.stringify({ message: `Model ${model} is not available in your region.` }), { status: 400 });
+const ok = (text = 'OK') => new Response(JSON.stringify({ content: [{ type: 'text', text }] }), { status: 200 });
+const bodyModel = (init: RequestInit | undefined) => JSON.parse(String(init?.body)).model as string;
+
+describe('what kind of Cortex failure it is', () => {
+  it('names the missing grant, the region, an unknown model and the refused REST API apart', () => {
+    expect(cortexFailureKind('claude: 403 {"message":"Not Authorized. The default role does not have the snowflake.cortex_user database role."}')?.kind).toBe('grant');
+    expect(cortexFailureKind('claude: 403 {"message":"Insufficient privileges"}')?.kind).toBe('grant');
+    expect(cortexFailureKind('claude: 502 {"error":{"message":"Cortex through SQL failed: SQL compilation error: Unknown function AI_COMPLETE"}}')?.kind).toBe('grant');
+    expect(cortexFailureKind('claude: 400 {"message":"Model claude-sonnet-5-5 is not available in your region."}')?.kind).toBe('region');
+    expect(cortexFailureKind('claude: 400 {"message":"unknown model \\"claude-sonnet-5-5\\""}')?.kind).toBe('model');
+    expect(cortexFailureKind('claude: 403 {"code":"003001","message":"This account is not allowed to access this endpoint."}')?.kind).toBe('rest_refused');
+    expect(cortexFailureKind('claude: 502 {"error":{"message":"Cortex through SQL failed: Warehouse is suspended."}}')?.kind).toBe('sql_failed');
+    expect(cortexFailureKind('claude: 429 {"message":"Too many requests"}')).toBeUndefined();
+  });
+
+  it('names the installed app in the grant, so the admin can run the line as it is', () => {
+    const words = cortexFailureInWords('claude: 403 {"message":"Not Authorized"}', { appName: 'ZLENS_APP' });
+    expect(words).toContain('GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP');
+    expect(words).toContain('(HTTP 403)');
+    expect(cortexFailureInWords('claude: 403 {"message":"Not Authorized"}', { role: 'ANALYST' })).toContain('(for this role: GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE ANALYST)');
+    // Without a name, the placeholder stays as before.
+    expect(cortexFailureInWords('claude: 403 {"message":"Not Authorized"}')).toContain('TO APPLICATION <app name>');
+    expect(cortexFailureInWords('claude: 400 {"message":"unknown model \\"claude-x\\""}')).toContain('Pick another Claude model in Settings » AI');
+  });
+});
+
+describe('cancel on give-up: the AI_COMPLETE statement is cancelled when Ask stops waiting', () => {
+  afterEach(() => resetCortexRoute());
+  const refused = () => new Response(JSON.stringify({ code: '003001', message: 'This account is not allowed to access this endpoint.' }), { status: 403 });
+
+  it('hands the run\'s signal to the SQL runner, which cancels the statement, and stops waiting at once', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => refused()));
+    let seen: AbortSignal | undefined;
+    let cancelled = 0;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => { started = resolve; });
+    // A runner like the CLI's: it passes the signal to the Snowflake driver, which cancels the running statement.
+    const sql = (statement: string, _binds: unknown[], options?: { signal?: AbortSignal }) => new Promise<Array<Record<string, unknown>>>((_resolve, reject) => {
+      expect(statement).toContain('AI_COMPLETE');
+      seen = options?.signal;
+      options?.signal?.addEventListener('abort', () => { cancelled += 1; setTimeout(() => reject(new Error('SQL execution canceled')), 50); });
+      started();
+    });
+    const provider = new CortexClaudeProvider({ host: 'cancel.snowflakecomputing.com', token: staticToken('t'), sql });
+    const controller = new AbortController();
+    const asked = provider.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5, signal: controller.signal });
+    await running;
+    const gaveUpAt = Date.now();
+    controller.abort(new Error('Ask stopped waiting'));
+    await expect(asked).rejects.toThrow('Ask stopped waiting');
+    expect(Date.now() - gaveUpAt).toBeLessThan(50);
+    expect(seen?.aborted).toBe(true);
+    expect(cancelled).toBe(1);
+  });
+
+  it('cancels when a long request is abandoned (the second signal), and never starts once it is', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => refused()));
+    const abandon = new AbortController();
+    const signals: AbortSignal[] = [];
+    const sql = (_statement: string, _binds: unknown[], options?: { signal?: AbortSignal }) => new Promise<Array<Record<string, unknown>>>(() => {
+      if (options?.signal) signals.push(options.signal);
+    });
+    const provider = new CortexClaudeProvider({ host: 'abandon.snowflakecomputing.com', token: staticToken('t'), sql, abandoned: () => abandon.signal });
+    const asked = provider.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5 });
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    abandon.abort(new Error('no one polls this long request'));
+    await expect(asked).rejects.toThrow('no one polls');
+    expect(signals[0]!.aborted).toBe(true);
+    const runner = vi.fn(async () => [] as Array<Record<string, unknown>>);
+    await expect(cortexSqlComplete(runner, JSON.stringify({ model: 'm', messages: [] }), { signal: abandon.signal })).rejects.toThrow('no one polls');
+    expect(runner).not.toHaveBeenCalled();
+  });
+});
+
+describe('model fallback by region', () => {
+  afterEach(() => { resetCortexModelChoice(); resetCortexRoute(); });
+
+  it('lists the Claude models in the order Snowflake\'s availability table supports', () => {
+    expect(CORTEX_CLAUDE_FALLBACK_MODELS[0]).toBe(CORTEX_DEFAULT_MODEL);
+    expect(CORTEX_CLAUDE_FALLBACK_MODELS).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5']);
+  });
+
+  it('asks the next Claude model when the default is not offered in the region, remembers it, and says which model Ask uses', async () => {
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => (bodyModel(init) === 'claude-sonnet-5-5' ? restNotInRegion('claude-sonnet-5-5') : ok('Fine.')));
+    vi.stubGlobal('fetch', fetch);
+    const provider = new CortexClaudeProvider({ host: 'jp.snowflakecomputing.com', token: staticToken('t') });
+    expect(provider.automaticModel).toBe(true);
+    expect(await provider.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5 })).toBe('Fine.');
+    expect(fetch.mock.calls.map(([, init]) => bodyModel(init))).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5']);
+    expect(cortexModelChoice('jp.snowflakecomputing.com')).toEqual({ model: 'claude-opus-5-5', instead: 'claude-sonnet-5-5' });
+    // Per route: Cortex SQL is not assumed to take the same model ids as the REST Messages endpoint.
+    expect(cortexModelChoice('jp.snowflakecomputing.com', 'sql')).toBeUndefined();
+    expect(provider.modelInUse()).toEqual({ model: 'claude-opus-5-5', instead: 'claude-sonnet-5-5' });
+    // Remembered: a provider built for the next request goes straight to it.
+    const next = new CortexClaudeProvider({ host: 'jp.snowflakecomputing.com', token: staticToken('t') });
+    await next.generate([{ role: 'user', content: 'Q2' }], { maxTokens: 5 });
+    expect(fetch.mock.calls.slice(2).map(([, init]) => bodyModel(init))).toEqual(['claude-opus-5-5']);
+  });
+
+  it('keeps a model a person named, and returns the first refusal when no Claude model is offered', async () => {
+    const named = vi.fn(async (_url: string, init?: RequestInit) => restUnknownModel(bodyModel(init)));
+    vi.stubGlobal('fetch', named);
+    const chosen = new CortexClaudeProvider({ host: 'named.snowflakecomputing.com', model: 'claude-opus-5', token: staticToken('t') });
+    expect(chosen.automaticModel).toBe(false);
+    await expect(chosen.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5 })).rejects.toThrow('Pick another Claude model');
+    expect(named).toHaveBeenCalledTimes(1);
+
+    const none = vi.fn(async (_url: string, init?: RequestInit) => restNotInRegion(bodyModel(init)));
+    vi.stubGlobal('fetch', none);
+    const azure = new CortexClaudeProvider({ host: 'azure.snowflakecomputing.com', token: staticToken('t') });
+    await expect(azure.generate([{ role: 'user', content: 'Q' }], { maxTokens: 5 })).rejects.toThrow("CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'");
+    expect(none.mock.calls.map(([, init]) => bodyModel(init))).toEqual([...CORTEX_CLAUDE_FALLBACK_MODELS]);
+    expect(cortexModelChoice('azure.snowflakecomputing.com')).toBeUndefined();
+  });
+
+  it('falls back through Cortex SQL too, and never on a missing grant', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ code: '003001', message: 'This account is not allowed to access this endpoint.' }), { status: 403 })));
+    const models: unknown[] = [];
+    const sql = async (_statement: string, binds: unknown[]) => {
+      models.push(binds[0]);
+      if (binds[0] !== 'claude-sonnet-4-6') throw new Error(`Model ${String(binds[0])} is not available in your region.`);
+      return [{ R: JSON.stringify({ choices: [{ messages: 'OK' }], usage: {} }) }];
+    };
+    const london = new CortexClaudeProvider({ host: 'london.snowflakecomputing.com', token: staticToken('t'), sql });
+    expect(await london.generate([{ role: 'user', content: 'Q' }], { maxTokens: 1 })).toBe('OK');
+    expect(models).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-4-6']);
+    expect(london.modelInUse()).toEqual({ model: 'claude-sonnet-4-6', instead: 'claude-sonnet-5-5' });
+    expect(cortexModelChoice('london.snowflakecomputing.com', 'sql')?.model).toBe('claude-sonnet-4-6');
+    expect(cortexModelChoice('london.snowflakecomputing.com', 'rest')).toBeUndefined();
+
+    const noGrant = vi.fn(async () => restNoGrant());
+    vi.stubGlobal('fetch', noGrant);
+    const app = new CortexClaudeProvider({ host: 'nogrant.snowflakecomputing.com', token: staticToken('t'), grantee: { appName: 'ZLENS_APP' } });
+    await expect(app.generate([{ role: 'user', content: 'Q' }], { maxTokens: 1 })).rejects.toThrow('GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP');
+    expect(noGrant).toHaveBeenCalledTimes(1);
   });
 });

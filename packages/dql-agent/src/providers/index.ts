@@ -70,11 +70,27 @@ export {
   isCortexRestRefusal,
   messagesRequestAsPrompt,
   resetCortexRoute,
+  CORTEX_CLAUDE_FALLBACK_MODELS,
+  CORTEX_CROSS_REGION_STATEMENT,
+  cortexFailureKind,
+  cortexFailureWords,
+  cortexGrantStatement,
+  cortexModelChoice,
+  resetCortexModelChoice,
+  type CortexFailure,
+  type CortexFailureKind,
   type CortexSqlRunner,
   type CortexClaudeOptions,
   type CortexToken,
   type CortexTokenType,
 } from './claude-cortex.js';
+export {
+  checkCortexAsk,
+  cortexAskHeadline,
+  type CortexAskCheckOptions,
+  type CortexAskReadiness,
+  type CortexAskReadinessState,
+} from './cortex-ask-readiness.js';
 export {
   BedrockConverseProvider,
   bedrockConverseTransport,

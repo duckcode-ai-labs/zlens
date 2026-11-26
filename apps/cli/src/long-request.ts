@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { currentRecordOwner, type RecordOwner } from './host/record-owner.js';
@@ -24,6 +25,14 @@ import { currentRecordOwner, type RecordOwner } from './host/record-owner.js';
  *
  * The work's answer is kept for the person who started it, in this process,
  * for LONG_REQUEST_TTL_MS after it ends.
+ *
+ * ABANDONED WORK STOPS. No one can read an answer once the caller is gone:
+ * before an id is handed out, when its connection closes; after, when no one
+ * has asked for it for LONG_REQUEST_ABANDON_MS (a page asks at least every
+ * LONG_REQUEST_MAX_WAIT_S, plus a few retries). The work's signal then aborts,
+ * and so does `longRequestSignal()` inside it, which Snowflake Cortex reads:
+ * an `AI_COMPLETE` statement still running on the customer's warehouse is
+ * cancelled instead of running on for no one.
  */
 export interface LongRequestAnswer {
   status: number;
@@ -35,6 +44,16 @@ export const LONG_REQUEST_PATH = '/api/long-requests/';
 export const LONG_REQUEST_MAX_WAIT_S = 30;
 const DEFAULT_WAIT_S = 20;
 const LONG_REQUEST_TTL_MS = 10 * 60_000;
+/** A running long request no one has asked about for this long is abandoned. */
+export const LONG_REQUEST_ABANDON_MS = 3 * 60_000;
+
+/** The signal of the long request the current work belongs to (see "Abandoned work stops"). */
+const workSignal = new AsyncLocalStorage<AbortSignal>();
+
+/** Inside a long request's work: its signal, which aborts when no one waits for the answer any more. */
+export function longRequestSignal(): AbortSignal | undefined {
+  return workSignal.getStore();
+}
 
 type Serialize = (value: unknown) => string;
 
@@ -44,6 +63,20 @@ interface LongRequestJob {
   serialize: Serialize;
   answer?: LongRequestAnswer;
   expires?: NodeJS.Timeout;
+  /** Aborts the work when no one has asked for it for LONG_REQUEST_ABANDON_MS. */
+  abandon?: NodeJS.Timeout;
+  abandonMs: number;
+  controller: AbortController;
+}
+
+/** Starts (or restarts) the clock after which a job no one asks about is abandoned. */
+function watchForAbandon(job: LongRequestJob, abandonMs: number): void {
+  if (job.abandon) clearTimeout(job.abandon);
+  if (job.answer) return;
+  job.abandon = setTimeout(() => {
+    job.controller.abort(new Error('ZLens stopped this request: no one has asked for its answer for a while.'));
+  }, abandonMs);
+  job.abandon.unref?.();
 }
 
 const jobs = new Map<string, LongRequestJob>();
@@ -90,14 +123,23 @@ function running(id: string): LongRequestAnswer {
 export async function answerLongRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  work: () => Promise<LongRequestAnswer>,
-  options: { serialize?: Serialize } = {},
+  work: (signal: AbortSignal) => Promise<LongRequestAnswer>,
+  options: { serialize?: Serialize; abandonMs?: number } = {},
 ): Promise<void> {
   const serialize = options.serialize ?? JSON.stringify;
-  const done = work().catch((error: unknown): LongRequestAnswer => ({
+  const controller = new AbortController();
+  const done = workSignal.run(controller.signal, () => work(controller.signal)).catch((error: unknown): LongRequestAnswer => ({
     status: 500,
     body: { ok: false, error: error instanceof Error ? error.message : String(error) },
   }));
+  // Until an id is handed out, the caller's connection is the only way to the answer: when it closes first, the
+  // work is for no one.
+  let handedOut = false;
+  const closed = () => {
+    if (!handedOut && !res.writableEnded) controller.abort(new Error('ZLens stopped this request: the caller left before it was answered.'));
+  };
+  res.once?.('close', closed);
+  void done.finally(() => res.off?.('close', closed));
   const owner = currentRecordOwner();
   const waitSeconds = preferredWaitSeconds(req);
   // A host that names nobody for this request has no one to keep the answer for.
@@ -124,10 +166,13 @@ export async function answerLongRequest(
     return;
   }
   const id = randomUUID();
-  const job: LongRequestJob = { owner, done, serialize };
+  const job: LongRequestJob = { owner, done, serialize, controller, abandonMs: options.abandonMs ?? LONG_REQUEST_ABANDON_MS };
   jobs.set(id, job);
+  handedOut = true;
+  watchForAbandon(job, job.abandonMs);
   void done.then((answer) => {
     job.answer = answer;
+    if (job.abandon) clearTimeout(job.abandon);
     job.expires = setTimeout(() => { jobs.delete(id); }, LONG_REQUEST_TTL_MS);
     job.expires.unref?.();
   });
@@ -155,7 +200,10 @@ export async function handleLongRequestPoll(req: IncomingMessage, res: ServerRes
     });
     return true;
   }
+  // Someone is still waiting for it.
+  watchForAbandon(job, job.abandonMs);
   const answer = job.answer ?? await within(job.done, (preferredWaitSeconds(req, false) ?? DEFAULT_WAIT_S) * 1000);
+  if (!job.answer) watchForAbandon(job, job.abandonMs);
   if (answer) send(res, answer, job.serialize);
   else send(res, running(id));
   return true;
@@ -170,6 +218,9 @@ export function longRequestsRunning(): number {
 
 /** Test seam: forget every kept answer. */
 export function clearLongRequestsForTests(): void {
-  for (const job of jobs.values()) if (job.expires) clearTimeout(job.expires);
+  for (const job of jobs.values()) {
+    if (job.expires) clearTimeout(job.expires);
+    if (job.abandon) clearTimeout(job.abandon);
+  }
   jobs.clear();
 }
