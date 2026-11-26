@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentMessage, AgentProvider, AgentRunRequest } from '@zlens/agent';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { createAskPipelineRouteExecutor } from './host.js';
+import { createAskPipelineRouteExecutor, keyProbeDeadlineMs } from './host.js';
 import { askedThings, keyLabels, unlistedAskedThings, unlistedThingFailure, unnamedGroupingKeys, type KeyReference } from './key-labels.js';
 
 /**
@@ -60,6 +60,16 @@ describe('names for every id an answer shows, and for the things a question asks
   });
 });
 
+describe('a join key count always has a limit (fast on big tables)', () => {
+  it('is 5 s, or what is left of a run that has less, and none is run when too little is left', () => {
+    expect(keyProbeDeadlineMs()).toBe(5_000);
+    expect(keyProbeDeadlineMs(60_000)).toBe(5_000);
+    expect(keyProbeDeadlineMs(4_600)).toBe(4_600);
+    expect(keyProbeDeadlineMs(100)).toBeNull();
+    expect(keyProbeDeadlineMs(-5)).toBeNull();
+  });
+});
+
 describe('on the host: the Durant answer lists team names by season', () => {
   const connection = { driver: 'duckdb', path: ':memory:' } as ConnectionConfig;
   const manifest = { sources: Object.fromEntries(tables.map((table) => {
@@ -67,15 +77,24 @@ describe('on the host: the Durant answer lists team names by season', () => {
     return [name, { name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.nba.${name}`, schema: 'dev', columns: Object.fromEntries(columnsOf(table).map((column) => [column, { name: column }])) } }];
   })) };
   const executed: string[] = [];
+  // The join key counts: their SQL, the limit each was given, and how many ran at once.
+  const keyProbes: Array<{ sql: string; deadlineMs?: number }> = [];
+  let probesRunning = 0;
+  let mostAtOnce = 0;
   const routeFor = (reading: string, drafts: string[], prompts: string[]) => createAskPipelineRouteExecutor({
     projectRoot: '/tmp/ask-v14',
-    executor: { executeQuery: vi.fn(async (sql: string) => {
+    executor: { executeQuery: vi.fn(async (sql: string, _params?: unknown, _vars?: unknown, _connection?: unknown, options?: { deadlineMs?: number }) => {
       executed.push(sql);
       if (/HAVING COUNT\(\*\) > 1/.test(sql)) return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
       // How many rows have each join key: the journey's team_id is empty in 93% of its rows, as FCT_PLAYER_JOURNEY's
       // is on the NBA trial; the game facts' team_id in 2%, like an optional key; the teams' never.
       if (/AS key_empty FROM/.test(sql)) {
-        const counts = sql.includes(JOURNEY) ? { KEY_ROWS: 6305, KEY_EMPTY: 5866 } : sql.includes(PLAYER_GAMES) ? { KEY_ROWS: 10000, KEY_EMPTY: 200 } : { KEY_ROWS: 30, KEY_EMPTY: 0 };
+        keyProbes.push({ sql, ...(options?.deadlineMs !== undefined ? { deadlineMs: options.deadlineMs } : {}) });
+        probesRunning += 1;
+        mostAtOnce = Math.max(mostAtOnce, probesRunning);
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        probesRunning -= 1;
+        const counts = sql.includes(JOURNEY) && sql.includes('team_id') ? { KEY_ROWS: 6305, KEY_EMPTY: 5866 } : sql.includes(PLAYER_GAMES) ? { KEY_ROWS: 10000, KEY_EMPTY: 200 } : { KEY_ROWS: 30, KEY_EMPTY: 0 };
         return { columns: ['KEY_ROWS', 'KEY_EMPTY'], rowCount: 1, executionTimeMs: 1, rows: [counts] };
       }
       if (sql.includes(JOURNEY) && sql.includes('team_nickname')) return { columns: ['season', 'team_nickname'], rowCount: 3, executionTimeMs: 1, rows: [{ season: 2007, team_nickname: null }, { season: 2016, team_nickname: null }, { season: 2020, team_nickname: null }] };
@@ -164,6 +183,25 @@ describe('on the host: the Durant answer lists team names by season', () => {
     expect(result.status).toBe('completed');
     const checks = (result.askPipelineReceipt?.checks ?? []).filter((check) => check.id === 'join_keys_filled');
     expect(checks.map((check) => check.passed)).toEqual([true]);
+  });
+
+  it('counts every join key of an answer at once, within 5 s each, and a one-column key as COUNT(*) - COUNT(key) (fast on big tables)', async () => {
+    const prompts: string[] = [];
+    keyProbes.length = 0;
+    mostAtOnce = 0;
+    // Beside the team join counted above: a join on two columns and one on one column, four sides not counted yet.
+    const seasons = `SELECT g.season, t.team_nickname FROM ${PLAYER_GAMES} g JOIN ${TEAMS} t ON g.team_id = t.team_id JOIN ${PLAYER_SEASONS} p ON p.player_id = g.player_id AND p.season = g.season JOIN ${JOURNEY} j ON j.player_id = g.player_id WHERE g.player_name ILIKE '%Kevin Durant%' GROUP BY g.season, t.team_nickname ORDER BY g.season`;
+    const result = await ask(routeFor(reading, [seasons], prompts), question);
+    expect(result.status).toBe('completed');
+    const fresh = keyProbes.filter((probe) => !/"team_id"/.test(probe.sql));
+    expect(fresh.length).toBeGreaterThanOrEqual(4);
+    // Together, not one after another.
+    expect(mostAtOnce).toBeGreaterThanOrEqual(2);
+    // Every probe has a limit; with no run budget it is the default 5 s.
+    expect(fresh.every((probe) => probe.deadlineMs === 5_000)).toBe(true);
+    // One column: Snowflake answers it from table metadata. Two columns: empty when either is.
+    expect(fresh.some((probe) => probe.sql === `SELECT COUNT(*) AS key_rows, COUNT(*) - COUNT("player_id") AS key_empty FROM ${JOURNEY}`)).toBe(true);
+    expect(fresh.some((probe) => probe.sql === `SELECT COUNT(*) AS key_rows, SUM(CASE WHEN "player_id" IS NULL OR "season" IS NULL THEN 1 ELSE 0 END) AS key_empty FROM ${PLAYER_SEASONS}`)).toBe(true);
   });
 
   it('SQL written from the words reads a stated year as the season the tables keep, and says so (V13, PO-2)', async () => {
