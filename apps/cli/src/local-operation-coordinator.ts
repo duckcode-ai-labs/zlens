@@ -34,6 +34,11 @@ export interface LocalOperation<TResult = unknown> {
    * for and without a host.
    */
   ownerId?: string;
+  /**
+   * Counts a long operation reports as it goes (the setup's tables read and
+   * checked, for one): plain JSON, shown by pages that know the type.
+   */
+  detail?: Record<string, unknown>;
   result?: TResult;
   error?: LocalOperationError;
   createdAt: string;
@@ -43,7 +48,7 @@ export interface LocalOperation<TResult = unknown> {
 export type LocalOperationProgress = Pick<
   LocalOperation,
   'phase' | 'progress' | 'message'
-> & { resourceRevision?: string };
+> & { resourceRevision?: string; detail?: Record<string, unknown> };
 
 type OperationListener = (operation: LocalOperation) => void;
 
@@ -58,6 +63,7 @@ interface OperationRow {
   message: string;
   cancellable: number;
   owner_id?: string | null;
+  detail_json?: string | null;
   result_json: string | null;
   error_json: string | null;
   created_at: string;
@@ -109,6 +115,7 @@ export class LocalOperationCoordinator {
     const columns = this.db.prepare('PRAGMA table_info(local_operations)').all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === 'owner_id')) this.db.exec('ALTER TABLE local_operations ADD COLUMN owner_id TEXT');
     if (!columns.some((column) => column.name === 'runtime_owner')) this.db.exec('ALTER TABLE local_operations ADD COLUMN runtime_owner TEXT');
+    if (!columns.some((column) => column.name === 'detail_json')) this.db.exec('ALTER TABLE local_operations ADD COLUMN detail_json TEXT');
 
     // Only work whose runtime is gone is interrupted: another ZLens process
     // opening this project (a second notebook, `zlens agent ask`) must not
@@ -308,8 +315,8 @@ export class LocalOperationCoordinator {
     this.db.prepare(`
       INSERT INTO local_operations (
         id, type, scope, resource_revision, status, phase, progress, message,
-        cancellable, result_json, error_json, created_at, updated_at, owner_id, runtime_owner
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cancellable, result_json, error_json, created_at, updated_at, owner_id, runtime_owner, detail_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         resource_revision = excluded.resource_revision,
         status = excluded.status,
@@ -320,7 +327,8 @@ export class LocalOperationCoordinator {
         result_json = excluded.result_json,
         error_json = excluded.error_json,
         updated_at = excluded.updated_at,
-        runtime_owner = excluded.runtime_owner
+        runtime_owner = excluded.runtime_owner,
+        detail_json = excluded.detail_json
     `).run(
       operation.id,
       operation.type,
@@ -337,6 +345,7 @@ export class LocalOperationCoordinator {
       operation.updatedAt,
       operation.ownerId ?? null,
       this.runtimeOwner,
+      operation.detail === undefined ? null : JSON.stringify(operation.detail),
     );
   }
 
@@ -369,6 +378,7 @@ function operationFromRow(row: OperationRow): LocalOperation {
     message: row.message,
     cancellable: row.cancellable === 1,
     ...(row.owner_id ? { ownerId: row.owner_id } : {}),
+    ...(row.detail_json ? { detail: safeJson(row.detail_json) as Record<string, unknown> } : {}),
     ...(row.result_json ? { result: safeJson(row.result_json) } : {}),
     ...(row.error_json ? { error: safeJson(row.error_json) as LocalOperationError } : {}),
     createdAt: row.created_at,

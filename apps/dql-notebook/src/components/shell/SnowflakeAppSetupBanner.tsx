@@ -18,11 +18,19 @@ function plural(count: number, one: string, many: string): string {
 }
 
 /** What the strip says, or nothing. Exported for tests. */
-export function snowflakeAppSetupMessage(status: SnowflakeAppSetupStatus | null): { tone: 'info' | 'caution'; text: string; action?: 'review' | 'retry'; key?: string } | null {
+export function snowflakeAppSetupMessage(status: SnowflakeAppSetupStatus | null): { tone: 'info' | 'caution'; text: string; action?: 'review' | 'retry' | 'stop' | 'start'; key?: string } | null {
   if (!status?.managed) return null;
   const database = status.database ?? 'your database';
   if (status.state === 'idle' || status.state === 'running') {
-    return { tone: 'info', text: `ZLens is reading the tables in ${database} and drafting your models. This takes a minute or two.` };
+    // The setup's own operation says where it is, with numbers and the time so far (onboarding design P2).
+    const live = status.operation && (status.operation.status === 'running' || status.operation.status === 'queued') ? status.operation : null;
+    if (live?.message && live.phase !== 'queued' && live.phase !== 'starting') {
+      return { tone: 'info', text: `Setting up ZLens. ${live.message}`, ...(live.cancellable ? { action: 'stop' as const } : {}) };
+    }
+    return { tone: 'info', text: `ZLens is reading the tables in ${database} and drafting your models. This takes a minute or two.`, ...(live?.cancellable ? { action: 'stop' as const } : {}) };
+  }
+  if (status.state === 'stopped') {
+    return { tone: 'caution', text: `Setup from ${database} was stopped. Nothing was drafted.`, action: 'start' };
   }
   if (status.state === 'failed') {
     return { tone: 'caution', text: `ZLens could not read the tables in ${database}: ${status.error ?? 'unknown error'}`, action: 'retry' };
@@ -83,7 +91,7 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
     return () => window.removeEventListener(CONTEXT_PROPOSALS_CHANGED_EVENT, reload);
   }, [enabled, load]);
 
-  const settled = status?.state === 'done' || status?.state === 'failed' || status?.managed === false;
+  const settled = status?.state === 'done' || status?.state === 'failed' || status?.state === 'stopped' || status?.managed === false;
   useEffect(() => {
     if (!enabled || settled) return;
     const timer = window.setInterval(() => { void load(); }, POLL_MS);
@@ -143,8 +151,17 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
       {message.action === 'review' && (
         <button type="button" style={linkStyle} onClick={() => dispatch({ type: 'SET_MAIN_VIEW', view: 'modeling' })}>Review the drafts</button>
       )}
-      {message.action === 'retry' && (
-        <button type="button" style={linkStyle} onClick={() => { void api.retrySnowflakeAppSetup().then(setStatus).catch(() => undefined); }}>Try again</button>
+      {(message.action === 'retry' || message.action === 'start') && (
+        <button type="button" style={linkStyle} onClick={() => { void api.retrySnowflakeAppSetup().then(setStatus).catch(() => undefined); }}>{message.action === 'start' ? 'Start again' : 'Try again'}</button>
+      )}
+      {message.action === 'stop' && status?.operation && (
+        <button
+          type="button"
+          style={linkStyle}
+          onClick={() => { void api.cancelOperation(status.operation!.id).then(() => load()).catch(() => undefined); }}
+        >
+          Stop
+        </button>
       )}
       {message.key && (
         <button

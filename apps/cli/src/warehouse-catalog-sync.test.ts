@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { readWarehouseCatalog } from '@zlens/core';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { assembleWarehouseCatalog, buildWarehouseCatalogQueries, syncWarehouseCatalog } from './warehouse-catalog-sync.js';
+import { assembleWarehouseCatalog, buildWarehouseCatalogQueries, readWarehouseCatalogRelations, syncWarehouseCatalog } from './warehouse-catalog-sync.js';
 import type { ConnectionMetadataScopeV1 } from './warehouse-metadata.js';
 
 const scope = (catalogOrDatabase: string, schemas: string[]): ConnectionMetadataScopeV1 => ({
@@ -338,5 +338,37 @@ describe('syncing a live SQLite warehouse', () => {
     const second = await syncWarehouseCatalog({ projectRoot, executor, connection, scope: scope('main', ['main']) });
     expect(second.warnings.join(' ')).toMatch(/foreign keys of main not read: permission denied/);
     expect(second.snapshot.relations.find((relation) => relation.name === 'orders')!.foreignKeys).toBeUndefined();
+  });
+});
+
+describe('a catalog read that runs as part of setup (onboarding design P2)', () => {
+  const connection: ConnectionConfig = { driver: 'snowflake', account: 'acme', database: 'SALES' };
+  const columns = [{ TABLE_CATALOG: 'SALES', TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: 'ORDERS', COLUMN_NAME: 'ID', DATA_TYPE: 'NUMBER' }];
+
+  it('reports statements done and tables found as it goes', async () => {
+    const progress: Array<{ queriesDone: number; queries: number; tables: number }> = [];
+    const executor = { executePositional: async (sql: string) => ({ columns: [], rows: sql.includes('COLUMNS') ? columns : [], rowCount: 0, executionTimeMs: 1 }) } as unknown as QueryExecutor;
+    await readWarehouseCatalogRelations({ executor, connection, scopes: [{ catalogOrDatabase: 'SALES', schemas: ['PUBLIC'] }], onProgress: (item) => progress.push(item) });
+    expect(progress[0]).toEqual({ queriesDone: 0, queries: 5, tables: 0, catalogOrDatabase: 'SALES' });
+    expect(progress.at(-1)).toEqual({ queriesDone: 5, queries: 5, tables: 1, catalogOrDatabase: 'SALES' });
+    expect(progress.map((item) => item.queriesDone)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it('stops between statements once stopped, and a stopped optional read is not a warning', async () => {
+    const controller = new AbortController();
+    const ran: string[] = [];
+    const executor = {
+      executePositional: async (sql: string) => {
+        ran.push(sql);
+        if (sql.includes('INFORMATION_SCHEMA.TABLES')) {
+          controller.abort();
+          throw new Error('Snowflake query was cancelled.');
+        }
+        return { columns: [], rows: sql.includes('COLUMNS') ? columns : [], rowCount: 0, executionTimeMs: 1 };
+      },
+    } as unknown as QueryExecutor;
+    await expect(readWarehouseCatalogRelations({ executor, connection, scopes: [{ catalogOrDatabase: 'SALES', schemas: ['PUBLIC'] }], signal: controller.signal })).rejects.toThrow('cancelled');
+    // Columns, then tables (stopped there): views and keys never ran.
+    expect(ran).toHaveLength(2);
   });
 });
