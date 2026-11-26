@@ -137,10 +137,15 @@ export class SnowflakeAppSettings {
   }
 }
 
-/** The database ZLens should read: the one granted (when there is exactly one), or the current one if still granted. */
-export function chooseDatabase(granted: string[], current: string | undefined): string | undefined {
-  if (current && granted.some((name) => name.toUpperCase() === current.toUpperCase())) return current;
-  return granted.length === 1 ? granted[0] : undefined;
+/**
+ * The databases ZLens may read (onboarding design P6, decision D2): every one granted to the app. The first is
+ * only the session's default (the database unqualified names resolve in): the current one while it is still
+ * granted, else the first granted. Empty when nothing is granted.
+ */
+export function chooseDatabase(granted: string[], current: string | undefined): string[] {
+  const kept = current ? granted.find((name) => name.toUpperCase() === current.toUpperCase()) : undefined;
+  if (!kept) return [...granted];
+  return [current!, ...granted.filter((name) => name.toUpperCase() !== current!.toUpperCase())];
 }
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -160,8 +165,6 @@ export function snowflakeAppSetupPage(input: { appName?: string; needsUser: bool
       `GRANT SELECT ON ALL VIEWS IN SCHEMA MY_DB.MY_SCHEMA TO APPLICATION ${app};`,
     ];
     steps.push(`<li><strong>What ZLens may read.</strong> Run this in a worksheet, with your database and schema in place of MY_DB and MY_SCHEMA. Select all the lines, then press <em>Run</em>: Snowsight&#39;s Run on its own runs only the statement at the cursor.<pre>${escapeHtml(grants.join('\n'))}</pre></li>`);
-  } else if (input.databases.length > 1) {
-    steps.push(`<li><strong>One database.</strong> This app can see ${input.databases.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}. ZLens reads one: revoke the others, so one is left.</li>`);
   }
   const left = steps.length === 1 ? 'One step is left' : `${steps.length} steps are left`;
   return brandedPage({

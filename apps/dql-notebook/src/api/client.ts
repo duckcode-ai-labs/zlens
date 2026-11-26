@@ -801,6 +801,8 @@ export interface SnowflakeAppSetupStatus {
   stage?: WarehouseSetupStage;
   /** When ready: the background checks' own state. */
   checks?: 'running' | 'done' | 'failed' | 'stopped' | 'off';
+  /** The installed app's name, for the grant SQL of a database or schema not listed. */
+  appName?: string;
   database?: string;
   schemas?: string[];
   relations?: number;

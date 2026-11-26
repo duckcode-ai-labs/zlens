@@ -442,3 +442,59 @@ describe('the idle stop and a running setup (onboarding design P5)', () => {
     expect(idle!.due()).toBe(true);
   }, 30_000);
 });
+
+describe('several databases (onboarding design P6)', () => {
+  it('reads every database granted: no "revoke the others", both in the picker, both read in one setup', async () => {
+    const statements: string[] = [];
+    const executePositional = async (sql: string, _params: unknown[], config: { database?: string }): Promise<QueryResult> => {
+      statements.push(sql);
+      if (sql.includes('CURRENT_ACCOUNT()')) return result([{ DQL_ACCOUNT_LOCATOR: 'XY1', DQL_ACCOUNT_NAME: 'TEST', DQL_ORGANIZATION: 'ORG', DQL_ACCOUNT: 'ORG-TEST', DQL_DATABASE: config.database, DQL_ROLE: 'APP', DQL_WAREHOUSE: 'WH' }]);
+      if (sql.startsWith('SHOW TERSE SCHEMAS')) return result([{ database_name: 'FINANCE', name: 'LEDGER' }, { database_name: 'SALES', name: 'PUBLIC' }]);
+      if (sql.includes('INFORMATION_SCHEMA.TABLE_CONSTRAINTS')) {
+        const database = /"(\w+)"\.INFORMATION_SCHEMA/.exec(sql)?.[1];
+        return result([{ TABLE_CATALOG: database, TABLE_SCHEMA: database === 'SALES' ? 'PUBLIC' : 'LEDGER', TABLE_COUNT: 1, VIEW_COUNT: 0, KEYED_TABLE_COUNT: 0, FOREIGN_KEY_COUNT: 0 }]);
+      }
+      if (sql.includes('INFORMATION_SCHEMA.COLUMNS')) {
+        const database = /"(\w+)"\.INFORMATION_SCHEMA/.exec(sql)?.[1];
+        const [schema, table] = database === 'SALES' ? ['PUBLIC', 'ORDERS'] : ['LEDGER', 'ENTRIES'];
+        return result([{ TABLE_CATALOG: database, TABLE_SCHEMA: schema, TABLE_NAME: table, COLUMN_NAME: 'ID', DATA_TYPE: 'NUMBER', ORDINAL_POSITION: 1, IS_NULLABLE: 'NO' }]);
+      }
+      return result([]);
+    };
+    const executor = { executePositional, executeQuery: (sql: string, _p: unknown[], _v: unknown, config: { database?: string }) => executePositional(sql, [], config), disconnect: async () => undefined } as unknown as QueryExecutor;
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-several-'));
+    roots.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'sf', manifestVersion: 3, modeling: { mode: 'warehouse-first' }, connections: { default: { driver: 'snowflake', account: 'test-account', username: 'app', database: 'ZLENS_APP' } } }));
+    const appQuery = (async (sql: string) => {
+      if (sql.startsWith('MERGE INTO')) return [];
+      if (sql.includes('GET_CONFIGURATION_VALUE')) return [{ V: 'jsmith' }];
+      if (sql.startsWith('SHOW TERSE DATABASES')) return [{ name: 'ZLENS_APP', kind: 'STANDARD' }, { name: 'SALES', kind: 'STANDARD' }, { name: 'FINANCE', kind: 'STANDARD' }];
+      if (sql.startsWith('SHOW TERSE SCHEMAS IN DATABASE')) return [{ name: 'INFORMATION_SCHEMA' }, { name: 'PUBLIC' }];
+      if (sql.startsWith('SHOW TERSE OBJECTS IN SCHEMA')) return [{ name: 'T' }];
+      throw new Error(`unexpected SQL: ${sql}`);
+    }) as SnowflakeAppQuery;
+    const port = await startLocalServer({
+      rootDir: projectRoot, projectRoot, executor, preferredPort: 0, host: '127.0.0.1',
+      snowflakeIngress: {}, snowflakeAppSettings: { userConfiguration: 'ZLENS_USER', appName: 'ZLENS_APP', ttlMs: 0 }, snowflakeAppQuery: appQuery,
+      captureServer: (created) => { servers.push(created); },
+    });
+    const call = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers: { 'Sf-Context-Current-User': 'JSMITH', 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
+
+    // Two granted: ZLens serves the person (it used to ask the admin to revoke one).
+    expect((await call('/api/connections')).status).toBe(200);
+    const discovery = await (await call('/api/connections/default/metadata-scope/discovery', { method: 'POST', body: '{}' })).json() as { scopes: Array<{ catalogOrDatabase: string; schemas: Array<{ name: string; size?: unknown }> }> };
+    expect(discovery.scopes.map((scope) => scope.catalogOrDatabase)).toEqual(['FINANCE', 'SALES']);
+    expect(discovery.scopes.every((scope) => scope.schemas[0]?.size)).toBe(true);
+
+    const read = await call('/api/connections/default/setup/read', { method: 'POST', body: JSON.stringify({ mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'SALES', schemas: ['PUBLIC'] }, { catalogOrDatabase: 'FINANCE', schemas: ['LEDGER'] }], check: false }) });
+    expect(read.status).toBe(202);
+    let setup: { state?: string; database?: string; relations?: number; schemas?: string[]; appName?: string } = {};
+    for (let tries = 0; tries < 200 && setup.state !== 'ready' && setup.state !== 'failed'; tries += 1) {
+      setup = await (await call('/api/snowflake-app/setup')).json();
+      if (setup.state !== 'ready') await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(setup).toMatchObject({ state: 'ready', relations: 2, database: 'FINANCE, SALES', schemas: ['FINANCE.LEDGER', 'SALES.PUBLIC'], appName: 'ZLENS_APP' });
+    // One columns read per database.
+    expect(statements.filter((sql) => sql.includes('INFORMATION_SCHEMA.COLUMNS') && !sql.includes('TABLE_CONSTRAINTS')).map((sql) => /"(\w+)"\.INFORMATION_SCHEMA/.exec(sql)?.[1]).sort()).toEqual(expect.arrayContaining(['FINANCE', 'SALES']));
+  }, 30_000);
+});

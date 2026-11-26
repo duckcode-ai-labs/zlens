@@ -15801,8 +15801,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const stage = warehouseSetupStage(state);
     if (!state) return { state: 'idle', ...(snowflakeAppDatabase ? { database: snowflakeAppDatabase } : {}), stage };
     const base = {
-      database: state.scopes[0]?.catalogOrDatabase,
-      schemas: state.scopes.flatMap((scope) => scope.schemas),
+      // Several databases read (onboarding design P6): named together, as the strip says them.
+      database: state.scopes.map((scope) => scope.catalogOrDatabase).join(', ') || undefined,
+      schemas: state.scopes.flatMap((scope) => state.scopes.length > 1 ? scope.schemas.map((schema) => `${scope.catalogOrDatabase}.${schema}`) : scope.schemas),
       ...(typeof state.read.relations === 'number' ? { relations: state.read.relations } : {}),
       ...(state.checks?.proposalId ? { proposalId: state.checks.proposalId } : {}),
       ...(typeof state.checks?.drafted === 'number' ? { drafted: state.checks.drafted } : {}),
@@ -15882,7 +15883,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         console.warn(`[zlens] Could not read this app's settings: ${error instanceof Error ? error.message : String(error)}`);
       }
       if (state) {
-        const database = chooseDatabase(state.databases, typeof connection?.database === 'string' ? connection.database : undefined);
+        // Every granted database is readable (onboarding design P6); the first is only the session's default.
+        const database = chooseDatabase(state.databases, typeof connection?.database === 'string' ? connection.database : undefined)[0];
         if (database && connection && database !== connection.database) {
           try { await useSnowflakeAppDatabase(database); } catch (error) {
             console.warn(`[zlens] Could not switch to the granted database: ${error instanceof Error ? error.message : String(error)}`);
@@ -16170,7 +16172,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const view = snowflakeAppSetupView();
       const operation = operationVisible(currentSetupOperation() ?? (view.operationId ? operationCoordinator.get(view.operationId) : null), operationReader());
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...view, waitingDraft: waiting ?? null, operation }));
+      // The app's name fills in the grant SQL for a database or schema not listed yet (onboarding design P6).
+      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...(snowflakeAppOptions?.appName ? { appName: snowflakeAppOptions.appName } : {}), ...view, waitingDraft: waiting ?? null, operation }));
       return;
     }
     // Try again, Start again after a Stop, or Check the data (the strip's buttons): a read that failed or was stopped
