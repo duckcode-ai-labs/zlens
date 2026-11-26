@@ -604,6 +604,15 @@ interface KindNames { names?: Record<string, string>; words?: Record<string, str
 const KIND_NAMES = new Map<string, KindNames>();
 /** Whether a table's name column ever differs from its key, per connection (a season name that is the season does not). */
 const LABEL_DIFFERS = new Map<string, boolean>();
+/** How many of a table's rows have an empty join key, per connection, relation and key columns. */
+const KEY_EMPTY_ROWS = new Map<string, { rows: number; empty: number } | null>();
+/**
+ * A join key empty in more than half of a table's rows is mostly empty: a join on it matches only the few rows that
+ * have it. Chosen from the data the setup checks measured (26 Nov 2026), 352 join keys over the NBA trial and 1,000
+ * TPC-DS tables: 272 never empty, 78 empty in at most 2.45% of rows (TPC-DS's optional keys), none between 10% and
+ * 90%, and FCT_PLAYER_JOURNEY.TEAM_ID empty in 93%. Half sits in that wide gap: no optional key is near it.
+ */
+export const MOSTLY_EMPTY_KEY_SHARE = 0.5;
 const kindNamesKey = (connection: ConnectionConfig, kinds: CodeKinds, scope: string) => `${scopedKey(connectionKey(connection), scope)}|${kinds.code.toLowerCase()}|${kinds.values.map((value) => value.first).join('')}`;
 /**
  * What these caches hold was seen through a query connection, so each key carries the execution scope of the
@@ -1777,7 +1786,7 @@ interface AskRunState {
   draftDispatches: Array<{ purpose: string; ms: number; reply?: string; promptChars?: number; at?: number; attempt?: number; /** Certified blocks the drafter was given as the team's approved computations. */ blocks?: string[]; label?: 'draft' | 'redraft' | 'fix' | 'retry_empty' | 'widen' | 'review' | 'revise'; outcome?: 'sql' | 'declined' | 'rejected' | 'error' | 'accepted' | 'revise' }>;
   // The checks drafted SQL was held to, recorded for the run views (the
   // notes sent back to the model are built separately and never from these).
-  hostChecks: Array<{ id: 'stated_values' | 'required_filters' | 'join_fanout' | 'certified_joins' | 'catalog_columns' | 'read_only' | 'key_labels'; label: string; passed: boolean; message: string; attempt: number }>;
+  hostChecks: Array<{ id: 'stated_values' | 'required_filters' | 'join_fanout' | 'certified_joins' | 'catalog_columns' | 'read_only' | 'key_labels' | 'join_keys_filled'; label: string; passed: boolean; message: string; attempt: number }>;
   /** The joins the last checked AI-written statement made, each with the Modeling relationship behind it (or none). */
   hostJoins?: LedgerJoin[];
   /** The tables the model chose from the table index, once per question. */
@@ -3510,6 +3519,56 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
         return found;
       };
+      // A JOIN KEY THAT IS MOSTLY EMPTY MATCHES FEW ROWS (the Snowflake large test, 26 Nov 2026: "Which teams did
+      // Kevin Durant play for, and in which seasons?" joined FCT_PLAYER_JOURNEY to DIM_TEAMS_CLEANSED on TEAM_ID,
+      // which is empty in 5,866 of the journey's 6,305 rows, and showed no team at all). The warehouse says how many
+      // rows have each side's key, once per table and key. A statement that joins on a mostly empty key is sent back
+      // once to take the key from a table where it is filled; one that keeps it (a question about only the rows that
+      // have it) runs, and the answer says how few rows the join could match.
+      type EmptyKeyJoin = { table: string; other: string; columns: string[]; rows: number; empty: number };
+      const emptyKeyRows = async (side: JoinKeyGroup['left']): Promise<{ rows: number; empty: number } | null> => {
+        if (!connection || side.columns.length === 0) return null;
+        const cacheKey = `${scopedKey(connectionKey(connection), executionScope)}|${physicalRelationIdentity(side.relation)}|${side.columns.map((column) => column.toLowerCase()).join(',')}`;
+        if (KEY_EMPTY_ROWS.has(cacheKey)) return KEY_EMPTY_ROWS.get(cacheKey)!;
+        let measured: { rows: number; empty: number } | null = null;
+        try {
+          const options = { maxRows: 1, ...(request.signal ? { signal: request.signal } : {}), ...(request.runBudget ? { deadlineMs: Math.min(8_000, request.runBudget.remainingMs()) } : {}) };
+          const empty = side.columns.map((column) => `${quoteKey(column)} IS NULL`).join(' OR ');
+          const sql = `SELECT COUNT(*) AS key_rows, SUM(CASE WHEN ${empty} THEN 1 ELSE 0 END) AS key_empty FROM ${side.relation}`;
+          const result = deps.executor.executePositional
+            ? await deps.executor.executePositional(sql, [], connection, options)
+            : await deps.executor.executeQuery(sql, [], {}, connection, options);
+          const row = result.rows?.[0] as Record<string, unknown> | undefined;
+          const value = (name: string) => Number(row ? Object.entries(row).find(([key]) => key.toLowerCase() === name)?.[1] : undefined);
+          const rows = value('key_rows');
+          const emptyRows = value('key_empty');
+          measured = Number.isFinite(rows) && Number.isFinite(emptyRows) ? { rows, empty: emptyRows } : null;
+        } catch {
+          // Too slow or not readable: the join is not judged.
+          measured = null;
+        }
+        if (KEY_EMPTY_ROWS.size > 2_000) KEY_EMPTY_ROWS.clear();
+        KEY_EMPTY_ROWS.set(cacheKey, measured);
+        return measured;
+      };
+      const emptyKeyJoins = async (sql: string, record = true): Promise<EmptyKeyJoin[]> => {
+        const groups = joinKeyGroups(sql).slice(0, 3);
+        const found: EmptyKeyJoin[] = [];
+        for (const group of groups) {
+          for (const [side, other] of [[group.left, group.right], [group.right, group.left]] as const) {
+            const measured = await emptyKeyRows(side);
+            if (!measured || measured.rows === 0 || measured.empty / measured.rows <= MOSTLY_EMPTY_KEY_SHARE) continue;
+            found.push({ table: tableName(side.relation)?.replace(/"/g, '') ?? side.relation, other: tableName(other.relation)?.replace(/"/g, '') ?? other.relation, columns: side.columns, ...measured });
+          }
+        }
+        if (record && groups.length > 0) {
+          state.hostChecks.push({ id: 'join_keys_filled', label: 'Joins on keys most rows have', passed: found.length === 0, message: found.length ? emptyKeyProblem(found[0]!) : 'every join key it was checked on is filled in most rows', attempt: state.checkRound });
+        }
+        return found;
+      };
+      const share = (item: EmptyKeyJoin) => `${Math.round((item.empty / item.rows) * 100)}%`;
+      const emptyKeyProblem = (item: EmptyKeyJoin) => `its join of ${item.table} and ${item.other} on ${item.columns.join(', ')} matches few rows: ${item.columns.join(', ')} is empty in ${item.empty.toLocaleString('en-US')} of ${item.rows.toLocaleString('en-US')} ${item.table} rows (${share(item)}); take ${item.columns.join(', ')} from a table where it is filled, or reach ${item.other} another way, and keep this join only if the question is about just the ${item.table} rows that have it`;
+      const emptyKeyCaveat = (item: EmptyKeyJoin) => `caveat: ${item.columns.join(', ')} is empty in ${share(item)} of ${item.table} rows (${item.empty.toLocaleString('en-US')} of ${item.rows.toLocaleString('en-US')}), so the join to ${item.other} leaves most of them unmatched; no better way to link them was found`;
       const failedChecks = async (sql: string): Promise<string[]> => {
         const failures: string[] = [];
         const shifted = new Set(shiftedYears(sql).map((item) => item.year));
@@ -3680,15 +3739,16 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         let chosen = drafted;
         let failures = await failedChecks(chosen.sql);
         let unnamed = await unnamedKeysOf(chosen.sql);
-        if (failures.length > 0 || unnamed.problems.length > 0) {
-          const problems = [...failures, ...unnamed.problems];
+        const emptyKeys = await emptyKeyJoins(chosen.sql);
+        if (failures.length > 0 || unnamed.problems.length > 0 || emptyKeys.length > 0) {
+          const problems = [...failures, ...unnamed.problems, ...emptyKeys.map(emptyKeyProblem)];
           hostStep({ phase: 'schema', title: 'The drafted SQL failed a check: asking the AI to fix it', state: 'failed', detail: problems.join('; ') });
           // The tables that name those keys are drafted over the second time.
           await includeRelations([...unnamed.keys, ...unnamed.things.map((item) => item.label)].flatMap((item) => [item.keyRelation, item.labelRelation]));
           const repaired = await attemptDraft(`The previous statement was not run because ${problems.join('; ')}. Fix exactly that and keep everything else the question asks.`);
-          // Bare keys alone never refuse a statement that is otherwise right:
-          // when the fix fails, the first statement runs and the answer says
-          // what identifies its rows.
+          // Bare keys and mostly empty join keys alone never refuse a statement that is otherwise right: when the fix
+          // fails, the first statement runs and the answer says what identifies its rows, or how few rows its join
+          // could match.
           const keysOnly = failures.length === 0;
           const firstUnnamed = unnamed;
           if (!repaired || !('sql' in repaired)) {
@@ -3698,7 +3758,13 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             // A repair for names is taken only when it names more: one that adds a season's name while the player
             // and the team stay ids is no repair (V13, Q11).
             const repairedUnnamed = repairedFailures.length === 0 ? await unnamedKeysOf(repaired.sql, false) : undefined;
-            if (repairedFailures.length === 0 && (!keysOnly || repairedUnnamed!.problems.length < firstUnnamed.problems.length)) chosen = repaired;
+            const repairedEmpty = repairedFailures.length === 0 ? await emptyKeyJoins(repaired.sql) : undefined;
+            // A repair is taken only when it makes things better and nothing worse: fewer bare keys or fewer mostly
+            // empty join keys.
+            const better = repairedUnnamed !== undefined && repairedEmpty !== undefined
+              && repairedUnnamed.problems.length <= firstUnnamed.problems.length && repairedEmpty.length <= emptyKeys.length
+              && (repairedUnnamed.problems.length < firstUnnamed.problems.length || repairedEmpty.length < emptyKeys.length);
+            if (repairedFailures.length === 0 && (!keysOnly || better)) chosen = repaired;
             else if (!keysOnly) return { refused: repairedFailures.join('; ') };
             // The first statement stands; its own checks are the ones recorded last.
             else await failedChecks(chosen.sql);
@@ -3744,6 +3810,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           }
         }
         const applied = appliedConditions(chosen.sql);
+        // A join that stayed on a mostly empty key says so (its measure is kept from above).
+        const finalEmptyKeys = await emptyKeyJoins(chosen.sql, false);
         // WHICH KINDS IT COUNTS IS SAID, in words a reader can check: every kind together, or only some.
         const finalTotals = summaryKindsRead(modelRules, chosen.relations);
         const kindsRead: Array<{ kinds: CodeKinds | undefined; code: string; filter: { filtered: boolean; kinds: string[] } }> = [];
@@ -3801,6 +3869,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
             ...unnamed.things.map((item) => `caveat: it does not list the ${item.thing}s by name; ${tableName(item.label.labelRelation)!.replace(/"/g, '')}.${item.label.label} names them, and the statement could not be made to show it`),
             ...unnamed.keys.map((item) => `caveat: ${groupedColumns(chosen.sql).some((grouped) => grouped.column.toLowerCase() === item.key.toLowerCase()) ? `the rows are grouped by ${item.key}` : `it shows ${item.key}`}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
+            ...finalEmptyKeys.map(emptyKeyCaveat),
           ],
         };
       };

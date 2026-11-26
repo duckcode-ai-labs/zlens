@@ -1352,7 +1352,8 @@ describe('the schema lane on the host: no governed reading, the AI drafts SQL fr
       const mixed = "SELECT g.team_name, SUM(g.win) AS wins, MAX(s.wins) AS season_wins FROM nba.local_team_game_facts g JOIN nba.local_team_season_facts s ON s.team_name = g.team_name WHERE g.season = 2015 AND CAST(g.game_id AS VARCHAR) LIKE '2%' GROUP BY g.team_name";
       const both = await askNba('Which of those had the most wins?', oneKind, mixed, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 regular season had the most wins.' });
       expect(both.prompts[1]).toContain('it reads LOCAL_TEAM_SEASON_FACTS, which adds up every kind of game together, but the question asks about regular-season games only');
-      expect(both.statements.some((sql) => sql.includes('local_team_season_facts') && !/HAVING COUNT/.test(sql))).toBe(false);
+      // Probes of its keys (repeats, empty keys) are checks, not the answer.
+      expect(both.statements.some((sql) => sql.includes('local_team_season_facts') && !/HAVING COUNT|AS key_empty FROM/.test(sql))).toBe(false);
       expect(both.statements.some((sql) => sql.includes("FROM nba.local_team_game_facts WHERE season = 2015 AND CAST(game_id AS VARCHAR) LIKE '2%'"))).toBe(true);
       // A follow-up reading that drops the kind ("the 2015 season") keeps the one its previous question named (V12 gate).
       const dropped = await askNba('Which of those had the most wins?', oneKind, totals, manifest, { ...prior, reading: 'Which of the 5 teams with the most points per game in the 2015 season had the most wins.' });
