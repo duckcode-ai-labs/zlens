@@ -114,6 +114,7 @@ extra:
     - rfcs/*
     - specs/*
     - performance/*
+    - research/*
     - media/*
     - archive.md
     - tutorials/README.md
