@@ -27,7 +27,9 @@ statement at the cursor.
    ALTER APPLICATION ZLENS_APP SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';
    ```
 
-2. **Grant one database.** Repeat the schema lines for each schema ZLens should read in that database:
+2. **Grant the data ZLens may read.** Repeat the schema lines for each schema ZLens should read, and the
+   database line for each database (ZLens reads every database granted to it; you choose the schemas
+   it reads when you open it):
 
    ```sql
    GRANT USAGE ON DATABASE MY_DB TO APPLICATION ZLENS_APP;
@@ -82,8 +84,10 @@ data into a database you own (about 1.7 million rows), then grant that database 
    GRANT SELECT ON ALL TABLES IN SCHEMA ZLENS_SAMPLE.TPCH TO APPLICATION ZLENS_APP;
    ```
 
-3. **Open ZLens.** Within a minute or two it says it read 4 tables in ZLENS_SAMPLE and drafted 4 models
-   and 3 joins. Review the drafts and accept the ones that passed.
+3. **Open ZLens.** It asks which schemas to read. TPCH holds 4 tables, so it is ticked already: press
+   **Read these tables**. In seconds it says **Ready to ask**; the data checks run in the background,
+   and within a minute or two the strip at the top says it drafted 4 models and 3 joins. Review the
+   drafts and accept the ones that passed.
 
 4. **Ask** "Which 5 nations had the most order revenue in 1997?" The answer is labeled **AI-generated**:
    five rows, UNITED STATES first at 1,419,081,800.96. Ask "What was our payroll in 1997?" and ZLens
@@ -175,14 +179,40 @@ one person.
 
 ## What ZLens does first
 
-Once it has the database, ZLens reads every schema in it the app can see, then drafts the models
-(entities, their keys and the joins between them) from those tables. A strip at the top says so while
-it runs, in a minute or two, then points to the drafts in **Modeling**. Nothing is saved until you
-review them.
+ZLens asks first, then reads fast, and does the slow work in the background:
+
+1. **Choose your data.** The first time you open ZLens, it lists the schemas of every database granted
+   to it, each with its tables, rows, size and how many tables declare their keys, and two estimates:
+   reading the names (seconds to minutes) and the background checks (time and credits). With 100
+   tables or fewer in all, every schema is ticked already; otherwise start with one area, under 100
+   tables, and add more later. A schema that is not listed needs a grant (step 2); the list shows the
+   lines with this app's name filled in.
+2. **Read these tables.** ZLens reads names, types, comments and declared keys: no table is scanned.
+   The page shows the tables read so far, and **Stop** stops it within seconds. When it is done, ZLens
+   is **Ready to ask**: answers are labeled **AI-generated** until you review the drafts.
+3. **The data checks, in the background.** Unless you untick **Check the data in the background**,
+   ZLens then checks the keys, joins and rules behind the drafted models, smallest tables first, and
+   builds the search index. Tables over 10 million rows are checked on a block sample, and the drafts
+   say "checked on a sample". Each check has a 60-second limit: a table that runs over is listed, not
+   waited for, with **Check this table now**. A strip at the top shows the counts as they go ("Checking
+   keys and joins: 312 of 1,240 tables"); when the checks end, it points to the drafts in
+   **Modeling**. Nothing is saved until you review them.
+4. **Setup page.** **Settings » Database** shows every stage with its counts, the time so far, an
+   estimate of the time left and of the warehouse credits, and what could not be checked. **Pause**
+   stops the checks; **Resume** picks up where they stopped, asking nothing again that was already
+   answered. A restart, ZLens's own idle stop or an upgrade resumes them the same way.
+5. **Check faster (optional).** Before reading, you can have the background checks run on a Small or
+   Medium size of the app's own warehouse (`<app>_WH`): about the same credits, sooner. It goes back
+   to extra-small when the checks end. If Snowflake refuses the resize, the checks run on extra-small
+   and the Setup page says why.
+
+The launcher page shows the same status before ZLens opens ("ZLens is ready to ask. Background checks:
+25%."). An install that was set up before keeps its models: nothing is read or drafted again on an
+upgrade.
 
 **Tables added later.** The grants in step 2 cover the tables and views that exist when you run them.
 After you add tables or schemas, run those grant lines again for them, then in ZLens open
-**Settings » Database » Apply and synchronize**.
+**Settings » Database**, tick them and press **Read these tables**.
 
 ## AI: Claude through Snowflake Cortex
 

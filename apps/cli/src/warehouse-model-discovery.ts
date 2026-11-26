@@ -209,6 +209,8 @@ export interface WarehouseDiscoveryReport {
   lookAlikeJoins?: LookAlikeJoin[];
   /** Rules measured on the picked tables, each with its query (validation only, RFC 0012 P4). */
   rules?: DiscoveredRule[];
+  /** Drafted joins the checks never got to, left out of the drafts (the background setup's draft, onboarding P8). */
+  uncheckedJoins?: number;
   /** Keys several picked tables share with no table of their own (validation only, RFC 0012 P3). */
   concepts?: DiscoveredConcept[];
   validated: boolean;
