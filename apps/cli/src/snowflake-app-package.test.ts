@@ -166,6 +166,25 @@ describe('the app package for Snowflake', () => {
     }
   });
 
+  it('Ask readiness rides in setup\'s status: one column in core.setup_status, returned in `setup`, shown on the ready page', () => {
+    // One table, one write, one read (no table of its own): a column added to P5's row, also on upgrade.
+    expect(setup).toContain('ALTER TABLE core.setup_status ADD COLUMN IF NOT EXISTS ask_readiness VARIANT;');
+    expect(setup).not.toMatch(/core\.ask_readiness/);
+    expect(setup).not.toMatch(/ON (TABLE|VIEW) [a-z_.]*setup_status[a-z_]* TO APPLICATION ROLE/i);
+    const status = procedure('launcher_status');
+    expect(status).toContain("SELECT OBJECT_CONSTRUCT('stage', stage, 'line', line, 'percent', percent, 'updated_at', updated_at, 'ask_readiness', ask_readiness)");
+    expect(status).toContain("RETURN OBJECT_CONSTRUCT('status', :svc_status, 'url', :url, 'zlens_user', :zlens_user, 'setup', :setup);");
+    const page = read('launcher/launcher.py');
+    const ready = branch(page, 'if name == "READY" and status["url"]:');
+    expect(ready).toMatch(/st\.info\(setup_line\)\n\s+show_ask\(ask_readiness\(status\.get\("setup"\)\), setup_line, moment\)[\s\S]*?st\.link_button/);
+    // The words, the fix line and who runs it are ZLens's (settings/ask-readiness.ts); setup's line already says the
+    // headline when Ask is not ready, so the warning gives the reason and the line without repeating it.
+    expect(page).toMatch(/def show_ask\(ask, setup_line, moment\):[\s\S]*?said = ask\["headline"\] in setup_line[\s\S]*?st\.warning\(reason if said and reason else f"\*\*\{ask\['headline'\]\}\*\* \{reason\}"\.strip\(\)\)[\s\S]*?st\.caption\(ask\["fixIntro"\]\)\n\s+st\.code\(ask\["fixSql"\], language="sql"\)/);
+    expect(page).not.toMatch(/CORTEX_ENABLED_CROSS_REGION/);
+    expect(readme).toContain('**Ask checks itself.**');
+    expect(readme).toContain("setup's status with whether Ask is ready");
+  });
+
   it('V2: the launcher page calls only the app\'s own procedures, and pins a Streamlit with link_button', () => {
     const page = read('launcher/launcher.py');
     const calls = [...page.matchAll(/session\.sql\("([^"]+)"\)/g)].map((match) => match[1]);

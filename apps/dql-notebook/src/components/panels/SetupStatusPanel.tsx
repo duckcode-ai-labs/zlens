@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, type LocalOperation, type SnowflakeAppSetupStatus, type WarehouseSetupStatus } from '../../api/client';
 import { useDispatch } from '../../store/NotebookStore';
 import type { themes } from '../../themes/notebook-theme';
+import { askReadinessSetupLine } from '../agent/AskReadinessStrip';
 
 const RUNNING_POLL_MS = 2_000;
 
@@ -61,6 +62,8 @@ export function setupStageLines(status: WarehouseSetupStatus): Array<{ key: stri
   else lines.push({ key: 'read', tone: 'caution', text: `Reading names failed: ${read.error ?? 'unknown error'}` });
   if (read.state !== 'done') return lines;
   lines.push({ key: 'ready', tone: 'done', text: 'Ready to ask. Answers are labeled AI-generated until you review the drafts.' });
+  // Ask's Snowflake Cortex (fix plan risk 3): ready with its model, or not ready with the line an admin runs.
+  const ask = askReadinessSetupLine(status.askReadiness); if (ask) lines.push(ask);
   const checks = setup.checks;
   if (!checks || checks.state === 'off') {
     lines.push({ key: 'checks', tone: 'waiting', text: 'Data checks: off. Check the data to draft models for review.' });

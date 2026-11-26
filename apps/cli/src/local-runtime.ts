@@ -784,6 +784,7 @@ import {
   type RedactedProviderSettings,
 } from './settings/provider-settings.js';
 import { cortexInProjectAccount, cortexSignIn, createCortexProvider, setProjectConnectionLookup, useCortexSqlExecutor } from './settings/cortex-sign-in.js';
+import { AskReadinessCheck } from './settings/ask-readiness.js';
 import { ClaudeCodeCliProvider, CodexCliProvider } from './providers/subscription-cli.js';
 import { createFailoverProvider } from './providers/failover-provider.js';
 import {
@@ -1326,6 +1327,11 @@ export interface LocalServerOptions {
   snowflakeAppSettings?: SnowflakeAppSettingsOptions;
   /** Tests: how the app's settings are read (defaults to the project's connection). */
   snowflakeAppQuery?: SnowflakeAppQuery;
+  /**
+   * Check Ask's Snowflake Cortex setup once at start (one tiny Cortex call; settings/ask-readiness.ts). Defaults to
+   * on inside Snowflake (the ZLens app); elsewhere the first page that shows Ask asks for it.
+   */
+  askReadinessAtStart?: boolean;
   /**
    * Tests: the idle stop of the app for Snowflake in place of ZLENS_SNOWFLAKE_IDLE_SUSPEND_MINUTES and
    * ZLENS_SNOWFLAKE_SERVICE (only with the Snowflake sign-in on), with its clock and a handle on it.
@@ -15553,24 +15559,46 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return settled;
   })();
   // The launcher page's setup status (onboarding design P5): a row in the app's own core.setup_status, written
-  // only while setup works (a change of stage at once, progress at most every 30 s), so it never wakes the warehouse.
+  // only while setup works (a change of stage at once, progress at most every 30 s), so it never wakes the warehouse,
+  // and when Ask's readiness changes (at start, and when an admin's grant lands), which is rare.
   const setupStatusWriter = snowflakeApp && snowflakeAppOptions?.appName
     ? new SetupStatusWriter({ appName: snowflakeAppOptions.appName, query: (sql) => snowflakeAppQuery(sql) })
     : undefined;
+  // Ask readiness (fix plan risk 3): is Ask's Snowflake Cortex set up? Checked with one tiny Cortex call at start in
+  // Snowflake, kept for a few minutes, checked again on demand. In the app it rides in the setup status row, so the
+  // launcher shows it through the same write and the same read.
+  const askReadiness = new AskReadinessCheck({
+    provider: async () => {
+      const selected = await selectAssistProvider(projectRoot, undefined, { availability: 'defer' }).catch(() => null);
+      return selected && isCortexClaudeProvider(selected.provider) ? selected.provider : null;
+    },
+    ...(setupStatusWriter ? {
+      onResult: async (readiness) => {
+        const row = setupStatusLine(warehouseSetup, currentSetupOperation(), readiness);
+        // Before setup has started (or after a one-go setup from an earlier version), only Ask's part: no setup line.
+        await setupStatusWriter.write(warehouseSetup ? row : { ...row, line: '' }, { force: true });
+      },
+    } : {}),
+  });
+  if (opts.askReadinessAtStart ?? Boolean(snowflakeIngress)) {
+    // A few seconds in, so the check does not slow the start itself.
+    const askReadinessStart = setTimeout(() => askReadiness.start(), 5_000);
+    askReadinessStart.unref?.();
+  }
   // "Check faster" (onboarding design P7, decision D6): only the app's own <app>_WH is ever resized.
   const appWarehouse = snowflakeApp ? appOwnWarehouse(snowflakeAppOptions?.appName, typeof connection?.warehouse === 'string' ? connection.warehouse : process.env.ZLENS_SNOWFLAKE_WAREHOUSE) : null;
   const warehouseSizer = appWarehouse ? new AppWarehouseSizer({ warehouse: appWarehouse, query: (sql) => snowflakeAppQuery(sql) }) : undefined;
   const saveWarehouseSetup = (next: WarehouseSetupStateV1): WarehouseSetupStateV1 => {
     warehouseSetup = next;
     writeWarehouseSetupState(projectRoot, next);
-    void setupStatusWriter?.write(setupStatusLine(next, currentSetupOperation()), { force: true });
+    void setupStatusWriter?.write(setupStatusLine(next, currentSetupOperation(), askReadiness.latest()), { force: true });
     return next;
   };
   if (setupStatusWriter) {
     operationCoordinator.subscribe((operation) => {
       if (operation.type !== 'warehouse-read' && operation.type !== 'warehouse-check') return;
       if (operation.status !== 'running') return;
-      void setupStatusWriter.write(setupStatusLine(warehouseSetup, operation));
+      void setupStatusWriter.write(setupStatusLine(warehouseSetup, operation, askReadiness.latest()));
     });
   }
   const setupOperationRunning = () => warehouseSetup?.read.state === 'running' || warehouseSetup?.checks?.state === 'running';
@@ -15859,6 +15887,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     stage: warehouseSetupStage(warehouseSetup),
     setup: warehouseSetup,
     operation: currentSetupOperation(),
+    // Ask's readiness as last checked (fix plan risk 3), for the Setup page's Ask line; null before a check.
+    askReadiness: askReadiness.latest(),
   });
   /** The app's setup, for its strip: a finished one-go setup, else the two stages in the strip's words. */
   const snowflakeAppSetupView = (): SnowflakeAppSetup & { stage?: WarehouseSetupStage; checks?: string } => {
@@ -16239,7 +16269,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const operation = operationVisible(currentSetupOperation() ?? (view.operationId ? operationCoordinator.get(view.operationId) : null), operationReader());
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       // The app's name fills in the grant SQL for a database or schema not listed yet (onboarding design P6).
-      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...(snowflakeAppOptions?.appName ? { appName: snowflakeAppOptions.appName } : {}), ...view, waitingDraft: waiting ?? null, operation }));
+      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...(snowflakeAppOptions?.appName ? { appName: snowflakeAppOptions.appName } : {}), ...view, waitingDraft: waiting ?? null, operation, askReadiness: askReadiness.latest() }));
       return;
     }
     // Try again, Start again after a Stop, or Check the data (the strip's buttons): a read that failed or was stopped
@@ -20693,6 +20723,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
+      }
+      return;
+    }
+
+    // ── Ask readiness — whether Ask's Snowflake Cortex is set up, and the one
+    //    line of SQL an admin runs when it is not. POST checks again now. ────
+    if ((req.method === 'GET' || req.method === 'POST') && path === '/api/ask/readiness') {
+      try {
+        const view = req.method === 'POST' ? await askReadiness.check({ fresh: true }) : await askReadiness.read();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(serializeJSON({ askReadiness: view }));
+      } catch (error) {
+        // The check itself never throws (a failure is a result); anything else goes to the log, not the page.
+        console.warn(`[zlens] Ask readiness could not be read: ${error instanceof Error ? error.message : String(error)}`);
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ error: 'ZLens could not check whether Ask is ready. Try again.' }));
       }
       return;
     }
@@ -54114,7 +54160,7 @@ async function testCortexProviderConfig(
     if (isCortexClaudeProvider(provider) && provider.route() === 'sql') {
       return {
         ok: true,
-        message: `${label} answered through Cortex SQL${details}. Snowflake refuses the Cortex REST API for this account, so ZLens asks Cortex through SQL (AI_COMPLETE): Ask works, with no prompt caching.`,
+        message: `${label} answered through Cortex SQL${details}. Snowflake keeps the Cortex REST API off for this account, as it does for most accounts, so ZLens asks Cortex through SQL (AI_COMPLETE): Ask works, with no prompt caching.`,
       };
     }
     return {

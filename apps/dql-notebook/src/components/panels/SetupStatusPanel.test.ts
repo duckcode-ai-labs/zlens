@@ -26,6 +26,21 @@ describe('the Setup page (onboarding design P5)', () => {
     expect(setupStageLines(base({ read: { state: 'failed', error: 'no access' } }, 'failed'))).toEqual([{ key: 'read', tone: 'caution', text: 'Reading names failed: no access' }]);
   });
 
+  it('says whether Ask\'s Snowflake Cortex is set up, after the ready line (fix plan risk 3)', () => {
+    const notReady = {
+      state: 'missing_grant' as const, headline: 'Ask is not ready: ZLens may not use Snowflake Cortex yet.', message: 'The role cannot use Cortex.',
+      fixIntro: 'An ACCOUNTADMIN runs this one line in Snowsight:', fixSql: 'GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;', checkedAt: '2026-11-26T18:00:00.000Z',
+    };
+    const lines = setupStageLines({ ...base({ checks: { state: 'stopped' } }, 'ready'), askReadiness: notReady });
+    expect(lines.map((line) => line.key)).toEqual(['read', 'ready', 'ask', 'checks']);
+    expect(lines[2]).toEqual({ key: 'ask', tone: 'caution', text: 'Ask is not ready: ZLens may not use Snowflake Cortex yet. The role cannot use Cortex. An ACCOUNTADMIN runs this one line in Snowsight: GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;' });
+    const ready = setupStageLines({ ...base({ checks: { state: 'stopped' } }, 'ready'), askReadiness: { state: 'ready', headline: 'Ask is ready: it uses claude-sonnet-5-5 through Cortex SQL (AI_COMPLETE).', checkedAt: '' } });
+    expect(ready[2]).toEqual({ key: 'ask', tone: 'done', text: 'Ask is ready: it uses claude-sonnet-5-5 through Cortex SQL (AI_COMPLETE).' });
+    // Not checked yet, or Ask does not use Cortex: no Ask line.
+    expect(setupStageLines({ ...base({ checks: { state: 'stopped' } }, 'ready'), askReadiness: null }).map((line) => line.key)).toEqual(['read', 'ready', 'checks']);
+    expect(setupStageLines({ ...base({ checks: { state: 'stopped' } }, 'ready'), askReadiness: { state: 'not_applicable' } }).map((line) => line.key)).toEqual(['read', 'ready', 'checks']);
+  });
+
   it('estimates the time left from the speed so far, and the credits on the app\'s X-Small warehouse', () => {
     const detail = { elapsedMs: 120_000, checks: { tablesChecked: 300, tables: 1200, joins: { done: 0, total: 0 }, largeTables: 0, resumed: 0 } };
     expect(checkEstimates({ detail }, true)).toBe('2 min so far · about 6 min left · about 0.03 credits (estimate)');

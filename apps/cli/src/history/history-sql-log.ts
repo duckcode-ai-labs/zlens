@@ -48,11 +48,16 @@ const BATCH = 200;
 /** The daily stop: at a stop, the log is written when the last write is this old. */
 const DAILY_MS = 20 * 3_600_000;
 
-export function sqlLogTable(appName: string): string | null {
+/** A table in the installed app's own `core` schema, named safely; null when the app's name cannot be. */
+export function appCoreTable(appName: string, table: string): string | null {
   const name = appName.trim();
   if (!name) return null;
   const app = IDENTIFIER.test(name) ? name : /^[^"\u0000-\u001f]+$/.test(name) ? `"${name}"` : null;
-  return app ? `${app}.CORE.HISTORY_LOG` : null;
+  return app ? `${app}.CORE.${table}` : null;
+}
+
+export function sqlLogTable(appName: string): string | null {
+  return appCoreTable(appName, 'HISTORY_LOG');
 }
 
 /** A Snowflake string literal: quotes doubled, backslashes kept as backslashes, control characters dropped. */

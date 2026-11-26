@@ -7,7 +7,7 @@ import {
   supportsReasoningEffort as providerSupportsReasoningEffort,
   type ReasoningEffort,
 } from '@zlens/agent';
-import { cortexSignIn, type CortexSignIn } from './cortex-sign-in.js';
+import { cortexModelInUse, cortexSignIn, type CortexSignIn } from './cortex-sign-in.js';
 
 export type ProviderSettingsId = 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom-openai' | 'claude-code' | 'codex' | 'cortex';
 
@@ -77,6 +77,15 @@ export interface RedactedProviderSettings {
   connectionSignIn?: CortexSignIn;
   /** Snowflake Cortex: the model it asks when none is named (CORTEX_DEFAULT_MODEL), so Settings can say which model is in use. */
   defaultModel?: string;
+  /**
+   * Snowflake Cortex: the model Ask uses now. It differs from the named or default model only when Cortex does not
+   * offer the default in the account's region and Ask fell back to another Claude model (`modelFallbackFrom`).
+   */
+  modelInUse?: string;
+  /** Snowflake Cortex: the default model Ask fell back from, when it did. */
+  modelFallbackFrom?: string;
+  /** Snowflake Cortex: how Ask reaches it, REST or SQL (`AI_COMPLETE`, the usual route when Snowflake keeps REST off). */
+  modelRoute?: 'rest' | 'sql';
 }
 
 export interface EffectiveProviderConfig {
@@ -231,6 +240,7 @@ function listAllProviderSettings(projectRoot: string): RedactedProviderSettings[
         ...(local?.connection ? { connection: local.connection } : {}),
         connectionSignIn: signIn,
         defaultModel: CORTEX_DEFAULT_MODEL,
+        ...cortexModelInUseFields(projectRoot, local?.connection, resolvedModel),
       };
     }
     const configured = id === 'ollama'
@@ -314,6 +324,16 @@ export function isCortexClaudeModel(model: string): boolean {
  * Why a Snowflake Cortex model is refused, in one plain sentence, or undefined when it may be used (a Claude model,
  * or none named: the default). Saving and testing say the same, and a test refuses before it calls Cortex.
  */
+/** Which model Ask uses through Cortex, for Settings (`modelInUse`, and `modelFallbackFrom` after a region fallback). */
+function cortexModelInUseFields(projectRoot: string, connection: string | undefined, model: string | undefined): { modelInUse?: string; modelFallbackFrom?: string; modelRoute?: 'rest' | 'sql' } {
+  try {
+    const inUse = cortexModelInUse(projectRoot, { ...(connection ? { connection } : {}), ...(model ? { model } : {}) });
+    return { modelInUse: inUse.model, ...(inUse.instead ? { modelFallbackFrom: inUse.instead } : {}), ...(inUse.route ? { modelRoute: inUse.route } : {}) };
+  } catch {
+    return {};
+  }
+}
+
 export function cortexModelRefusal(model: string | undefined): string | undefined {
   const name = model?.trim();
   if (!name || isCortexClaudeModel(name)) return undefined;

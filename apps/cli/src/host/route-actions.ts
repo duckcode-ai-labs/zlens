@@ -53,6 +53,8 @@ const ASK_ROUTES: ReadonlyArray<string | RegExp> = [
   '/api/semantic-query',
   '/api/llm/run',
   '/api/ai/sql-draft/preview',
+  // Checking again whether Ask's Snowflake Cortex is set up: one tiny model call, nothing written.
+  '/api/ask/readiness',
   // Building a notebook cell with AI returns SQL and writes nothing.
   '/api/ai/build/cell',
   // A recorded correction writes a candidate hint and its trace into the project (.dql/hints, .dql/traces): it is

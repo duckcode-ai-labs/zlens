@@ -119,6 +119,32 @@ describe('SnowflakeConnector bounded streaming', () => {
     expect(cancelled).toBe(true);
   });
 
+  it('cancels a statement still running in Snowflake when its signal aborts (Ask gave up on AI_COMPLETE)', async () => {
+    const connector = new SnowflakeConnector();
+    let cancelled = 0;
+    (connector as any).connection = {
+      execute: (options: Record<string, any>) => {
+        const statement = {
+          getStatementId: () => '01running',
+          // Snowflake ends a cancelled statement with an error.
+          cancel: (complete: () => void) => {
+            cancelled += 1;
+            complete();
+            queueMicrotask(() => options.complete(Object.assign(new Error('SQL execution canceled'), { code: '000604' }), statement));
+          },
+        };
+        return statement;
+      },
+    };
+    const controller = new AbortController();
+    const running = connector.execute('SELECT AI_COMPLETE(?, ?)', ['m', 'p'], { signal: controller.signal }).catch((caught) => caught);
+    await new Promise((done) => setTimeout(done, 5));
+    expect(cancelled).toBe(0);
+    controller.abort();
+    expect(await running).toBeInstanceOf(Error);
+    expect(cancelled).toBe(1);
+  });
+
   it('preserves Snowflake SQLSTATE, vendor code, query id, line, and position', async () => {
     const connector = new SnowflakeConnector();
     const statement = {

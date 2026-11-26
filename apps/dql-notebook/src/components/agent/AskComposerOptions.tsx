@@ -61,7 +61,8 @@ export function AskComposerOptions({ t, thinkingMode, onThinkingMode, research, 
 
   const active = THINKING_OPTIONS.find((option) => option.mode === thinkingMode) ?? THINKING_OPTIONS[0]!;
   const modelLabel = provider?.label ?? undefined;
-  const modelName = provider?.model ?? undefined;
+  // Cortex: the model Ask really uses (after a region fallback it is not the default), never silently.
+  const modelName = provider?.modelInUse ?? provider?.model ?? undefined;
 
   return (
     <div ref={rootRef} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 2 }}>

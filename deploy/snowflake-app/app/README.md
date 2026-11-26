@@ -229,6 +229,16 @@ After you add tables or schemas, run those grant lines again for them, then in Z
   $0.35 for one with hundreds of tables, the first time; after that only new text is embedded). Turn
   it off in **Settings » AI provider » Search**.
 - **Without `CORTEX_USER`** (step 4), Ask is off. Everything else works.
+- **Ask checks itself.** When ZLens starts, it asks Cortex for one word. If that fails, Ask, Settings and
+  the launcher say "Ask is not ready" with the one line an `ACCOUNTADMIN` runs: the `CORTEX_USER` grant with
+  your app's name, or the account's cross-region setting. While Ask is not ready, ZLens checks again every
+  few minutes for an hour; **Check again** over Ask checks at once. Where Snowflake keeps the Cortex REST API
+  off for the account, a working `AI_COMPLETE` counts as ready: nothing to do.
+- **When Claude Sonnet 5.5 is not offered to your account**, Ask uses the next Claude model Cortex offers
+  you (`claude-opus-5-5`, then `claude-sonnet-4-6`, then `claude-sonnet-4-5`), and **Settings » AI provider**
+  says "Ask uses" that model. A model you name there is never replaced.
+- **When Ask stops waiting** (its time limit, or you press Stop), ZLens cancels the Cortex query still
+  running on the app's warehouse, so the warehouse stops too.
 
 ## Operations
 
@@ -257,7 +267,7 @@ CALL ZLENS_APP.app_public.app_url();
 ```
 
 The launcher page (**Launch app**) uses three short calls instead, so it can show progress: the
-first reads ZLens's state, its address and the person it serves, and starts nothing; the second
+first reads ZLens's state, its address, the person it serves, and setup's status with whether Ask is ready, and starts nothing; the second
 lists, by name only, the databases ZLens can read (at most 5), so the page can say when none is
 granted yet; the third starts a stopped ZLens and returns at once. Any user of the app may call them:
 

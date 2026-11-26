@@ -1,13 +1,18 @@
 import { readSnowflakePrivateKey, readSnowflakeTokenFile, type ConnectionConfig, type QueryExecutor } from '@zlens/connectors';
 import {
+  CORTEX_DEFAULT_MODEL,
   CortexClaudeProvider,
   cortexBaseUrl,
+  cortexModelChoice,
+  cortexRoute,
   snowflakeHost,
   snowflakeKeyPairToken,
   snowflakeTokenFileToken,
   type CortexSqlRunner,
   type CortexToken,
 } from '@zlens/agent';
+import { longRequestSignal } from '../long-request.js';
+import { snowflakeAppSettingsFromEnv } from '../snowflake-app-settings.js';
 
 /**
  * SNOWFLAKE CORTEX SIGNS IN WITH THE PROJECT'S OWN SNOWFLAKE CONNECTION. There is
@@ -144,12 +149,32 @@ export function useCortexSqlExecutor(executor: Pick<QueryExecutor, 'executePosit
   cortexSqlExecutor = executor;
 }
 
-/** Cortex through SQL (`AI_COMPLETE`) on the same connection: the route when Snowflake refuses the REST API. */
-function cortexSql(executor: Pick<QueryExecutor, 'executePositional'>, connection: ConnectionConfig): CortexSqlRunner {
-  return async (sql, binds) => {
-    const result = await executor.executePositional(sql, binds, connection);
+/**
+ * Cortex through SQL (`AI_COMPLETE`) on the same connection: the route when Snowflake refuses the REST API. The
+ * request's signal goes to the Snowflake driver, which cancels the running statement when it aborts (Ask's deadline,
+ * the person's Stop, an abandoned long request), so the warehouse stops too.
+ */
+export function cortexSql(executor: Pick<QueryExecutor, 'executePositional'>, connection: ConnectionConfig): CortexSqlRunner {
+  return async (sql, binds, options) => {
+    const result = await executor.executePositional(sql, binds, connection, options?.signal ? { signal: options.signal } : undefined);
     return result.rows as Array<Record<string, unknown>>;
   };
+}
+
+/**
+ * The installed ZLens app's name (its database), from ZLENS_SNOWFLAKE_APP_NAME, so a "cannot use Cortex" message names
+ * the app in its grant line; outside the app, undefined.
+ */
+function installedAppName(): string | undefined {
+  return snowflakeAppSettingsFromEnv()?.appName;
+}
+
+/** Who the CORTEX_USER grant names: the installed app, else the role the connection signs in with. */
+export function cortexGrantee(connection: ConnectionConfig | null | undefined): { appName?: string; role?: string } {
+  const appName = installedAppName();
+  if (appName) return { appName };
+  const role = typeof connection?.role === 'string' ? connection.role.trim() : '';
+  return role && !/\$\{/.test(role) ? { role } : {};
 }
 
 /**
@@ -165,7 +190,26 @@ export function createCortexProvider(projectRoot: string, options: { connection?
     ...(options.model?.trim() ? { model: options.model.trim() } : {}),
     token: cortexToken(found.connection),
     ...(cortexSqlExecutor ? { sql: cortexSql(cortexSqlExecutor, found.connection) } : {}),
+    // A long request no one waits for any more ends its Cortex call (long-request.ts).
+    abandoned: longRequestSignal,
+    grantee: cortexGrantee(found.connection),
   });
+}
+
+/**
+ * The model Ask uses through Cortex for these settings: the one a person named, else the default, or the Claude
+ * model Ask fell back to when Cortex does not offer the default in the account's region (`instead`). Settings shows
+ * it, so a fallback is never silent.
+ */
+export function cortexModelInUse(projectRoot: string, options: { connection?: string; model?: string } = {}): { model: string; instead?: string; route?: 'rest' | 'sql' } {
+  const found = lookUp(projectRoot, options.connection);
+  const host = found.connection ? snowflakeHost(found.connection) : undefined;
+  // Through SQL (AI_COMPLETE) once this server has seen Snowflake keep the REST API off: the usual route.
+  const route = host ? { route: cortexRoute(host) } : {};
+  const named = options.model?.trim();
+  if (named) return { model: named, ...route };
+  const choice = host ? cortexModelChoice(host) : undefined;
+  return choice && choice.instead === CORTEX_DEFAULT_MODEL ? { model: choice.model, instead: choice.instead, ...route } : { model: CORTEX_DEFAULT_MODEL, ...route };
 }
 
 /**

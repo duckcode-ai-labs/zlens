@@ -17,6 +17,11 @@ Once the user is saved, the page also says when ZLens can read none of the accou
 lines, and which databases it can read once one is granted (V17 p8 tester: one press of Run ran 1 of the 8
 grant lines, and the page said "ZLens is ready" with no data granted).
 
+Once ZLens is ready, the page also says whether Ask is ready, as ZLens last checked it with one tiny Snowflake Cortex
+call: "Ask is ready", or "Ask is not ready" with the one line an ACCOUNTADMIN runs (the CORTEX_USER grant with this
+app's name, or the account's cross-region setting). It comes in setup's status (launcher_status()'s `setup`), in
+ZLens's own words, the same ZLens shows over Ask.
+
 It reads no customer data and calls nothing outside Snowflake: only the app's own procedures
 app_public.launcher_status(), app_public.launcher_data() (database names, never rows) and
 app_public.launcher_start(), and the app's name, the time and the warehouse this page runs on.
@@ -225,6 +230,55 @@ def clock(moment, later_seconds=0):
     return f"{moment:%H:%M} {zone}"
 
 
+def ask_readiness(setup):
+    """Ask's readiness as ZLens kept it in setup's status (core.setup_status), or None before ZLens has checked."""
+    raw = (setup or {}).get("ask_readiness")
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or not value.get("state") or not value.get("headline"):
+        return None
+    return {key: str(item) for key, item in value.items() if isinstance(item, str)}
+
+
+def checked_clock(value, moment):
+    """When ZLens checked Ask (ISO time, UTC), told like the page's own time: in the session's zone when known."""
+    try:
+        checked = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if checked.tzinfo is None:
+        return ""
+    if isinstance(moment, datetime.datetime) and moment.tzinfo is not None:
+        checked = checked.astimezone(moment.tzinfo)
+    return clock(checked)
+
+
+def show_ask(ask, setup_line, moment):
+    """Ask's Snowflake Cortex check (fix plan risk 3): ready, or not ready with the one line an admin runs.
+
+    The headline, the reason, the fix line and who runs it are ZLens's own words (the same ZLens shows over Ask), so
+    they are written in one place. Setup's line already says the headline when Ask is not ready; it is not repeated.
+    Nothing is shown before ZLens has checked.
+    """
+    if not ask:
+        return
+    when = checked_clock(ask.get("checkedAt"), moment)
+    checked_at = f" Checked at {when}." if when else ""
+    if ask["state"] == "ready":
+        st.caption(ask["headline"] + checked_at)
+        return
+    said = ask["headline"] in setup_line
+    reason = ask.get("message", "")
+    st.warning(reason if said and reason else f"**{ask['headline']}** {reason}".strip())
+    if ask.get("fixSql"):
+        if ask.get("fixIntro"):
+            st.caption(ask["fixIntro"])
+        st.code(ask["fixSql"], language="sql")
+    st.caption("ZLens checks again by itself every few minutes, and when someone presses Check again over Ask." + checked_at)
+
+
 def show_title():
     """The ZLens mark above the page's title. The page works without it."""
     try:
@@ -329,6 +383,7 @@ if name == "READY" and status["url"]:
     setup_line = str((status.get("setup") or {}).get("line") or "")
     if setup_line:
         st.info(setup_line)
+    show_ask(ask_readiness(status.get("setup")), setup_line, moment)
     st.link_button("Open ZLens", status["url"], type="primary")
     st.caption(
         "Opens in a new tab, where Snowflake asks you to sign in once. "

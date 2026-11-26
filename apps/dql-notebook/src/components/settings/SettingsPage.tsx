@@ -1198,7 +1198,7 @@ export function ProviderSettingsForm({
 const CORTEX_MODEL_PLACEHOLDER = 'claude-sonnet-5-5';
 
 /** Under a Model field: the model the saved settings ask ("In use: claude-sonnet-5-5 (the default)"). */
-export function ModelInUse({ provider, t }: { provider?: Pick<ProviderSettings, 'model' | 'defaultModel'>; t: Theme }) {
+export function ModelInUse({ provider, t }: { provider?: Pick<ProviderSettings, 'model' | 'defaultModel' | 'modelInUse' | 'modelFallbackFrom' | 'modelRoute'>; t: Theme }) {
   const line = modelInUseLine(provider);
   return line ? <span data-testid="provider-model-in-use" style={{ fontSize: 11, color: t.textMuted }}>{line}</span> : null;
 }

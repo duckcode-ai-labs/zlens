@@ -31,7 +31,10 @@ export interface CortexToken {
 
 /** Strips a scheme and anything after the host, so `https://x.snowflakecomputing.com/` reads as the host. */
 function bareHost(value: string): string {
-  return value.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  const host = value.trim().replace(/^https?:\/\//i, '');
+  // indexOf, not a regex: a regex over a value with many slashes is slow (CodeQL js/polynomial-redos).
+  const slash = host.indexOf('/');
+  return slash === -1 ? host : host.slice(0, slash);
 }
 
 /**
@@ -153,8 +156,66 @@ export function snowflakeTokenFileToken(input: {
   };
 }
 
-/** Runs one SQL statement with binds on the Snowflake connection Cortex signs in with; returns the rows. */
-export type CortexSqlRunner = (sql: string, binds: unknown[]) => Promise<Array<Record<string, unknown>>>;
+/**
+ * Runs one SQL statement with binds on the Snowflake connection Cortex signs in with; returns the rows. `signal`
+ * ends the statement: the runner must cancel it in Snowflake, so the warehouse stops too (the Snowflake driver
+ * cancels a running statement when its signal aborts).
+ */
+export type CortexSqlRunner = (sql: string, binds: unknown[], options?: { signal?: AbortSignal }) => Promise<Array<Record<string, unknown>>>;
+
+/**
+ * THE CLAUDE MODELS ASK FALLS BACK TO, in order, when Cortex does not offer the model ZLens chose itself in the
+ * account's region. Cortex reaches most Claude models only through cross-region inference, so which ones an account
+ * reaches depends on its CORTEX_ENABLED_CROSS_REGION setting. From Snowflake's "Model availability" table (checked
+ * 25 Nov 2026, https://docs.snowflake.com/en/user-guide/snowflake-cortex/model-availability):
+ * - claude-sonnet-5-5: Any region, AWS Global, AWS US, AWS EU, AWS APJ, AWS AU; not AWS JP (Japan's default).
+ * - claude-opus-5-5: the same, and AWS JP.
+ * - claude-sonnet-4-6: every AWS group (US, EU, APJ, JP, AU), and in-region in AWS Europe West 2 (London).
+ * - claude-sonnet-4-5: every AWS group, and AWS US Gov.
+ * No Claude model is offered through the Azure or Google Cloud groups, so an account whose setting allows only those,
+ * or is DISABLED (the default in São Paulo, the Middle East and Africa), needs its admin to change the setting.
+ */
+export const CORTEX_CLAUDE_FALLBACK_MODELS: readonly string[] = Object.freeze(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-sonnet-4-6', 'claude-sonnet-4-5']);
+
+/** The one statement that lets an installed ZLens app (or a role) use Cortex; only an ACCOUNTADMIN can run it. */
+export function cortexGrantStatement(grantee: { appName?: string; role?: string } = {}): string {
+  if (grantee.appName?.trim()) return `GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ${grantee.appName.trim()}`;
+  if (grantee.role?.trim()) return `GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO ROLE ${grantee.role.trim()}`;
+  return 'GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION <app name>';
+}
+
+/** The account setting that lets Cortex reach Claude in another Snowflake region; only an ACCOUNTADMIN can set it. */
+export const CORTEX_CROSS_REGION_STATEMENT = "ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'";
+
+/**
+ * The model Ask uses on a host after a fallback, and the one it was chosen instead of, per route: Cortex's REST
+ * Messages endpoint and SQL `AI_COMPLETE` need not offer the same model ids (live 25 Nov 2026: another Cortex
+ * endpoint answered "unknown model" for claude-sonnet-5-5 where /v1/messages took it), so a fallback found on one
+ * route is never assumed on the other. Kept for the process: the readiness check at start finds it again after a
+ * restart, and "Check again" forgets it, so an account whose admin has since allowed cross-region inference returns
+ * to the default.
+ */
+const modelChoices = new Map<string, { model: string; instead: string }>();
+
+function modelChoiceKey(host: string, route: 'rest' | 'sql'): string {
+  return `${bareHost(host).toLowerCase()}|${route}`;
+}
+
+/** The model Ask uses on this host (on its current route, or `route`) instead of the one ZLens chose, when Cortex did not offer that one. */
+export function cortexModelChoice(host: string, route: 'rest' | 'sql' = cortexRoute(host)): { model: string; instead: string } | undefined {
+  const choice = modelChoices.get(modelChoiceKey(host, route));
+  return choice ? { ...choice } : undefined;
+}
+
+/** Tests and "Check again": forget a fallback. */
+export function resetCortexModelChoice(host?: string): void {
+  if (!host) {
+    modelChoices.clear();
+    return;
+  }
+  modelChoices.delete(modelChoiceKey(host, 'rest'));
+  modelChoices.delete(modelChoiceKey(host, 'sql'));
+}
 
 /**
  * WHEN SNOWFLAKE REFUSES THE CORTEX REST API. An account (in practice, a whole organization) can be
@@ -226,12 +287,40 @@ function sseResponse(text: string, usage: { input_tokens: number; output_tokens:
   return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream', 'x-zlens-cortex-route': 'sql' } });
 }
 
+function abortError(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+}
+
+/** `work`, or the signal's reason as soon as it aborts: the caller stops waiting while Snowflake cancels the statement. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) {
+    work.catch(() => undefined);
+    return Promise.reject(abortError(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(abortError(signal));
+    signal.addEventListener('abort', abort, { once: true });
+    work.then(
+      (value) => { signal.removeEventListener('abort', abort); resolve(value); },
+      (error) => { signal.removeEventListener('abort', abort); reject(error); },
+    );
+  });
+}
+
 /**
  * One Messages request answered through `AI_COMPLETE` on the Snowflake connection, returned as the
  * Messages API would answer it (JSON, or server-sent events for a streamed request). Tool calls have
  * no SQL route, so a request with tools is refused with a plain reason.
+ *
+ * CANCEL ON GIVE-UP. When Ask stops waiting (its deadline, the person's Stop, or a long request no one polls any
+ * more), `signal` aborts: the runner cancels the statement in Snowflake, so the warehouse stops too, and this
+ * throws the abort at once instead of waiting for Snowflake to confirm. Before, the statement ran on to the
+ * driver's 120 s limit after Ask had given up.
  */
-export async function cortexSqlComplete(sql: CortexSqlRunner, requestBody: string): Promise<Response> {
+export async function cortexSqlComplete(sql: CortexSqlRunner, requestBody: string, options: { signal?: AbortSignal } = {}): Promise<Response> {
+  const signal = options.signal;
+  if (signal?.aborted) throw abortError(signal);
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(requestBody) as Record<string, unknown>;
@@ -249,17 +338,94 @@ export async function cortexSqlComplete(sql: CortexSqlRunner, requestBody: strin
   let text = '';
   let usage = { input_tokens: 0, output_tokens: 0 };
   try {
-    const rows = await sql('SELECT AI_COMPLETE(model => ?, prompt => ?, model_parameters => PARSE_JSON(?), show_details => TRUE) AS R', [model, prompt, JSON.stringify(parameters)]);
+    const statement = 'SELECT AI_COMPLETE(model => ?, prompt => ?, model_parameters => PARSE_JSON(?), show_details => TRUE) AS R';
+    const binds = [model, prompt, JSON.stringify(parameters)];
+    const rows = await untilAborted(signal ? sql(statement, binds, { signal }) : sql(statement, binds), signal);
     const raw = rows[0]?.R ?? rows[0]?.r ?? Object.values(rows[0] ?? {})[0];
     const detail = (typeof raw === 'string' ? JSON.parse(raw) : raw) as { choices?: Array<{ messages?: string }>; usage?: { prompt_tokens?: number; completion_tokens?: number } } | undefined;
     text = detail?.choices?.[0]?.messages ?? '';
     usage = { input_tokens: detail?.usage?.prompt_tokens ?? 0, output_tokens: detail?.usage?.completion_tokens ?? 0 };
   } catch (error) {
-    const message = error instanceof Error ? error.message.split('\n')[0] : String(error);
+    if (signal?.aborted) throw abortError(signal);
+    // One line: Snowflake can put the reason on the line after "SQL compilation error:".
+    const message = (error instanceof Error ? error.message : String(error)).split('\n').map((line) => line.trim()).filter(Boolean).join(' ').slice(0, 500);
     return jsonResponse(502, { type: 'error', error: { type: 'api_error', message: `Cortex through SQL failed: ${message}` } });
   }
   if (body.stream === true) return sseResponse(text, usage, model);
   return jsonResponse(200, { id: 'cortex-sql', type: 'message', role: 'assistant', model, content: [{ type: 'text', text }], stop_reason: 'end_turn', usage });
+}
+
+type PreparedRequest = { url: string; body: string; headers: Record<string, string> };
+type SendInit = Omit<RequestInit, 'body' | 'headers'>;
+
+/** One request on this host's current route: REST, or `AI_COMPLETE` while a REST refusal is remembered. */
+async function sendCortexOnce(sql: CortexSqlRunner | undefined, host: string, prepared: PreparedRequest, body: string, init: SendInit): Promise<Response> {
+  const signal = init.signal ?? undefined;
+  if (sql && cortexRoute(host) === 'sql') return cortexSqlComplete(sql, body, signal ? { signal } : {});
+  const response = await fetch(prepared.url, { ...init, headers: prepared.headers, body });
+  if (!sql || response.status !== 403) return response;
+  const text = await response.clone().text().catch(() => '');
+  if (!isCortexRestRefusal(response.status, text)) return response;
+  rememberRestRefusal(host);
+  console.warn(`[zlens] Snowflake refuses the Cortex REST API for ${bareHost(host)} (003001): answering through Cortex SQL (AI_COMPLETE) for ${CORTEX_REST_RETRY_AFTER_MS / 60_000} minutes, then trying REST again.`);
+  return cortexSqlComplete(sql, body, signal ? { signal } : {});
+}
+
+/** Whether a response is Cortex saying it does not offer the model asked for (here, in this region). */
+async function offersNotThisModel(response: Response): Promise<boolean> {
+  if (response.ok || ![400, 404, 502].includes(response.status)) return false;
+  const text = await response.clone().text().catch(() => '');
+  const kind = cortexFailureKind(`claude: ${response.status} ${text}`)?.kind;
+  return kind === 'region' || kind === 'model';
+}
+
+function withModel(body: string, model: string): string {
+  try {
+    return JSON.stringify({ ...(JSON.parse(body) as Record<string, unknown>), model });
+  } catch {
+    return body;
+  }
+}
+
+function modelOf(body: string): string | undefined {
+  try {
+    const model = (JSON.parse(body) as { model?: unknown }).model;
+    return typeof model === 'string' ? model : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * MODEL FALLBACK BY REGION. The model ZLens chose itself (no one named one) may not be offered in the account's
+ * region: the next Claude model in CORTEX_CLAUDE_FALLBACK_MODELS is asked instead, and the first one Cortex answers
+ * with is remembered for the host, so later requests go to it directly. Settings and the readiness check say which
+ * model Ask uses, so the switch is never silent. When no model is offered, the first refusal is returned: the
+ * readiness check then names the account setting the admin changes.
+ */
+async function sendWithModelFallback(host: string, requested: string, body: string, once: (body: string) => Promise<Response>): Promise<Response> {
+  const route = cortexRoute(host);
+  const remembered = modelChoices.get(modelChoiceKey(host, route));
+  const at = CORTEX_CLAUDE_FALLBACK_MODELS.indexOf(requested);
+  const after = at >= 0 ? CORTEX_CLAUDE_FALLBACK_MODELS.slice(at + 1) : CORTEX_CLAUDE_FALLBACK_MODELS;
+  const candidates = [...new Set([remembered?.instead === requested ? remembered.model : undefined, requested, ...after].filter((model): model is string => Boolean(model)))];
+  let first: Response | undefined;
+  for (const model of candidates) {
+    const response = await once(model === requested ? body : withModel(body, model));
+    if (!(await offersNotThisModel(response))) {
+      // Remembered for the route that answered: a REST refusal can move a request to SQL on the way.
+      const key = modelChoiceKey(host, response.headers.get('x-zlens-cortex-route') === 'sql' ? 'sql' : 'rest');
+      if (model === requested) {
+        modelChoices.delete(key);
+      } else if (modelChoices.get(key)?.model !== model) {
+        modelChoices.set(key, { model, instead: requested });
+        console.warn(`[zlens] Snowflake Cortex does not offer ${requested} to this account here: Ask uses ${model}.`);
+      }
+      return response;
+    }
+    first ??= response;
+  }
+  return first!;
 }
 
 /**
@@ -267,9 +433,18 @@ export async function cortexSqlComplete(sql: CortexSqlRunner, requestBody: strin
  * place of an Anthropic API key. The URL is the one ClaudeProvider built from the
  * Cortex base URL; the body keeps `model`, and a streamed request stays streamed.
  * With a SQL runner it also answers through `AI_COMPLETE` when the account
- * refuses the REST API (see `isCortexRestRefusal`).
+ * refuses the REST API (see `isCortexRestRefusal`). With `automaticModel`, a request
+ * for that model falls back to another Claude model when Cortex does not offer it
+ * in the account's region (see `sendWithModelFallback`). `abandoned` is a second
+ * signal that ends a request: a long request no one waits for any more.
  */
-export function cortexClaudeTransport(options: { token: () => Promise<CortexToken>; sql?: CortexSqlRunner; host?: string }): ProviderHttpTransport {
+export function cortexClaudeTransport(options: {
+  token: () => Promise<CortexToken>;
+  sql?: CortexSqlRunner;
+  host?: string;
+  automaticModel?: string;
+  abandoned?: () => AbortSignal | undefined;
+}): ProviderHttpTransport {
   const transport: ProviderHttpTransport = {
     async prepare({ url, body, headers }) {
       if (typeof body.model !== 'string' || !body.model) throw new Error('cortex: a model id is required');
@@ -288,20 +463,17 @@ export function cortexClaudeTransport(options: { token: () => Promise<CortexToke
       return { url, body: JSON.stringify(body), headers: sent };
     },
   };
-  const sql = options.sql;
-  if (sql) {
-    transport.send = async (prepared, init) => {
-      const host = options.host ?? new URL(prepared.url).host;
-      if (cortexRoute(host) === 'sql') return cortexSqlComplete(sql, prepared.body);
-      const response = await fetch(prepared.url, { ...init, headers: prepared.headers, body: prepared.body });
-      if (response.status !== 403) return response;
-      const text = await response.clone().text().catch(() => '');
-      if (!isCortexRestRefusal(response.status, text)) return response;
-      rememberRestRefusal(host);
-      console.warn(`[zlens] Snowflake refuses the Cortex REST API for ${bareHost(host)} (003001): answering through Cortex SQL (AI_COMPLETE) for ${CORTEX_REST_RETRY_AFTER_MS / 60_000} minutes, then trying REST again.`);
-      return cortexSqlComplete(sql, prepared.body);
-    };
-  }
+  transport.send = async (prepared, init) => {
+    const host = options.host ?? new URL(prepared.url).host;
+    const abandoned = options.abandoned?.();
+    const own = init.signal ?? undefined;
+    const signal = abandoned && own ? AbortSignal.any([own, abandoned]) : (abandoned ?? own);
+    const sendInit: SendInit = { ...init, ...(signal ? { signal } : {}) };
+    const once = (body: string) => sendCortexOnce(options.sql, host, prepared, body, sendInit);
+    const requested = modelOf(prepared.body);
+    if (!options.automaticModel || requested !== options.automaticModel) return once(prepared.body);
+    return sendWithModelFallback(host, requested, prepared.body, once);
+  };
   return transport;
 }
 
@@ -309,9 +481,17 @@ export interface CortexClaudeOptions {
   /** The Snowflake account's host (see `snowflakeHost`). */
   host: string;
   model?: string;
+  /**
+   * Whether ZLens chose the model itself (no one named one; the default when `model` is unset). Only such a model
+   * falls back to another Claude model when Cortex does not offer it in the account's region: a model a person
+   * named stays theirs, and the readiness check says it is not offered.
+   */
+  automaticModel?: boolean;
   token: () => Promise<CortexToken>;
   /** Runs SQL on the same Snowflake connection: the route when the account refuses the REST API. */
   sql?: CortexSqlRunner;
+  /** A second signal that ends every request while it is set: a long request no one waits for any more. */
+  abandoned?: () => AbortSignal | undefined;
 }
 
 /**
@@ -320,10 +500,26 @@ export interface CortexClaudeOptions {
  * Anthropic's own API; `via` lets a host tell the two apart.
  */
 /**
- * A Cortex failure in plain words (approved design D5, 2026-11-09), or undefined when the raw message is
- * already the plainest there is. The HTTP status stays in the text: the run's diagnostics classify by it.
+ * What kind of Cortex failure a provider error is:
+ * - `grant`: the role (or the installed app) may not use Cortex: SNOWFLAKE.CORTEX_USER is missing. Through SQL,
+ *   `AI_COMPLETE` is an unknown function or not authorized; through REST, a 403 that is not the 003001 refusal
+ *   (Snowflake's REST docs: "the default role ... does not have the snowflake.cortex_user database role").
+ * - `region`: the model is not offered in the account's region (cross-region inference would reach it).
+ * - `model`: Cortex does not know the model (REST: 400 "unknown model").
+ * - `tools`, `sql_failed`, `rest_refused`: the REST API is refused (403 003001), and the SQL route could not help.
+ * Undefined for anything else (a timeout, a rate limit), which stays as Snowflake said it.
  */
-export function cortexFailureInWords(message: string): string | undefined {
+export type CortexFailureKind = 'grant' | 'region' | 'model' | 'tools' | 'sql_failed' | 'rest_refused';
+
+export interface CortexFailure {
+  kind: CortexFailureKind;
+  /** The HTTP status of the provider's error, when it had one. */
+  status?: number;
+  /** Snowflake's own message, out of its JSON. */
+  detail: string;
+}
+
+export function cortexFailureKind(message: string): CortexFailure | undefined {
   const raw = /^claude: (\d{3}) ([\s\S]*)$/.exec(message.trim());
   const status = raw ? Number(raw[1]) : undefined;
   let detail = raw ? raw[2]! : message;
@@ -336,31 +532,59 @@ export function cortexFailureInWords(message: string): string | undefined {
   }
   // Matched on the message and the whole body: Snowflake puts the error code beside the message.
   const text = `${detail} ${raw ? raw[2] : ''}`.toLowerCase();
-  const http = status ? ` (HTTP ${status})` : '';
-  if (/ai_complete/.test(text) && /unknown function|does not exist|not authorized|insufficient privileges/.test(text)) {
-    return 'The Snowflake role ZLens signs in with cannot use Cortex. Ask your Snowflake admin to grant it the SNOWFLAKE.CORTEX_USER database role'
-      + ' (for the ZLens app: GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION <app name>)' + (http || ' (HTTP 403)') + '.';
-  }
-  if (/not available in (?:this|your) region|unavailable in (?:this|your) region|cross.?region/.test(text)) {
-    return 'This Claude model is not offered in your Snowflake region. Ask your Snowflake admin to allow cross-region inference'
-      + " (ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION'), or pick another model in Settings » AI" + http + '.';
-  }
-  if (/tool calls have no route through cortex sql/.test(text)) {
-    return 'Snowflake refuses the Cortex REST API for this account, and this step needs tool calls, which Cortex through SQL cannot make.'
-      + ' Ask Snowflake support to enable the Cortex REST API' + http + '.';
-  }
-  if (/cortex through sql failed/.test(text)) {
-    return `Snowflake refuses the Cortex REST API for this account, and Cortex through SQL failed too: ${detail.replace(/^cortex through sql failed:\s*/i, '').replace(/\.\s*$/, '')}${http}.`;
-  }
-  if (status === 403 && /003001|not allowed to access this endpoint/.test(text)) {
-    return 'Snowflake refuses the Cortex REST API for this account (HTTP 403, error 003001). Ask Snowflake support to enable it.';
-  }
+  const failure = (kind: CortexFailureKind): CortexFailure => ({ kind, ...(status ? { status } : {}), detail });
+  const restRefusal = /003001|not allowed to access this endpoint/.test(text);
+  if (/not available in (?:this|your) region|unavailable in (?:this|your) region|not (?:available|offered) in (?:the|this|your) (?:account'?s )?region|cross.?region/.test(text)) return failure('region');
+  if (/unknown model|invalid model|not a claude model|model\b[^.]{0,80}?\b(?:does not exist|not found|is not supported)/.test(text)) return failure('model');
+  if (/ai_complete/.test(text) && /unknown function|does not exist|not authorized|insufficient privileges/.test(text)) return failure('grant');
+  if (/cortex_user/.test(text) && !restRefusal) return failure('grant');
+  if (status === 403 && !restRefusal && /not authori[sz]ed|insufficient privileges|does not have|access denied|permission/.test(text)) return failure('grant');
+  if (/tool calls have no route through cortex sql/.test(text)) return failure('tools');
+  if (/cortex through sql failed/.test(text)) return failure('sql_failed');
+  if (status === 403 && restRefusal) return failure('rest_refused');
   return undefined;
 }
 
-function inPlainWords(error: unknown): unknown {
+/**
+ * A Cortex failure in plain words (approved design D5, 2026-11-09), or undefined when the raw message is
+ * already the plainest there is. The HTTP status stays in the text: the run's diagnostics classify by it.
+ * `grantee` fills in the grant statement: the installed app's name, else the role ZLens signs in with.
+ */
+export function cortexFailureInWords(message: string, grantee: { appName?: string; role?: string } = {}): string | undefined {
+  const failure = cortexFailureKind(message);
+  return failure ? cortexFailureWords(failure, grantee) : undefined;
+}
+
+/** The words for a classified failure (see cortexFailureInWords). */
+export function cortexFailureWords(failure: CortexFailure, grantee: { appName?: string; role?: string } = {}): string {
+  const http = failure.status ? ` (HTTP ${failure.status})` : '';
+  switch (failure.kind) {
+    case 'grant': {
+      const statement = cortexGrantStatement(grantee);
+      const where = grantee.appName?.trim() || !grantee.role?.trim() ? 'for the ZLens app' : 'for this role';
+      return 'The Snowflake role ZLens signs in with cannot use Cortex. Ask your Snowflake admin to grant it the SNOWFLAKE.CORTEX_USER database role'
+        + ` (${where}: ${statement})` + (http || ' (HTTP 403)') + '.';
+    }
+    case 'region':
+      return 'This Claude model is not offered in your Snowflake region. Ask your Snowflake admin to allow cross-region inference'
+        + ` (${CORTEX_CROSS_REGION_STATEMENT}), or pick another model in Settings » AI` + http + '.';
+    case 'model':
+      return 'Snowflake Cortex does not offer this Claude model in your account. Pick another Claude model in Settings » AI,'
+        + ` or leave the model empty to use ${CORTEX_DEFAULT_MODEL}` + http + '.';
+    case 'tools':
+      return 'This step needs tool calls, which Cortex through SQL (AI_COMPLETE) cannot make, and Snowflake keeps the Cortex REST API off for this account'
+        + ' (error 003001, as it does for most accounts). Snowflake support can turn the REST API on' + http + '.';
+    case 'sql_failed':
+      return `Cortex through SQL (AI_COMPLETE) failed: ${failure.detail.replace(/^cortex through sql failed:\s*/i, '').replace(/\.\s*$/, '')}${http}.`;
+    case 'rest_refused':
+      return 'Snowflake keeps the Cortex REST API off for this account (HTTP 403, error 003001), as it does for most accounts, and here ZLens has no'
+        + ' Snowflake connection to ask Cortex through SQL (AI_COMPLETE) instead, the usual route. Ask from the ZLens server or app.';
+  }
+}
+
+function inPlainWords(error: unknown, grantee: { appName?: string; role?: string } = {}): unknown {
   if (!(error instanceof Error)) return error;
-  const words = cortexFailureInWords(error.message);
+  const words = cortexFailureInWords(error.message, grantee);
   if (!words) return error;
   return Object.assign(new Error(words, { cause: error }), (error as { code?: unknown }).code !== undefined ? { code: (error as { code?: unknown }).code } : {});
 }
@@ -369,10 +593,31 @@ export class CortexClaudeProvider extends ClaudeProvider {
   readonly via = 'snowflake-cortex' as const;
   /** The Snowflake account host every request goes to. */
   readonly host: string;
+  /** The model asked for: the one a person named, else CORTEX_DEFAULT_MODEL. */
+  readonly requestedModel: string;
+  /** Whether ZLens chose `requestedModel` itself, so it may fall back to another Claude model (see CORTEX_CLAUDE_FALLBACK_MODELS). */
+  readonly automaticModel: boolean;
+  /** Who the grant in a "cannot use Cortex" message names: the installed app, else the role. */
+  readonly grantee: { appName?: string; role?: string };
 
-  constructor(options: CortexClaudeOptions) {
-    super({ baseUrl: cortexBaseUrl(options.host), model: options.model?.trim() || CORTEX_DEFAULT_MODEL, transport: cortexClaudeTransport({ ...options, host: options.host }) });
+  constructor(options: CortexClaudeOptions & { grantee?: { appName?: string; role?: string } }) {
+    const model = options.model?.trim() || CORTEX_DEFAULT_MODEL;
+    const automaticModel = options.automaticModel ?? !options.model?.trim();
+    super({
+      baseUrl: cortexBaseUrl(options.host),
+      model,
+      transport: cortexClaudeTransport({
+        token: options.token,
+        host: options.host,
+        ...(options.sql ? { sql: options.sql } : {}),
+        ...(options.abandoned ? { abandoned: options.abandoned } : {}),
+        ...(automaticModel ? { automaticModel: model } : {}),
+      }),
+    });
     this.host = bareHost(options.host);
+    this.requestedModel = model;
+    this.automaticModel = automaticModel;
+    this.grantee = { ...options.grantee };
   }
 
   /** How this provider's requests are answered right now: through the REST API, or through SQL after a refusal. */
@@ -380,17 +625,23 @@ export class CortexClaudeProvider extends ClaudeProvider {
     return cortexRoute(this.host);
   }
 
+  /** The model Ask uses now, and the one it replaced when Cortex did not offer that one in the account's region. */
+  modelInUse(): { model: string; instead?: string } {
+    const choice = this.automaticModel ? cortexModelChoice(this.host) : undefined;
+    return choice && choice.instead === this.requestedModel ? { model: choice.model, instead: choice.instead } : { model: this.requestedModel };
+  }
+
   // Failures in plain words, not Snowflake's raw JSON.
   override async generate(...args: Parameters<ClaudeProvider['generate']>): ReturnType<ClaudeProvider['generate']> {
-    try { return await super.generate(...args); } catch (error) { throw inPlainWords(error); }
+    try { return await super.generate(...args); } catch (error) { throw inPlainWords(error, this.grantee); }
   }
 
   override async generateWithTools(...args: Parameters<ClaudeProvider['generateWithTools']>): ReturnType<ClaudeProvider['generateWithTools']> {
-    try { return await super.generateWithTools(...args); } catch (error) { throw inPlainWords(error); }
+    try { return await super.generateWithTools(...args); } catch (error) { throw inPlainWords(error, this.grantee); }
   }
 
   override async generateStream(...args: Parameters<ClaudeProvider['generateStream']>): ReturnType<ClaudeProvider['generateStream']> {
-    try { return await super.generateStream(...args); } catch (error) { throw inPlainWords(error); }
+    try { return await super.generateStream(...args); } catch (error) { throw inPlainWords(error, this.grantee); }
   }
 }
 
