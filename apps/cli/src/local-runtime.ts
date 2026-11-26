@@ -58,6 +58,7 @@ import {
 } from './local-operation-coordinator.js';
 import { ProjectRefreshCoordinator } from './project-refresh-coordinator.js';
 import { SetupOperationProgress } from './setup-operation-progress.js';
+import { CheckStatementFailure, SetupCheckCache } from './setup-check-cache.js';
 import {
   readWarehouseSetupState,
   settleInterruptedStages,
@@ -931,6 +932,7 @@ import {
   type ConnectionMetadataScopeInput,
   type ConnectionMetadataScopeV1,
   type WarehouseReadProgress,
+  CHECK_ROW_BUDGET,
 } from './warehouse-metadata.js';
 import { readWarehouseCatalogRelations, syncWarehouseCatalog, type LakeSizesSummary } from './warehouse-catalog-sync.js';
 import { dbtModelSnapshot, dbtWarehouseNodes, dbtWarehouseScopes, readDbtManifest } from './dbt-model-discovery.js';
@@ -960,7 +962,7 @@ import {
   markSampledFacts,
   viewOverSmallTables,
 } from './warehouse-model-discovery.js';
-import { boundedReads } from './read-budget.js';
+import { boundedReads, relationsNamedIn } from './read-budget.js';
 import {
   NotebookDatasetWorkspace,
   type DatasetSource,
@@ -15383,7 +15385,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
   // Modeling » Draft from warehouse, callable on its own: the route below, and the ZLens app for Snowflake
   // drafting its models by itself after its first sync.
-  const draftWarehouseProposal = async (body: { validate?: boolean; queryHistory?: boolean; domain?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' }, snapshot: ReturnType<typeof projectSnapshot>, signal?: AbortSignal) => {
+  const draftWarehouseProposal = async (body: { validate?: boolean; queryHistory?: boolean; domain?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' }, snapshot: ReturnType<typeof projectSnapshot>, signal?: AbortSignal, setupChecks?: SetupCheckOptions) => {
     // Staging copies of a final table are left out unless the person asks
     // for them ("Show staging tables"), so the map has one Customer.
     const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
@@ -15393,7 +15395,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const projectMode = modelingModeOf(loadProjectConfig(projectRoot));
     const report = projectMode === 'dbt-first' || (projectMode === 'hybrid' && body.source === 'dbt')
       ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, scope: draftScopeFromBody(body.scope), executor })
-      : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor, ...(signal ? { signal } : {}) });
+      : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor, ...(signal ? { signal } : {}), ...(setupChecks ? { setup: setupChecks } : {}) });
     // Stopped: no draft is written from a half-checked report.
     signal?.throwIfAborted();
     // New Domains and subject areas are created by the proposal's own scope
@@ -15416,11 +15418,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           `warehouse relation ${entity?.relation ?? change.value.dbtModel}`,
           ...(entity?.grainSource === 'primary_key' ? [`declared primary key ${entity.grain}`] : entity?.grainSource === 'unique_column' ? [`${entity.grain} is unique on the warehouse`] : []),
           ...(entity?.useInstead ? [`use ${tableName(entity.useInstead.relation)} instead: ${entity.useInstead.reason}`] : []),
+          // A table over the row budget was checked on a block sample (onboarding design P4): the review says so.
+          ...(entity?.sampled ? [`checked on ${entity.sampled}`] : []),
         ];
       }
       if (change.operation === 'upsert_relationship') {
         const relationship = report.relationships.find((item) => item.id === change.value.id && item.domain === change.value.domain);
-        return [...(relationship?.evidence.map((item) => item.reason) ?? []), ...(relationship?.validation ? [`warehouse check: ${relationship.validation.message}`] : [])];
+        return [...(relationship?.evidence.map((item) => item.reason) ?? []), ...(relationship?.validation ? [`warehouse check: ${relationship.validation.message}`] : []), ...(relationship?.sampled ? [`checked on ${relationship.sampled}`] : [])];
       }
       if (change.operation === 'upsert_rule' && change.value.evidence) return [`measured on the warehouse: ${change.value.evidence.query}`];
       return [`warehouse catalog ${report.catalogFingerprint.slice(0, 12)}`];
@@ -15529,9 +15533,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   //    land the drafts wait for review.
   // Each is a background operation (Stop cancels it within seconds); what they did is kept in
   // .dql/local/warehouse-setup.json. A stage running when ZLens stopped did not finish, and says so.
+  // Checks that were running when ZLens stopped (a restart, the idle stop, an upgrade) pick up where they were:
+  // their answers so far are kept, so the run asks only what it had not (onboarding design P4).
+  let resumeChecksOnStart = false;
   let warehouseSetup: WarehouseSetupStateV1 | null = (() => {
     const saved = readWarehouseSetupState(projectRoot);
     if (!saved) return null;
+    resumeChecksOnStart = saved.read.state === 'done' && saved.checks?.state === 'running';
     const settled = settleInterruptedStages(saved, () => false);
     if (settled !== saved) writeWarehouseSetupState(projectRoot, settled);
     return settled;
@@ -15549,11 +15557,18 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return id ? operationCoordinator.get(id) : null;
   };
   /** The data checks and the search index, in the background (stage 2). Null when there is nothing read to check. */
-  const startSetupCheck = (): LocalOperation | null => {
+  const startSetupCheck = (options: { fresh?: boolean; anyway?: string[] } = {}): LocalOperation | null => {
     const state = warehouseSetup;
     if (!state || state.read.state !== 'done') return null;
     if (state.checks?.state === 'running' && state.checks.operationId) return operationCoordinator.get(state.checks.operationId);
     const database = state.scopes[0]?.catalogOrDatabase;
+    // The answers kept from an earlier run on this catalog: a resume asks none of them again (onboarding design P4).
+    const catalog = (() => { try { return readWarehouseCatalog(projectRoot).snapshot; } catch { return undefined; } })();
+    const cache = SetupCheckCache.open(projectRoot, catalog?.fingerprint ?? state.read.at ?? 'catalog');
+    if (options.fresh) cache.reset();
+    if (options.anyway?.length) cache.forgetFailures(options.anyway);
+    const inScope = catalog?.relations ?? [];
+    const largeTables = inScope.filter((relation) => relation.kind === 'table' && (relation.rowCountEstimate ?? 0) > CHECK_ROW_BUDGET).length;
     const operation = operationCoordinator.create({
       type: 'warehouse-check',
       scope: `warehouse-setup:${state.connectionId}`,
@@ -15564,13 +15579,39 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const startedAt = new Date().toISOString();
     saveWarehouseSetup({ ...state, checks: { state: 'running', operationId: operation.id, startedAt } });
     let outcome: { proposalId?: string; drafted: number; search: 'meaning' | 'words'; searchNote?: string } | undefined;
+    let problems: SetupCheckProblem[] = [];
+    let sampledTables = 0;
+    let resumed = 0;
     void operationCoordinator.run(operation.id, async (signal, report) => {
       const progress = new SetupOperationProgress(report, { ...(database ? { database } : {}) });
       const stopHeartbeat = progress.heartbeat();
       try {
         progress.phase('check', { tables: state.read.relations ?? 0, schemas: state.scopes.reduce((count, scope) => count + scope.schemas.length, 0) });
-        const { report: drafted, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot(), signal);
+        const known = new Map(inScope.map((relation) => [relation.relation.toLowerCase(), relation.relation]));
+        const touched = new Set<string>();
+        const counts = { tablesChecked: 0, tables: inScope.length, keys: { done: 0, total: 0 }, joins: { done: 0, total: 0 }, largeTables, resumed: 0 };
+        progress.update({ checks: counts });
+        const setupChecks: SetupCheckOptions = {
+          rowBudget: CHECK_ROW_BUDGET,
+          // "Check it anyway" lifts the background limit for the tables named.
+          statementDeadlineMs: options.anyway?.length ? 15 * 60_000 : SETUP_CHECK_STATEMENT_MS,
+          cache,
+          onProgress: (step) => {
+            counts[step.kind] = { done: step.done, total: step.total };
+          },
+          onStatement: (relations) => {
+            for (const relation of relations) if (known.has(relation.toLowerCase())) touched.add(relation.toLowerCase());
+            counts.tablesChecked = touched.size;
+            counts.resumed = cache.resumed;
+            progress.update({ checks: counts });
+          },
+        };
+        const { report: drafted, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot(), signal, setupChecks);
         signal.throwIfAborted();
+        // What could not be checked, by table, for the Setup page (onboarding design P4, P5).
+        problems = setupCheckProblems(drafted, cache, CHECK_ROW_BUDGET, SETUP_CHECK_STATEMENT_MS);
+        sampledTables = (drafted.readNotes ?? []).filter((note) => note.kind === 'sampled').length;
+        resumed = cache.resumed;
         // Meaning search through the configured embedder (Cortex in the app, approved design S3): a refresh gives
         // the embedder only a few seconds, so the first index is built here, whole. Words search works meanwhile.
         const embedder = projectEmbeddingProvider(projectRoot);
@@ -15593,13 +15634,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         stopHeartbeat();
       }
     }).then(() => {
+      // ZLens is closing: the stage stays `running` on disk, and the next start resumes it.
+      if (runtimeClosing) return;
       const final = operationCoordinator.get(operation.id);
       const latest = warehouseSetup;
       // A new read replaced this check meanwhile: its outcome is no one's now.
       if (!latest || latest.checks?.operationId !== operation.id) return;
       const at = new Date().toISOString();
       if (final?.status === 'succeeded' && outcome) {
-        saveWarehouseSetup({ ...latest, checks: { state: 'done', operationId: operation.id, startedAt, at, ...outcome } });
+        saveWarehouseSetup({ ...latest, checks: { state: 'done', operationId: operation.id, startedAt, at, ...outcome, problems, sampled: sampledTables, resumed } });
         if (snowflakeApp && database) {
           // The app's own record of a finished setup: the strip points to the drafts, and an upgrade drafts nothing again.
           snowflakeAppSetup = {
@@ -15633,6 +15676,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     });
     return operation;
   };
+  if (resumeChecksOnStart) {
+    const timer = setTimeout(() => {
+      if (runtimeClosing) return;
+      console.log('[zlens] Resuming the background data checks where they stopped.');
+      startSetupCheck();
+    }, 1_000);
+    timer.unref?.();
+  }
   /**
    * Read the names of what the person chose (stage 1). A new read replaces the setup before it: a check still
    * running is stopped, since it checks what was read before.
@@ -15704,6 +15755,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         stopHeartbeat();
       }
     }).then(() => {
+      if (runtimeClosing) return;
       const final = operationCoordinator.get(operation.id);
       const latest = warehouseSetup;
       if (!latest || latest.read.operationId !== operation.id) return;
@@ -30624,7 +30676,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         return;
       }
       if (action === 'check' && req.method === 'POST') {
-        const operation = startSetupCheck();
+        // `fresh`: ask the warehouse everything again; `anyway`: check these tables without the background time limit.
+        const body = await readJSON(req).catch(() => ({})) as { fresh?: boolean; anyway?: unknown };
+        const anyway = Array.isArray(body.anyway) ? body.anyway.filter((item): item is string => typeof item === 'string').slice(0, 200) : undefined;
+        const operation = startSetupCheck({ ...(body.fresh === true ? { fresh: true } : {}), ...(anyway?.length ? { anyway } : {}) });
         if (!operation) {
           send(409, { code: 'SETUP_READ_FIRST', error: 'Read the names of the chosen schemas first.' });
           return;
@@ -40218,6 +40273,8 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   executor?: QueryExecutor;
   /** Cancels the check running and stops the ones after it (onboarding design P2). */
   signal?: AbortSignal;
+  /** The background setup's checks: row budget, statement time limit, kept answers, progress (onboarding design P4). */
+  setup?: SetupCheckOptions;
 }): Promise<WarehouseDiscoveryReport> {
   const cfg = loadProjectConfig(projectRoot);
   const mode = modelingModeOf(cfg);
@@ -40278,7 +40335,7 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   const leftToDbt = hybrid?.leftToDbt.length ? { dbtLeftOut: hybrid.leftToDbt } : {};
   const report = { ...drafted, ...(queryHistory ? { queryHistory } : {}), ...leftToDbt };
   if (!options.validate || !connection || !options.executor) return report;
-  const checked = await checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest, ...(options.signal ? { signal: options.signal } : {}) });
+  const checked = await checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest, ...(options.signal ? { signal: options.signal } : {}), ...(options.setup ? { setup: options.setup } : {}) });
   // A check stopped part way fails the ones after it: such a report is never a draft.
   options.signal?.throwIfAborted();
   return { ...checked, ...leftToDbt };
@@ -40337,6 +40394,58 @@ export function projectHasOwnWork(projectRoot: string): boolean {
   return found(join(projectRoot, 'blocks'), /\.dql$/i, 4) || found(join(projectRoot, 'semantic-layer'), /\.ya?ml$/i, 4);
 }
 
+/** Each background check statement's time limit (onboarding design P4): one that runs over is listed, not waited for. */
+export const SETUP_CHECK_STATEMENT_MS = 60_000;
+
+/** What the background checks could not do, by table, for the Setup page (onboarding design P4, P5). */
+export interface SetupCheckProblem {
+  relations: string[];
+  kind: 'too_big' | 'failed' | 'skipped' | 'joins_over_limit';
+  text: string;
+}
+
+export function setupCheckProblems(report: WarehouseDiscoveryReport, cache: SetupCheckCache, rowBudget: number, statementMs: number): SetupCheckProblem[] {
+  const problems: SetupCheckProblem[] = [];
+  const seen = new Set<string>();
+  const nameOf = (relation: string) => tableName(relation) || relation;
+  for (const failure of cache.failures()) {
+    const key = `${failure.relations.map((relation) => relation.toLowerCase()).sort().join('|')}#${failure.timedOut ? 'time' : failure.error}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const names = failure.relations.length ? failure.relations.map(nameOf).join(' and ') : 'A check';
+    problems.push(failure.timedOut
+      ? { relations: failure.relations, kind: 'too_big', text: `${names}: not checked: a check ran over ${Math.round(statementMs / 1000)} s, too big for the background check.` }
+      : { relations: failure.relations, kind: 'failed', text: `${names}: a check failed: ${failure.error}` });
+  }
+  for (const note of report.readNotes ?? []) {
+    if (note.kind === 'skipped') problems.push({ relations: [note.relation], kind: 'skipped', text: note.text });
+  }
+  const overLimit = report.relationships.filter((relationship) => /^not validated: discovery validates at most/.test(relationship.validationError ?? '')).length;
+  if (overLimit > 0) problems.push({ relations: [], kind: 'joins_over_limit', text: `${overLimit.toLocaleString('en-US')} join${overLimit === 1 ? '' : 's'} not checked: the background check validates at most 200 a run; joins with declared keys and small tables went first.` });
+  void rowBudget;
+  return problems;
+}
+
+/** How the background setup checks the data (onboarding design P4). */
+export interface SetupCheckOptions {
+  /** Above this many rows, the table a check is about is read from a block sample (decision D5). */
+  rowBudget: number;
+  /** Each check statement's time limit; one that runs over is listed, not waited for. */
+  statementDeadlineMs: number;
+  cache: SetupCheckCache;
+  onProgress?: (step: { kind: 'keys' | 'joins'; done: number; total: number }) => void;
+  /** A statement is done (answered, failed, or from the kept answers): the tables it read. */
+  onStatement?: (relations: string[]) => void;
+}
+
+/** A statement that ran over its time limit (Snowflake's TIMEOUT, or any driver's deadline). */
+function isStatementTimeout(error: unknown): boolean {
+  if (error instanceof CheckStatementFailure) return error.timedOut;
+  const vendor = (error as { vendorCode?: unknown } | null)?.vendorCode;
+  if (vendor === 'TIMEOUT') return true;
+  return /exceeded the \d+ ?ms deadline|statement timed out|timeout/i.test(error instanceof Error ? error.message : String(error));
+}
+
 async function checkDraftOnWarehouse(
   projectRoot: string,
   cfg: ProjectConfig,
@@ -40344,23 +40453,49 @@ async function checkDraftOnWarehouse(
   snapshot: Parameters<typeof validateWarehouseDiscovery>[1],
   connection: ConnectionConfig,
   executor: QueryExecutor,
-  options: { readViews?: boolean; manifest?: DQLManifest; signal?: AbortSignal } = {},
+  options: { readViews?: boolean; manifest?: DQLManifest; signal?: AbortSignal; setup?: SetupCheckOptions } = {},
 ): Promise<WarehouseDiscoveryReport> {
   // Lake tables are read within the read budget: a sample of files, or not at all (open-formats plan L4).
   const signal = options.signal;
+  const setup = options.setup;
+  // The background setup's checks (onboarding design P4): each statement within a time limit, its answer kept so a
+  // resume asks it again never, and the tables each statement reads counted for the progress.
+  const relationsOf = (sql: string): string[] => {
+    const lower = sql.toLowerCase();
+    return relationsNamedIn(sql, snapshot.relations.filter((relation) => lower.includes(relation.name.toLowerCase())));
+  };
+  const direct = (sql: string) => {
+    signal?.throwIfAborted();
+    return executor.executeQuery(sql, [], {}, connection, {
+      ...(signal ? { signal } : {}),
+      ...(setup ? { deadlineMs: setup.statementDeadlineMs } : {}),
+    });
+  };
+  const kept = setup ? setup.cache.wrap(direct, { relationsOf, isTimeout: isStatementTimeout, ...(signal ? { signal } : {}) }) : direct;
+  const counted = setup?.onStatement
+    ? async (sql: string) => {
+      try {
+        return await kept(sql);
+      } finally {
+        setup.onStatement!(relationsOf(sql));
+      }
+    }
+    : kept;
   const bounded = boundedReads({
-    run: (sql: string) => {
-      signal?.throwIfAborted();
-      return executor.executeQuery(sql, [], {}, connection, signal ? { signal } : undefined);
-    },
+    run: counted,
     snapshot,
+    ...(setup ? { warehouseSample: { dialect: connection.driver, rowBudget: setup.rowBudget } } : {}),
   });
   const run = bounded.run;
   const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
   const allViews = options.readViews === true || /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
   // A view that joins or aggregates is read on a cloud warehouse too when the tables under it are small.
   const readable = (relation: Parameters<typeof cheapToRead>[0]) => allViews || cheapToRead(relation) || viewOverSmallTables(relation, snapshot.relations);
-  const validated = await validateWarehouseDiscovery(report, snapshot, run, quote, { dialect: connection.driver, readable });
+  const validated = await validateWarehouseDiscovery(report, snapshot, run, quote, {
+    dialect: connection.driver,
+    readable,
+    ...(setup ? { smallFirst: true, ...(setup.onProgress ? { onProgress: setup.onProgress } : {}) } : {}),
+  });
   const dbtManifestPath = resolveDbtManifestPath(projectRoot, cfg);
   let dbt: ReturnType<typeof readDbtRelationFacts> | undefined;
   try {

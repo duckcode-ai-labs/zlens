@@ -16,8 +16,17 @@
  *   references missing: the check is skipped and says why;
  * - a table that cannot be sampled (a catalog table) is not read.
  *
- * Tables with no recorded size (a warehouse's, a DuckDB file's own) run
- * exactly as before.
+ * A warehouse's own tables (onboarding design P4, decision D5) have a row
+ * count from the catalog instead of files: up to the row budget (10 million
+ * rows) a check reads them whole, as before. Above it, the table a check is
+ * about is read from a block sample (Snowflake `SAMPLE SYSTEM`, DuckDB
+ * `USING SAMPLE … (system)`) sized to about the budget, and the run says so:
+ * a duplicate in the sample proves a key is not unique, no duplicate makes it
+ * likely unique. A table a check only looks values up in stays whole (a
+ * sample there would call real references missing); the statement time limit
+ * bounds it instead. Views have no row count and run as before.
+ *
+ * Tables with no recorded size run exactly as before.
  */
 import { parsePhysicalIdentifier, type WarehouseCatalogColumnV1, type WarehouseCatalogRelationV1, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
 import { formatBytes, formatRows, lakeReaderCall, listLakeFiles, spreadOrder, sqlPathList, type LakeFile, type LakeReaderCall } from './lake-sizes.js';
@@ -88,6 +97,11 @@ function relationPattern(relation: string): RegExp {
   return new RegExp(String.raw`(?<![\w."])${body}(?![\w"])`, 'gi');
 }
 
+/** The relations of a catalog a statement names (each part bare or double-quoted, any case). */
+export function relationsNamedIn(sql: string, relations: ReadonlyArray<Pick<WarehouseCatalogRelationV1, 'relation'>>): string[] {
+  return relations.filter((relation) => relationPattern(relation.relation).test(sql)).map((relation) => relation.relation);
+}
+
 /** Whether a statement names a column (bare or quoted, any case). */
 function namesColumn(sql: string, column: string): boolean {
   return new RegExp(String.raw`(?<![\w"])(?:"${escapeRegex(column.replace(/"/g, '""'))}"|${escapeRegex(column)})(?![\w"])`, 'i').test(sql);
@@ -133,8 +147,20 @@ export function boundedReads(input: {
   run: Run;
   snapshot: Pick<WarehouseCatalogSnapshotV1, 'relations'> | undefined;
   budget?: Partial<ReadBudget> & Pick<ReadBudget, 'remote' | 'local'>;
+  /**
+   * Sample a warehouse's own tables above `rowBudget` rows (onboarding design P4):
+   * the dialect says how (`snowflake`, `duckdb`); others are not sampled.
+   */
+  warehouseSample?: { dialect: string; rowBudget: number };
 }): { run: BoundedRun; notes: () => ReadNote[]; sampled: () => Map<string, string> } {
   const budget: ReadBudget = { ...readBudgetFromEnv(), ...input.budget };
+  const sampleClause = input.warehouseSample ? warehouseSampleClause(input.warehouseSample.dialect) : undefined;
+  const rowBudget = input.warehouseSample?.rowBudget ?? Number.POSITIVE_INFINITY;
+  const rowSized = sampleClause
+    ? (input.snapshot?.relations ?? [])
+      .filter((relation) => relation.sizeFrom === undefined && relation.kind === 'table' && (relation.rowCountEstimate ?? 0) > rowBudget)
+      .map((relation) => ({ relation, pattern: relationPattern(relation.relation) }))
+    : [];
   const sized: Sized[] = (input.snapshot?.relations ?? [])
     .filter((relation) => relation.sizeFrom !== undefined)
     .map((relation) => {
@@ -169,15 +195,46 @@ export function boundedReads(input: {
     throw new ReadBudgetError(message);
   };
 
+  /** A warehouse table over the row budget, when it is the check's subject: read from a block sample. */
+  const sampleWarehouseTables = (sql: string, hint: ReadHint | undefined): string => {
+    if (rowSized.length === 0 || !sampleClause) return sql;
+    const named = rowSized.filter((item) => {
+      item.pattern.lastIndex = 0;
+      return item.pattern.test(sql);
+    });
+    if (named.length === 0) return sql;
+    const subjects = new Set((hint?.sample ?? []).map((relation) => relation.toLowerCase()));
+    // Every relation the statement names, not only the large ones: a lone large table is its own subject.
+    const relationsNamed = (input.snapshot?.relations ?? []).filter((relation) => {
+      const pattern = relationPattern(relation.relation);
+      return pattern.test(sql);
+    }).length;
+    let rewritten = sql;
+    for (const item of named) {
+      const subject = subjects.has(item.relation.relation.toLowerCase()) || (relationsNamed === 1 && subjects.size === 0);
+      if (!subject) continue;
+      const rows = item.relation.rowCountEstimate!;
+      const percent = Math.max(0.0001, Math.min(100, (rowBudget / rows) * 100));
+      const sampleRows = Math.round(rows * (percent / 100));
+      const key = item.relation.relation;
+      if (!rowTallies.has(key)) rowTallies.set(key, { relation: key, name: item.relation.name, rows: sampleRows, total: rows });
+      item.pattern.lastIndex = 0;
+      const quoted = parsePhysicalIdentifier(item.relation.relation).map((part) => `"${part.value.replace(/"/g, '""')}"`).join('.');
+      rewritten = rewritten.replace(item.pattern, `(SELECT * FROM ${quoted} ${sampleClause(Number(percent.toPrecision(4)))})`);
+    }
+    return rewritten;
+  };
+  const rowTallies = new Map<string, { relation: string; name: string; rows: number; total: number }>();
+
   const run: BoundedRun = async (sql, hint) => {
-    if (sized.length === 0) return input.run(sql);
+    if (sized.length === 0) return input.run(sampleWarehouseTables(sql, hint));
     const named = sized.filter((item) => {
       item.pattern.lastIndex = 0;
       return item.pattern.test(sql);
     });
-    if (named.length === 0) return input.run(sql);
+    if (named.length === 0) return input.run(sampleWarehouseTables(sql, hint));
     const subjects = new Set((hint?.sample ?? []).map((relation) => relation.toLowerCase()));
-    let rewritten = sql;
+    let rewritten = sampleWarehouseTables(sql, hint);
     for (const item of named) {
       const columns = columnsRead(sql, item);
       const reads = estimateRead(item.relation, columns, item.call);
@@ -230,11 +287,27 @@ export function boundedReads(input: {
     }
     return input.run(rewritten);
   };
+  const rowNotes = (): ReadNote[] => [...rowTallies.values()].sort((a, b) => a.name.localeCompare(b.name)).map((entry) => ({
+    relation: entry.relation,
+    kind: 'sampled' as const,
+    text: `${entry.name}: checked on a block sample of about ${formatRows(entry.rows)} of ${formatRows(entry.total)} rows. What the draft says of it holds in that sample.`,
+  }));
   return {
     run,
-    notes: () => [...tallies.values()].sort((a, b) => a.name.localeCompare(b.name)).flatMap(notesOf),
-    sampled: () => new Map([...tallies.values()].filter((entry) => entry.sampled).map((entry) => [entry.relation, sampleWords(entry)])),
+    notes: () => [...[...tallies.values()].sort((a, b) => a.name.localeCompare(b.name)).flatMap(notesOf), ...rowNotes()],
+    sampled: () => new Map([
+      ...[...tallies.values()].filter((entry) => entry.sampled).map((entry) => [entry.relation, sampleWords(entry)] as [string, string]),
+      ...[...rowTallies.values()].map((entry) => [entry.relation, `a sample of ${entry.name}: about ${formatRows(entry.rows)} of ${formatRows(entry.total)} rows`] as [string, string]),
+    ]),
   };
+}
+
+/** How a dialect reads a block sample of a table, given the percent of it to read. */
+export function warehouseSampleClause(dialect: string): ((percent: number) => string) | undefined {
+  const d = dialect.toLowerCase();
+  if (d === 'snowflake') return (percent) => `SAMPLE SYSTEM (${percent})`;
+  if (d === 'duckdb' || d === 'file' || d === 'motherduck') return (percent) => `USING SAMPLE ${percent} PERCENT (system)`;
+  return undefined;
 }
 
 type SkipReason = 'lookup' | 'unsampled' | 'no_file_fits';

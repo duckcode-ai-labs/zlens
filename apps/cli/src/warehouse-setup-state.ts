@@ -41,6 +41,12 @@ export interface SetupCheckStage {
   search?: 'meaning' | 'words';
   searchNote?: string;
   error?: string;
+  /** What could not be checked, by table (onboarding design P4). */
+  problems?: Array<{ relations: string[]; kind: string; text: string }>;
+  /** Tables checked on a block sample (over the row budget). */
+  sampled?: number;
+  /** Statements answered from an earlier run: what a resume did not ask again. */
+  resumed?: number;
 }
 
 export interface WarehouseSetupStateV1 {
