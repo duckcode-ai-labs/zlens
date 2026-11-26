@@ -613,6 +613,19 @@ const KEY_EMPTY_ROWS = new Map<string, { rows: number; empty: number } | null>()
  * 90%, and FCT_PLAYER_JOURNEY.TEAM_ID empty in 93%. Half sits in that wide gap: no optional key is near it.
  */
 export const MOSTLY_EMPTY_KEY_SHARE = 0.5;
+/**
+ * How long one join key's count may take. An answer's probes run together, so the first question over tables of
+ * 100 million rows waits at most this long for all of them, never once per probe; a run budget shortens it.
+ */
+export const KEY_PROBE_DEADLINE_MS = 5_000;
+/**
+ * A key count's limit: the default, or what is left of a run's budget when that is less. Null when too little is
+ * left to count anything (a deadline of 0 would read as none at all to a driver): the join is then not judged.
+ */
+export function keyProbeDeadlineMs(remainingMs?: number): number | null {
+  const deadline = Math.min(KEY_PROBE_DEADLINE_MS, remainingMs ?? KEY_PROBE_DEADLINE_MS);
+  return deadline >= 250 ? deadline : null;
+}
 const kindNamesKey = (connection: ConnectionConfig, kinds: CodeKinds, scope: string) => `${scopedKey(connectionKey(connection), scope)}|${kinds.code.toLowerCase()}|${kinds.values.map((value) => value.first).join('')}`;
 /**
  * What these caches hold was seen through a query connection, so each key carries the execution scope of the
@@ -3526,15 +3539,35 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // once to take the key from a table where it is filled; one that keeps it (a question about only the rows that
       // have it) runs, and the answer says how few rows the join could match.
       type EmptyKeyJoin = { table: string; other: string; columns: string[]; rows: number; empty: number };
+      const probingKeys = new Map<string, Promise<{ rows: number; empty: number } | null>>();
       const emptyKeyRows = async (side: JoinKeyGroup['left']): Promise<{ rows: number; empty: number } | null> => {
         if (!connection || side.columns.length === 0) return null;
         const cacheKey = `${scopedKey(connectionKey(connection), executionScope)}|${physicalRelationIdentity(side.relation)}|${side.columns.map((column) => column.toLowerCase()).join(',')}`;
         if (KEY_EMPTY_ROWS.has(cacheKey)) return KEY_EMPTY_ROWS.get(cacheKey)!;
+        // The same table and key on two sides (a self-join, two joins to one table) is counted once.
+        const inFlight = probingKeys.get(cacheKey);
+        if (inFlight) return inFlight;
+        // Always within a limit: the default, or what is left of the run's budget; too little left, not judged.
+        const deadlineMs = keyProbeDeadlineMs(request.runBudget?.remainingMs());
+        if (deadlineMs === null) return null;
+        const probing = measureEmptyKey(side, cacheKey, deadlineMs);
+        probingKeys.set(cacheKey, probing);
+        try {
+          return await probing;
+        } finally {
+          probingKeys.delete(cacheKey);
+        }
+      };
+      const measureEmptyKey = async (side: JoinKeyGroup['left'], cacheKey: string, deadlineMs: number): Promise<{ rows: number; empty: number } | null> => {
+        if (!connection) return null;
         let measured: { rows: number; empty: number } | null = null;
         try {
-          const options = { maxRows: 1, ...(request.signal ? { signal: request.signal } : {}), ...(request.runBudget ? { deadlineMs: Math.min(8_000, request.runBudget.remainingMs()) } : {}) };
-          const empty = side.columns.map((column) => `${quoteKey(column)} IS NULL`).join(' OR ');
-          const sql = `SELECT COUNT(*) AS key_rows, SUM(CASE WHEN ${empty} THEN 1 ELSE 0 END) AS key_empty FROM ${side.relation}`;
+          const options = { maxRows: 1, deadlineMs, ...(request.signal ? { signal: request.signal } : {}) };
+          // One column: COUNT(*) - COUNT(key), which Snowflake answers from its table metadata without a scan. A key
+          // of several columns is empty when any of them is.
+          const sql = side.columns.length === 1
+            ? `SELECT COUNT(*) AS key_rows, COUNT(*) - COUNT(${quoteKey(side.columns[0]!)}) AS key_empty FROM ${side.relation}`
+            : `SELECT COUNT(*) AS key_rows, SUM(CASE WHEN ${side.columns.map((column) => `${quoteKey(column)} IS NULL`).join(' OR ')} THEN 1 ELSE 0 END) AS key_empty FROM ${side.relation}`;
           const result = deps.executor.executePositional
             ? await deps.executor.executePositional(sql, [], connection, options)
             : await deps.executor.executeQuery(sql, [], {}, connection, options);
@@ -3544,7 +3577,9 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           const emptyRows = value('key_empty');
           measured = Number.isFinite(rows) && Number.isFinite(emptyRows) ? { rows, empty: emptyRows } : null;
         } catch {
-          // Too slow or not readable: the join is not judged.
+          // Too slow or not readable: the join is not judged. Only a probe that had the whole limit is remembered
+          // as too slow; one cut short by a run's budget, or stopped, is tried again by the next answer.
+          if (deadlineMs < KEY_PROBE_DEADLINE_MS || request.signal?.aborted) return null;
           measured = null;
         }
         if (KEY_EMPTY_ROWS.size > 2_000) KEY_EMPTY_ROWS.clear();
@@ -3553,14 +3588,15 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       };
       const emptyKeyJoins = async (sql: string, record = true): Promise<EmptyKeyJoin[]> => {
         const groups = joinKeyGroups(sql).slice(0, 3);
+        const sides = groups.flatMap((group) => [[group.left, group.right], [group.right, group.left]] as const);
+        // Every side is counted at once: an answer waits for the slowest probe, not for their sum.
+        const measures = await Promise.all(sides.map(([side]) => emptyKeyRows(side)));
         const found: EmptyKeyJoin[] = [];
-        for (const group of groups) {
-          for (const [side, other] of [[group.left, group.right], [group.right, group.left]] as const) {
-            const measured = await emptyKeyRows(side);
-            if (!measured || measured.rows === 0 || measured.empty / measured.rows <= MOSTLY_EMPTY_KEY_SHARE) continue;
-            found.push({ table: tableName(side.relation)?.replace(/"/g, '') ?? side.relation, other: tableName(other.relation)?.replace(/"/g, '') ?? other.relation, columns: side.columns, ...measured });
-          }
-        }
+        sides.forEach(([side, other], index) => {
+          const measured = measures[index];
+          if (!measured || measured.rows === 0 || measured.empty / measured.rows <= MOSTLY_EMPTY_KEY_SHARE) return;
+          found.push({ table: tableName(side.relation)?.replace(/"/g, '') ?? side.relation, other: tableName(other.relation)?.replace(/"/g, '') ?? other.relation, columns: side.columns, ...measured });
+        });
         if (record && groups.length > 0) {
           state.hostChecks.push({ id: 'join_keys_filled', label: 'Joins on keys most rows have', passed: found.length === 0, message: found.length ? emptyKeyProblem(found[0]!) : 'every join key it was checked on is filled in most rows', attempt: state.checkRound });
         }
