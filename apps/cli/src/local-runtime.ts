@@ -60,6 +60,7 @@ import { ProjectRefreshCoordinator } from './project-refresh-coordinator.js';
 import { SetupOperationProgress } from './setup-operation-progress.js';
 import { CheckStatementFailure, SetupCheckCache } from './setup-check-cache.js';
 import { SetupStatusWriter } from './setup-status-sql.js';
+import { AppWarehouseSizer, appOwnWarehouse, isCheckWarehouseSize, type CheckWarehouseSize } from './snowflake-app-warehouse.js';
 import {
   readWarehouseSetupState,
   settleInterruptedStages,
@@ -15551,6 +15552,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const setupStatusWriter = snowflakeApp && snowflakeAppOptions?.appName
     ? new SetupStatusWriter({ appName: snowflakeAppOptions.appName, query: (sql) => snowflakeAppQuery(sql) })
     : undefined;
+  // "Check faster" (onboarding design P7, decision D6): only the app's own <app>_WH is ever resized.
+  const appWarehouse = snowflakeApp ? appOwnWarehouse(snowflakeAppOptions?.appName, typeof connection?.warehouse === 'string' ? connection.warehouse : process.env.ZLENS_SNOWFLAKE_WAREHOUSE) : null;
+  const warehouseSizer = appWarehouse ? new AppWarehouseSizer({ warehouse: appWarehouse, query: (sql) => snowflakeAppQuery(sql) }) : undefined;
   const saveWarehouseSetup = (next: WarehouseSetupStateV1): WarehouseSetupStateV1 => {
     warehouseSetup = next;
     writeWarehouseSetupState(projectRoot, next);
@@ -15572,9 +15576,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return id ? operationCoordinator.get(id) : null;
   };
   /** The data checks and the search index, in the background (stage 2). Null when there is nothing read to check. */
-  const startSetupCheck = (options: { fresh?: boolean; anyway?: string[] } = {}): LocalOperation | null => {
-    const state = warehouseSetup;
+  const startSetupCheck = (options: { fresh?: boolean; anyway?: string[]; checkSize?: CheckWarehouseSize } = {}): LocalOperation | null => {
+    let state = warehouseSetup;
     if (!state || state.read.state !== 'done') return null;
+    if (options.checkSize && options.checkSize !== state.checkSize) state = saveWarehouseSetup({ ...state, checkSize: options.checkSize });
     if (state.checks?.state === 'running' && state.checks.operationId) return operationCoordinator.get(state.checks.operationId);
     const database = state.scopes[0]?.catalogOrDatabase;
     // The answers kept from an earlier run on this catalog: a resume asks none of them again (onboarding design P4).
@@ -15592,8 +15597,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       cancellable: true,
     });
     const startedAt = new Date().toISOString();
-    saveWarehouseSetup({ ...state, checks: { state: 'running', operationId: operation.id, startedAt } });
+    const size: CheckWarehouseSize = isCheckWarehouseSize(state.checkSize) ? state.checkSize : 'XSMALL';
+    saveWarehouseSetup({ ...state, checks: { state: 'running', operationId: operation.id, startedAt, warehouse: { size: 'XSMALL', resized: false } } });
     let outcome: { proposalId?: string; drafted: number; search: 'meaning' | 'words'; searchNote?: string } | undefined;
+    let warehouseUse: { size: string; resized: boolean; refused?: string } = { size: 'XSMALL', resized: false };
     let problems: SetupCheckProblem[] = [];
     let sampledTables = 0;
     let resumed = 0;
@@ -15606,6 +15613,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const touched = new Set<string>();
         const counts = { tablesChecked: 0, tables: inScope.length, keys: { done: 0, total: 0 }, joins: { done: 0, total: 0 }, largeTables, resumed: 0 };
         progress.update({ checks: counts });
+        // Check faster: the app's warehouse a size up for the checks, back to X-Small when they end.
+        if (size !== 'XSMALL') {
+          if (!warehouseSizer) {
+            warehouseUse = { size: 'XSMALL', resized: false, refused: 'ZLens resizes only the app\'s own warehouse, <app>_WH' };
+          } else {
+            const resized = await warehouseSizer.resize(size);
+            warehouseUse = resized.ok ? { size, resized: true } : { size: 'XSMALL', resized: false, refused: resized.error };
+          }
+          const latest = warehouseSetup;
+          if (latest?.checks?.operationId === operation.id) saveWarehouseSetup({ ...latest, checks: { ...latest.checks, warehouse: warehouseUse } });
+          progress.update({ warehouseSize: warehouseUse.size });
+          signal.throwIfAborted();
+        }
         const setupChecks: SetupCheckOptions = {
           rowBudget: CHECK_ROW_BUDGET,
           // "Check it anyway" lifts the background limit for the tables named.
@@ -15648,7 +15668,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } finally {
         stopHeartbeat();
       }
-    }).then(() => {
+    }).then(async () => {
+      // Whatever the outcome, the warehouse goes back to X-Small (a close leaves it to the next start).
+      if (warehouseUse.resized && !runtimeClosing) {
+        const restored = await warehouseSizer?.restore();
+        if (restored) warehouseUse = { ...warehouseUse, resized: false };
+      }
       // ZLens is closing: the stage stays `running` on disk, and the next start resumes it.
       if (runtimeClosing) return;
       const final = operationCoordinator.get(operation.id);
@@ -15657,7 +15682,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       if (!latest || latest.checks?.operationId !== operation.id) return;
       const at = new Date().toISOString();
       if (final?.status === 'succeeded' && outcome) {
-        saveWarehouseSetup({ ...latest, checks: { state: 'done', operationId: operation.id, startedAt, at, ...outcome, problems, sampled: sampledTables, resumed } });
+        saveWarehouseSetup({ ...latest, checks: { state: 'done', operationId: operation.id, startedAt, at, ...outcome, problems, sampled: sampledTables, resumed, warehouse: warehouseUse } });
         if (snowflakeApp && database) {
           // The app's own record of a finished setup: the strip points to the drafts, and an upgrade drafts nothing again.
           snowflakeAppSetup = {
@@ -15683,14 +15708,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         console.log(`[zlens] Checked the data and drafted ${outcome.drafted} models for review.`);
       } else if (final?.status === 'cancelled') {
-        saveWarehouseSetup({ ...latest, checks: { state: 'stopped', operationId: operation.id, startedAt, at } });
+        saveWarehouseSetup({ ...latest, checks: { state: 'stopped', operationId: operation.id, startedAt, at, warehouse: warehouseUse } });
       } else {
-        saveWarehouseSetup({ ...latest, checks: { state: 'failed', operationId: operation.id, startedAt, at, error: final?.error?.message ?? 'the checks did not finish' } });
+        saveWarehouseSetup({ ...latest, checks: { state: 'failed', operationId: operation.id, startedAt, at, error: final?.error?.message ?? 'the checks did not finish', warehouse: warehouseUse } });
         console.warn(`[zlens] The background checks did not finish: ${final?.error?.message ?? 'unknown error'}`);
       }
     });
     return operation;
   };
+  // A warehouse left a size up when ZLens stopped mid-check goes back to X-Small, unless the checks resume (they
+  // size it again, and back when they end).
+  if (!resumeChecksOnStart && warehouseSetup?.checks?.warehouse?.resized && warehouseSizer) {
+    void warehouseSizer.restore().then((restored) => {
+      const latest = warehouseSetup;
+      if (restored && latest?.checks?.warehouse) saveWarehouseSetup({ ...latest, checks: { ...latest.checks, warehouse: { ...latest.checks.warehouse, resized: false } } });
+    });
+  }
   if (resumeChecksOnStart) {
     const timer = setTimeout(() => {
       if (runtimeClosing) return;
@@ -15709,6 +15742,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     mode?: ConnectionMetadataScopeInput['mode'];
     check: boolean;
     tablesExpected?: number;
+    checkSize?: CheckWarehouseSize;
   }): LocalOperation => {
     if (warehouseSetup?.read.state === 'running' && warehouseSetup.read.operationId) {
       const running = operationCoordinator.get(warehouseSetup.read.operationId);
@@ -15729,6 +15763,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       connectionId: input.connectionId,
       scopes: input.scopes,
       check: input.check,
+      ...(input.checkSize && input.checkSize !== 'XSMALL' ? { checkSize: input.checkSize } : {}),
       read: { state: 'running', operationId: operation.id, startedAt },
       // Nothing to check until the read is done; `check` says whether a check follows it.
       checks: { state: 'off' },
@@ -30675,7 +30710,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const cfg = loadProjectConfig(projectRoot);
           const selectedConnection = projectConnectionById(projectRoot, cfg, connectionId);
           if (!selectedConnection) throw new Error(`Unknown connection "${connectionId}".`);
-          const body = await readJSON(req).catch(() => ({})) as ConnectionMetadataScopeInput & { check?: boolean; tablesExpected?: number };
+          const body = await readJSON(req).catch(() => ({})) as ConnectionMetadataScopeInput & { check?: boolean; tablesExpected?: number; checkSize?: unknown };
           const mode = body.mode ?? 'selected_scopes';
           // The same checks Apply and synchronize makes, before anything runs: a scope too large is refused here.
           const scope = normalizeConnectionMetadataScope(connectionId, selectedConnection, { ...body, mode }, metadataScopeDbtDefaults(projectRoot, cfg));
@@ -30686,6 +30721,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             mode,
             check: body.check !== false,
             ...(typeof body.tablesExpected === 'number' && Number.isFinite(body.tablesExpected) ? { tablesExpected: Math.max(0, Math.round(body.tablesExpected)) } : {}),
+            ...(isCheckWarehouseSize(body.checkSize) ? { checkSize: body.checkSize } : {}),
           });
           send(202, { ...status(), operation });
         } catch (error) {
@@ -30695,9 +30731,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       if (action === 'check' && req.method === 'POST') {
         // `fresh`: ask the warehouse everything again; `anyway`: check these tables without the background time limit.
-        const body = await readJSON(req).catch(() => ({})) as { fresh?: boolean; anyway?: unknown };
+        const body = await readJSON(req).catch(() => ({})) as { fresh?: boolean; anyway?: unknown; checkSize?: unknown };
         const anyway = Array.isArray(body.anyway) ? body.anyway.filter((item): item is string => typeof item === 'string').slice(0, 200) : undefined;
-        const operation = startSetupCheck({ ...(body.fresh === true ? { fresh: true } : {}), ...(anyway?.length ? { anyway } : {}) });
+        const operation = startSetupCheck({ ...(body.fresh === true ? { fresh: true } : {}), ...(anyway?.length ? { anyway } : {}), ...(isCheckWarehouseSize(body.checkSize) ? { checkSize: body.checkSize } : {}) });
         if (!operation) {
           send(409, { code: 'SETUP_READ_FIRST', error: 'Read the names of the chosen schemas first.' });
           return;

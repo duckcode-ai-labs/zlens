@@ -26,6 +26,8 @@ export interface SetupDetail {
   /** Statements of the current read: done of all. */
   statementsDone?: number;
   statements?: number;
+  /** "Check faster": the warehouse size the checks run on (onboarding design P7); X-Small when absent. */
+  warehouseSize?: string;
   /** The background checks' counts (onboarding design P4). */
   checks?: {
     tablesChecked: number;
@@ -167,6 +169,7 @@ export function setupMessage(detail: SetupDetail): string {
       if (checks.joins.total > 0) parts.push(`${checks.joins.done.toLocaleString('en-US')} of ${count(checks.joins.total, 'join', 'joins')}`);
       if (checks.largeTables > 0) parts.push(`${checks.largeTables.toLocaleString('en-US')} on samples`);
       if (checks.resumed > 0) parts.push('resumed');
+      if (detail.warehouseSize && detail.warehouseSize !== 'XSMALL') parts.push(`on a ${detail.warehouseSize === 'MEDIUM' ? 'Medium' : 'Small'} warehouse`);
       return `Checking keys and joins${where}: ${parts.join(' · ')} · ${time}`;
     }
     case 'index':

@@ -74,6 +74,8 @@ export function setupStageLines(status: WarehouseSetupStatus): Array<{ key: stri
   else if (checks.state === 'failed') lines.push({ key: 'checks', tone: 'caution', text: `Data checks did not finish: ${checks.error ?? 'unknown error'}. Resume picks up where they stopped.` });
   else {
     const sampled = checks.sampled ? ` · ${count(checks.sampled, 'table', 'tables')} checked on samples` : '';
+    if (checks.warehouse?.refused) lines.push({ key: 'faster', tone: 'caution', text: `Check faster was not available (${checks.warehouse.refused}): checked on X-Small.` });
+    else if (checks.warehouse && checks.warehouse.size !== 'XSMALL') lines.push({ key: 'faster', tone: checks.warehouse.resized ? 'caution' : 'done', text: checks.warehouse.resized ? `Checked on a ${checks.warehouse.size === 'MEDIUM' ? 'Medium' : 'Small'} warehouse; it has not gone back to X-Small yet.` : `Checked on a ${checks.warehouse.size === 'MEDIUM' ? 'Medium' : 'Small'} warehouse, back to X-Small now.` });
     lines.push({ key: 'checks', tone: 'done', text: `Data checks done${checks.at ? ` ${new Date(checks.at).toLocaleString()}` : ''}${sampled}.` });
     lines.push({ key: 'search', tone: checks.search === 'meaning' ? 'done' : 'waiting', text: checks.search === 'meaning' ? 'Search by meaning: on.' : `Search by words${checks.searchNote ? ` (${checks.searchNote})` : ''}.` });
     lines.push({ key: 'drafts', tone: 'done', text: checks.proposalId ? `Drafts ready: ${count(checks.drafted ?? 0, 'model', 'models')} wait for review.` : 'Nothing new to draft.' });

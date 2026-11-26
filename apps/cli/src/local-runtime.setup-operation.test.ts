@@ -498,3 +498,80 @@ describe('several databases (onboarding design P6)', () => {
     expect(statements.filter((sql) => sql.includes('INFORMATION_SCHEMA.COLUMNS') && !sql.includes('TABLE_CONSTRAINTS')).map((sql) => /"(\w+)"\.INFORMATION_SCHEMA/.exec(sql)?.[1]).sort()).toEqual(expect.arrayContaining(['FINANCE', 'SALES']));
   }, 30_000);
 });
+
+describe('Check faster (onboarding design P7)', () => {
+  it('runs the checks a size up on the app\'s own warehouse and sizes it back when they end; a refusal checks on X-Small and says why', async () => {
+    const appStatements: string[] = [];
+    let refuse = false;
+    const warehouse = fakeCheckedWarehouse();
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-faster-'));
+    roots.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'sf', manifestVersion: 3, modeling: { mode: 'warehouse-first' }, connections: { default: { driver: 'snowflake', account: 'test-account', username: 'app', database: 'ZLENS_APP', warehouse: 'ZLENS_APP_WH' } } }));
+    const base = fakeAppSettings();
+    const appQuery = (async (sql: string) => {
+      if (sql.startsWith('ALTER WAREHOUSE')) {
+        appStatements.push(sql);
+        if (refuse) throw new Error('Insufficient privileges to operate on warehouse ZLENS_APP_WH');
+        return [];
+      }
+      return base(sql);
+    }) as SnowflakeAppQuery;
+    const port = await startLocalServer({
+      rootDir: projectRoot, projectRoot, executor: warehouse.executor, preferredPort: 0, host: '127.0.0.1',
+      snowflakeIngress: {}, snowflakeAppSettings: { userConfiguration: 'ZLENS_USER', appName: 'ZLENS_APP', ttlMs: 0 }, snowflakeAppQuery: appQuery,
+      captureServer: (created) => { servers.push(created); },
+    });
+    const call = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers: { 'Sf-Context-Current-User': 'JSMITH', 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
+    const until = async (state: string) => {
+      for (let tries = 0; tries < 300; tries += 1) {
+        const setup = await (await call('/api/snowflake-app/setup')).json() as { state: string };
+        if (setup.state === state) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error(`never ${state}`);
+    };
+    expect((await call('/api/connections')).status).toBe(200);
+    expect((await call('/api/connections/default/setup/read', { method: 'POST', body: JSON.stringify({ mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'SALES', schemas: ['PUBLIC'] }], check: true, checkSize: 'MEDIUM' }) })).status).toBe(202);
+    await until('done');
+    expect(appStatements).toEqual(["ALTER WAREHOUSE IDENTIFIER('ZLENS_APP_WH') SET WAREHOUSE_SIZE = 'MEDIUM'", "ALTER WAREHOUSE IDENTIFIER('ZLENS_APP_WH') SET WAREHOUSE_SIZE = 'XSMALL'"]);
+    let status = await (await call('/api/connections/default/setup')).json() as { setup: { checkSize?: string; checks: { warehouse?: { size: string; resized: boolean; refused?: string } } } };
+    expect(status.setup.checkSize).toBe('MEDIUM');
+    expect(status.setup.checks.warehouse).toEqual({ size: 'MEDIUM', resized: false });
+
+    // Refused: checked on X-Small, said why, nothing to size back.
+    refuse = true;
+    appStatements.length = 0;
+    expect((await call('/api/connections/default/setup/check', { method: 'POST', body: JSON.stringify({ fresh: true, checkSize: 'SMALL' }) })).status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await until('done');
+    status = await (await call('/api/connections/default/setup')).json() as typeof status;
+    expect(status.setup.checks.warehouse).toEqual({ size: 'XSMALL', resized: false, refused: 'Insufficient privileges to operate on warehouse ZLENS_APP_WH' });
+    expect(appStatements).toEqual(["ALTER WAREHOUSE IDENTIFIER('ZLENS_APP_WH') SET WAREHOUSE_SIZE = 'SMALL'"]);
+  }, 30_000);
+
+  it('never resizes a warehouse that is not the app\'s own', async () => {
+    const appStatements: string[] = [];
+    const warehouse = fakeCheckedWarehouse();
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-faster-other-'));
+    roots.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'sf', manifestVersion: 3, modeling: { mode: 'warehouse-first' }, connections: { default: { driver: 'snowflake', account: 'test-account', username: 'app', database: 'ZLENS_APP', warehouse: 'ANALYTICS_WH' } } }));
+    const base = fakeAppSettings();
+    const appQuery = (async (sql: string) => { if (sql.startsWith('ALTER WAREHOUSE')) { appStatements.push(sql); return []; } return base(sql); }) as SnowflakeAppQuery;
+    const port = await startLocalServer({
+      rootDir: projectRoot, projectRoot, executor: warehouse.executor, preferredPort: 0, host: '127.0.0.1',
+      snowflakeIngress: {}, snowflakeAppSettings: { userConfiguration: 'ZLENS_USER', appName: 'ZLENS_APP', ttlMs: 0 }, snowflakeAppQuery: appQuery,
+      captureServer: (created) => { servers.push(created); },
+    });
+    const call = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers: { 'Sf-Context-Current-User': 'JSMITH', 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
+    expect((await call('/api/connections')).status).toBe(200);
+    await call('/api/connections/default/setup/read', { method: 'POST', body: JSON.stringify({ mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'SALES', schemas: ['PUBLIC'] }], check: true, checkSize: 'MEDIUM' }) });
+    for (let tries = 0; tries < 300; tries += 1) {
+      const setup = await (await call('/api/snowflake-app/setup')).json() as { state: string };
+      if (setup.state === 'done') break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(appStatements).toEqual([]);
+    const status = await (await call('/api/connections/default/setup')).json() as { setup: { checks: { warehouse?: { refused?: string } } } };
+    expect(status.setup.checks.warehouse?.refused).toBe("ZLens resizes only the app's own warehouse, <app>_WH");
+  }, 30_000);
+});

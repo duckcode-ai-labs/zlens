@@ -217,6 +217,23 @@ export function selectedScopeWords(totals: SelectedScopeTotals, checkRowBudget?:
   return `Selected: ${parts.join(' · ')}`;
 }
 
+/** "Check faster" (decision D6): each size's credits an hour, and how much sooner it finishes, roughly. */
+const SIZE_CREDITS: Record<'XSMALL' | 'SMALL' | 'MEDIUM', number> = { XSMALL: 1, SMALL: 2, MEDIUM: 4 };
+
+/**
+ * The background checks on a larger size of the app's own warehouse (onboarding design P7): about that many
+ * times sooner, for about the same credits (each size doubles the credits an hour). Rough: a check that waits
+ * on one large table gains less. Exported for tests.
+ */
+export function checkSizeWords(checkSeconds: number, size: 'XSMALL' | 'SMALL' | 'MEDIUM'): string {
+  const factor = SIZE_CREDITS[size];
+  const seconds = checkSeconds / factor;
+  const credits = (seconds / 3600) * factor;
+  const time = seconds < 60 ? `about ${Math.max(5, Math.round(seconds / 5) * 5)} s` : seconds < 5400 ? `about ${Math.round(seconds / 60)} min` : `about ${Math.round(seconds / 360) / 10} h`;
+  const label = size === 'XSMALL' ? 'X-Small' : size === 'SMALL' ? 'Small' : 'Medium';
+  return `${label}: ${time}, ${credits < 0.05 ? 'under 0.05' : `about ${credits.toFixed(1)}`} credits${size === 'XSMALL' ? '' : `, then back to X-Small`}`;
+}
+
 /** Decision D4: with this many tables or fewer in all, every schema is ticked for the person. */
 export const PRESELECT_TABLE_LIMIT = 100;
 

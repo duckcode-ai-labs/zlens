@@ -83,3 +83,13 @@ describe('two-stage setup in the picker (onboarding design P3)', () => {
     expect(setupEstimates(totals).checks).not.toContain('credits');
   });
 });
+
+describe('Check faster in the picker (onboarding design P7)', () => {
+  it('says each size\'s time and credits, and that the warehouse goes back to X-Small', async () => {
+    const { checkSizeWords } = await import('./connection-metadata-scope');
+    expect(checkSizeWords(3_600, 'XSMALL')).toBe('X-Small: about 60 min, about 1.0 credits');
+    expect(checkSizeWords(3_600, 'SMALL')).toBe('Small: about 30 min, about 1.0 credits, then back to X-Small');
+    expect(checkSizeWords(3_600, 'MEDIUM')).toBe('Medium: about 15 min, about 1.0 credits, then back to X-Small');
+    expect(checkSizeWords(60, 'MEDIUM')).toBe('Medium: about 15 s, under 0.05 credits, then back to X-Small');
+  });
+});

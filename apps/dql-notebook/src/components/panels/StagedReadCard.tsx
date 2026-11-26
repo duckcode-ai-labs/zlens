@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, type ConnectionMetadataScopeV1, type WarehouseSetupStatus } from '../../api/client';
+import { api, type CheckWarehouseSize, type ConnectionMetadataScopeV1, type WarehouseSetupStatus } from '../../api/client';
 import type { themes } from '../../themes/notebook-theme';
-import { setupEstimates, type SelectedScopeTotals } from './connection-metadata-scope';
+import { checkSizeWords, setupEstimates, type SelectedScopeTotals } from './connection-metadata-scope';
 
 const POLL_MS = 1_000;
 
@@ -46,6 +46,8 @@ export function StagedReadCard({
   t: (typeof themes)[keyof typeof themes];
 }) {
   const [check, setCheck] = useState(true);
+  // "Check faster" (decision D6): only in the app, where ZLens may resize its own warehouse.
+  const [checkSize, setCheckSize] = useState<CheckWarehouseSize>('XSMALL');
   const [status, setStatus] = useState<WarehouseSetupStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,6 +88,7 @@ export function StagedReadCard({
         mode,
         scopes: selected,
         check,
+        ...(credits && check && checkSize !== 'XSMALL' ? { checkSize } : {}),
         ...(totals && totals.sized > 0 ? { tablesExpected: totals.tables } : {}),
       }));
     } catch (cause) {
@@ -122,6 +125,22 @@ export function StagedReadCard({
         <input type="checkbox" checked={check} disabled={reading} onChange={(event) => setCheck(event.target.checked)} />
         <span>Check the data in the background <span style={{ color: t.textMuted }}>· keys, joins and rules, then the search index</span></span>
       </label>
+      {credits && check ? (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11.5, color: t.textSecondary }}>
+          <span>Check on</span>
+          <select
+            value={checkSize}
+            disabled={reading}
+            onChange={(event) => setCheckSize(event.target.value as CheckWarehouseSize)}
+            style={{ height: 26, borderRadius: 6, border: `1px solid ${t.cellBorder}`, background: t.cellBg, color: t.textPrimary, fontSize: 11.5, fontFamily: t.font }}
+          >
+            {(['XSMALL', 'SMALL', 'MEDIUM'] as const).map((size) => (
+              <option key={size} value={size}>{estimates ? checkSizeWords(estimates.checkSeconds, size) : size === 'XSMALL' ? 'X-Small (the app\'s own)' : size === 'SMALL' ? 'Small, then back to X-Small' : 'Medium, then back to X-Small'}</option>
+            ))}
+          </select>
+          <span style={{ color: t.textMuted }}>(estimate)</span>
+        </label>
+      ) : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <button
           type="button"

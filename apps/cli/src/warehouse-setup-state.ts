@@ -47,6 +47,11 @@ export interface SetupCheckStage {
   sampled?: number;
   /** Statements answered from an earlier run: what a resume did not ask again. */
   resumed?: number;
+  /**
+   * "Check faster" (onboarding design P7): the size the checks ran on, whether the app's warehouse was resized
+   * (and so must go back to X-Small), or why the resize was refused.
+   */
+  warehouse?: { size: string; resized: boolean; refused?: string };
 }
 
 export interface WarehouseSetupStateV1 {
@@ -55,6 +60,8 @@ export interface WarehouseSetupStateV1 {
   scopes: Array<{ catalogOrDatabase: string; schemas: string[] }>;
   /** Run the data checks in the background once names are read (decision D3: on by default). */
   check: boolean;
+  /** "Check faster": the size of the app's own warehouse for the checks (decision D6); X-Small when absent. */
+  checkSize?: string;
   read: SetupReadStage;
   checks?: SetupCheckStage;
 }

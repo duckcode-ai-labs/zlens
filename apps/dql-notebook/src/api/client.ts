@@ -760,6 +760,9 @@ export interface SetupLaunchResponse {
   setupStage?: WarehouseSetupStage;
 }
 
+/** "Check faster" (onboarding design P7): the app's own warehouse a size up for the background checks. */
+export type CheckWarehouseSize = 'XSMALL' | 'SMALL' | 'MEDIUM';
+
 /** Where a two-stage setup stands (onboarding design P3). */
 export type WarehouseSetupStage = 'choose' | 'reading' | 'ready' | 'checking' | 'checked' | 'failed' | 'stopped';
 
@@ -770,6 +773,8 @@ export interface WarehouseSetupStatus {
     connectionId: string;
     scopes: Array<{ catalogOrDatabase: string; schemas: string[] }>;
     check: boolean;
+    /** "Check faster": the size of the app's own warehouse for the checks (decision D6). */
+    checkSize?: CheckWarehouseSize;
     read: { state: 'running' | 'done' | 'failed' | 'stopped'; operationId?: string; startedAt?: string; at?: string; relations?: number; warnings?: string[]; error?: string };
     checks?: {
       state: 'running' | 'done' | 'failed' | 'stopped' | 'off';
@@ -787,6 +792,8 @@ export interface WarehouseSetupStatus {
       sampled?: number;
       /** Statements an earlier run answered that this run did not ask again. */
       resumed?: number;
+      /** The size the checks ran on, and why a resize was refused. */
+      warehouse?: { size: string; resized: boolean; refused?: string };
     };
   } | null;
   /** The stage running, with its phase and counts. */
@@ -7564,7 +7571,7 @@ export const api = {
   },
 
   /** Stage 1: read the names of the chosen schemas (no table is scanned); the data checks follow unless `check` is false. */
-  async startSetupRead(connectionId: string, input: ConnectionMetadataScopeInput & { check: boolean; tablesExpected?: number }): Promise<WarehouseSetupStatus> {
+  async startSetupRead(connectionId: string, input: ConnectionMetadataScopeInput & { check: boolean; tablesExpected?: number; checkSize?: CheckWarehouseSize }): Promise<WarehouseSetupStatus> {
     return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/read`, { method: 'POST', body: JSON.stringify(input) });
   },
 
@@ -7572,7 +7579,7 @@ export const api = {
    * Stage 2: check the data in the background (again). It resumes where it stopped; `fresh` asks the warehouse
    * everything again; `anyway` checks those tables without the background time limit.
    */
-  async startSetupCheck(connectionId: string, options: { fresh?: boolean; anyway?: string[] } = {}): Promise<WarehouseSetupStatus> {
+  async startSetupCheck(connectionId: string, options: { fresh?: boolean; anyway?: string[]; checkSize?: CheckWarehouseSize } = {}): Promise<WarehouseSetupStatus> {
     return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/check`, { method: 'POST', body: JSON.stringify(options) });
   },
 
