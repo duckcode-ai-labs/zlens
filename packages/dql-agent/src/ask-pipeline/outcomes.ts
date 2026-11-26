@@ -33,7 +33,7 @@ export interface PipelineReceipt {
   }>;
   candidates: Array<{ tier: string; trust: string; proof: string[]; sqlFingerprint?: string; engine?: string }>;
   /** The checks an AI-written statement was held to before it ran: one entry per check per draft. */
-  checks?: Array<{ id: 'stated_values' | 'required_filters' | 'join_fanout' | 'certified_joins' | 'catalog_columns' | 'read_only' | 'key_labels'; label: string; passed: boolean; message: string; attempt: number }>;
+  checks?: Array<{ id: 'stated_values' | 'required_filters' | 'join_fanout' | 'certified_joins' | 'catalog_columns' | 'read_only' | 'key_labels' | 'join_keys_filled'; label: string; passed: boolean; message: string; attempt: number }>;
   refusals: PreparedRefusal[];
   /** Tier attempts per preparation round, in order. */
   tiers: Array<{ round: number; tier: string; outcome: string; detail?: string }>;

@@ -13,11 +13,14 @@ const PLAYER_SEASONS = 'dev.player_season_facts';
 const PLAYER_GAMES = 'dev.player_game_facts';
 const TEAMS = 'dev.teams';
 const TEAM_GAMES = 'dev.team_game_facts';
+const JOURNEY = 'dev.player_journey';
 const columns: Record<string, string[]> = {
   [PLAYER_SEASONS]: ['player_id', 'player_name', 'season', 'teams_played'],
   [PLAYER_GAMES]: ['game_id', 'game_date', 'season', 'team_id', 'player_id', 'player_name', 'points'],
   [TEAMS]: ['team_id', 'team_nickname', 'city'],
   [TEAM_GAMES]: ['game_id', 'game_date', 'season', 'team_id', 'team_nickname', 'team_won'],
+  // Last, so the tables the name checks above look through come first as before.
+  [JOURNEY]: ['player_id', 'player_name', 'season', 'team_id'],
 };
 const tables = Object.keys(columns);
 const columnsOf = (relation: string) => columns[tables.find((table) => table.toLowerCase() === relation.toLowerCase()) ?? relation] ?? [];
@@ -69,6 +72,13 @@ describe('on the host: the Durant answer lists team names by season', () => {
     executor: { executeQuery: vi.fn(async (sql: string) => {
       executed.push(sql);
       if (/HAVING COUNT\(\*\) > 1/.test(sql)) return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
+      // How many rows have each join key: the journey's team_id is empty in 93% of its rows, as FCT_PLAYER_JOURNEY's
+      // is on the NBA trial; the game facts' team_id in 2%, like an optional key; the teams' never.
+      if (/AS key_empty FROM/.test(sql)) {
+        const counts = sql.includes(JOURNEY) ? { KEY_ROWS: 6305, KEY_EMPTY: 5866 } : sql.includes(PLAYER_GAMES) ? { KEY_ROWS: 10000, KEY_EMPTY: 200 } : { KEY_ROWS: 30, KEY_EMPTY: 0 };
+        return { columns: ['KEY_ROWS', 'KEY_EMPTY'], rowCount: 1, executionTimeMs: 1, rows: [counts] };
+      }
+      if (sql.includes(JOURNEY) && sql.includes('team_nickname')) return { columns: ['season', 'team_nickname'], rowCount: 3, executionTimeMs: 1, rows: [{ season: 2007, team_nickname: null }, { season: 2016, team_nickname: null }, { season: 2020, team_nickname: null }] };
       if (sql.includes('information_schema.columns')) {
         const rows = tables.filter((table) => sql.includes(`'${table.split('.').pop()}'`)).flatMap((table) => columnsOf(table).map((column) => ({ table_schema: 'dev', table_name: table.split('.').pop(), column_name: column, data_type: /_id$|season|points|played/.test(column) ? 'BIGINT' : 'VARCHAR' })));
         return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
@@ -122,6 +132,38 @@ describe('on the host: the Durant answer lists team names by season', () => {
     expect(result.answer).toContain(`It does not list the teams by name; teams.team_nickname names them, and the statement could not be made to show it.`);
     const checks = (result.askPipelineReceipt?.checks ?? []).filter((check) => check.id === 'key_labels');
     expect(checks.map((check) => check.passed)).toEqual([false, false]);
+  });
+
+  // Q11 after the setup checks on Snowflake (26 Nov 2026): the AI joined the journey on its mostly empty TEAM_ID.
+  const JOURNEY_TEAMS = `SELECT j.season, t.team_nickname FROM ${JOURNEY} j LEFT JOIN ${TEAMS} t ON j.team_id = t.team_id WHERE j.player_name ILIKE '%Kevin Durant%' GROUP BY j.season, t.team_nickname ORDER BY j.season`;
+
+  it('a join on a key empty in most rows is sent back once, and the answer reads the teams from where team_id is filled (Q11)', async () => {
+    const prompts: string[] = [];
+    const result = await ask(routeFor(reading, [JOURNEY_TEAMS, NAMES], prompts), question);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('its join of player_journey and teams on team_id matches few rows: team_id is empty in 5,866 of 6,305 player_journey rows (93%); take team_id from a table where it is filled, or reach teams another way');
+    expect(result.status).toBe('completed');
+    expect(result.answer).toContain('3 rows, starting with 2007 · Thunder; 2016 · Warriors; 2020 · Nets.');
+    expect(result.answer).not.toMatch(/is empty in/);
+    const checks = (result.askPipelineReceipt?.checks ?? []).filter((check) => check.id === 'join_keys_filled');
+    expect(checks.map((check) => check.passed)).toEqual([false, true]);
+  });
+
+  it('a repair that keeps the mostly empty key is not taken as a fix: the statement runs and the answer says how few rows it matched', async () => {
+    const prompts: string[] = [];
+    const result = await ask(routeFor(reading, [JOURNEY_TEAMS, JOURNEY_TEAMS.replace('ORDER BY j.season', 'ORDER BY j.season DESC')], prompts), question);
+    expect(prompts).toHaveLength(2);
+    expect(result.status).toBe('completed');
+    expect(result.answer).toContain('Team_id is empty in 93% of player_journey rows (5,866 of 6,305), so the join to teams leaves most of them unmatched; no better way to link them was found.');
+  });
+
+  it('an optional key empty in a few rows is not judged (2%: under the half that makes a key mostly empty)', async () => {
+    const prompts: string[] = [];
+    const result = await ask(routeFor(reading, [NAMES], prompts), question);
+    expect(prompts).toHaveLength(1);
+    expect(result.status).toBe('completed');
+    const checks = (result.askPipelineReceipt?.checks ?? []).filter((check) => check.id === 'join_keys_filled');
+    expect(checks.map((check) => check.passed)).toEqual([true]);
   });
 
   it('SQL written from the words reads a stated year as the season the tables keep, and says so (V13, PO-2)', async () => {
