@@ -143,8 +143,9 @@ zlens sync warehouse --schemas sales,finance
 schemas**; `zlens sync warehouse` with no flags syncs the saved selection
 again and lists what changed since the last sync.
 
-Next, without dbt: **Draft my models** in Guided Setup, or **Modeling →
-Draft from warehouse**, drafts entities and joins from what you synced, for
+Next, without dbt: Guided Setup's **Read these tables** reads names first and
+drafts your models in the background (**Draft my models** shows them), or
+**Modeling → Draft from warehouse** drafts entities and joins from what you synced, for
 you to review and certify. The first Domain is named after the database
 (`jaffle_shop.duckdb` gives **Jaffle shop**), staging copies of a final
 table are left out, and the drafts are kept until you save or discard them.

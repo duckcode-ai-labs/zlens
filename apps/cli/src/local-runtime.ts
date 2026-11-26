@@ -15581,11 +15581,18 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return id ? operationCoordinator.get(id) : null;
   };
   /** The data checks and the search index, in the background (stage 2). Null when there is nothing read to check. */
-  const startSetupCheck = (options: { fresh?: boolean; anyway?: string[]; checkSize?: CheckWarehouseSize } = {}): LocalOperation | null => {
+  const startSetupCheck = (options: { fresh?: boolean; anyway?: string[]; checkSize?: CheckWarehouseSize; domain?: string; includeStaging?: boolean } = {}): LocalOperation | null => {
     let state = warehouseSetup;
     if (!state || state.read.state !== 'done') return null;
     if (options.checkSize && options.checkSize !== state.checkSize) state = saveWarehouseSetup({ ...state, checkSize: options.checkSize });
     if (state.checks?.state === 'running' && state.checks.operationId) return operationCoordinator.get(state.checks.operationId);
+    // Rename and "Show staging tables" (onboarding design D8): kept for the runs after this one too.
+    if (options.domain !== undefined || options.includeStaging !== undefined) {
+      const domain = options.domain !== undefined ? options.domain.trim().slice(0, 80) : state.draft?.domain;
+      const includeStaging = options.includeStaging ?? state.draft?.includeStaging;
+      state = saveWarehouseSetup({ ...state, draft: { ...(domain ? { domain } : {}), ...(includeStaging ? { includeStaging: true } : {}) } });
+    }
+    const draftOptions = state.draft ?? {};
     const database = state.scopes[0]?.catalogOrDatabase;
     // The answers kept from an earlier run on this catalog: a resume asks none of them again (onboarding design P4).
     const catalog = (() => { try { return readWarehouseCatalog(projectRoot).snapshot; } catch { return undefined; } })();
@@ -15604,7 +15611,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const startedAt = new Date().toISOString();
     const size: CheckWarehouseSize = isCheckWarehouseSize(state.checkSize) ? state.checkSize : 'XSMALL';
     saveWarehouseSetup({ ...state, checks: { state: 'running', operationId: operation.id, startedAt, warehouse: { size: 'XSMALL', resized: false } } });
-    let outcome: { proposalId?: string; drafted: number; search: 'meaning' | 'words'; searchNote?: string } | undefined;
+    let outcome: { proposalId?: string; drafted: number; search: 'meaning' | 'words'; searchNote?: string; summary?: NonNullable<WarehouseSetupStateV1['checks']>['summary'] } | undefined;
     let warehouseUse: { size: string; resized: boolean; refused?: string } = { size: 'XSMALL', resized: false };
     let problems: SetupCheckProblem[] = [];
     let sampledTables = 0;
@@ -15646,7 +15653,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             progress.update({ checks: counts });
           },
         };
-        const { report: drafted, proposal } = await draftWarehouseProposal({ validate: true }, projectSnapshot(), signal, setupChecks);
+        const { report: drafted, proposal } = await draftWarehouseProposal({
+          validate: true,
+          ...(draftOptions.domain ? { domain: draftOptions.domain } : {}),
+          ...(draftOptions.includeStaging ? { includeStaging: true } : {}),
+        }, projectSnapshot(), signal, setupChecks);
         signal.throwIfAborted();
         // What could not be checked, by table, for the Setup page (onboarding design P4, P5).
         problems = setupCheckProblems(drafted, cache, CHECK_ROW_BUDGET, SETUP_CHECK_STATEMENT_MS);
@@ -15668,7 +15679,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             search = { search: 'words', searchNote: error instanceof Error ? error.message : String(error) };
           }
         }
-        outcome = { ...(proposal ? { proposalId: proposal.id } : {}), drafted: proposal ? drafted.entities.length : 0, ...search };
+        // What Guided Setup's card says of the drafts (onboarding design D8).
+        const newDomain = drafted.domains.find((item) => !item.existing)?.name ?? drafted.domains[0]?.name;
+        const summary = {
+          models: drafted.entities.filter((entity) => !entity.existing).length,
+          joins: drafted.relationships.length,
+          relations: drafted.relations,
+          validated: drafted.validated,
+          sampled: (drafted.readNotes ?? []).filter((note) => note.kind === 'sampled').length,
+          ...(newDomain ? { domain: newDomain } : {}),
+          ...(drafted.stagingHidden?.length ? { stagingHidden: drafted.stagingHidden } : {}),
+          ...(drafted.readNotes?.length ? { readNotes: drafted.readNotes.map((note) => note.text) } : {}),
+        };
+        outcome = { ...(proposal ? { proposalId: proposal.id } : {}), drafted: proposal ? drafted.entities.length : 0, ...search, summary };
         return outcome;
       } finally {
         stopHeartbeat();
@@ -15769,6 +15792,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       scopes: input.scopes,
       check: input.check,
       ...(input.checkSize && input.checkSize !== 'XSMALL' ? { checkSize: input.checkSize } : {}),
+      // A Domain name or "Show staging tables" chosen for this connection stays for the next read's drafts.
+      ...(warehouseSetup?.connectionId === input.connectionId && warehouseSetup.draft ? { draft: warehouseSetup.draft } : {}),
       read: { state: 'running', operationId: operation.id, startedAt },
       // Nothing to check until the read is done; `check` says whether a check follows it.
       checks: { state: 'off' },
@@ -30736,9 +30761,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       if (action === 'check' && req.method === 'POST') {
         // `fresh`: ask the warehouse everything again; `anyway`: check these tables without the background time limit.
-        const body = await readJSON(req).catch(() => ({})) as { fresh?: boolean; anyway?: unknown; checkSize?: unknown };
+        // `domain` and `includeStaging`: Guided Setup's Rename and "Show staging tables" (onboarding design D8).
+        const body = await readJSON(req).catch(() => ({})) as { fresh?: boolean; anyway?: unknown; checkSize?: unknown; domain?: unknown; includeStaging?: unknown };
         const anyway = Array.isArray(body.anyway) ? body.anyway.filter((item): item is string => typeof item === 'string').slice(0, 200) : undefined;
-        const operation = startSetupCheck({ ...(body.fresh === true ? { fresh: true } : {}), ...(anyway?.length ? { anyway } : {}), ...(isCheckWarehouseSize(body.checkSize) ? { checkSize: body.checkSize } : {}) });
+        const operation = startSetupCheck({
+          ...(body.fresh === true ? { fresh: true } : {}),
+          ...(anyway?.length ? { anyway } : {}),
+          ...(isCheckWarehouseSize(body.checkSize) ? { checkSize: body.checkSize } : {}),
+          ...(typeof body.domain === 'string' ? { domain: body.domain } : {}),
+          ...(typeof body.includeStaging === 'boolean' ? { includeStaging: body.includeStaging } : {}),
+        });
         if (!operation) {
           send(409, { code: 'SETUP_READ_FIRST', error: 'Read the names of the chosen schemas first.' });
           return;

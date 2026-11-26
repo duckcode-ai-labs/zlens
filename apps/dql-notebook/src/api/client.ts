@@ -775,6 +775,8 @@ export interface WarehouseSetupStatus {
     check: boolean;
     /** "Check faster": the size of the app's own warehouse for the checks (decision D6). */
     checkSize?: CheckWarehouseSize;
+    /** How the checks draft: the Domain the drafts go in, staging copies too (Guided Setup's Rename, onboarding D8). */
+    draft?: { domain?: string; includeStaging?: boolean };
     read: { state: 'running' | 'done' | 'failed' | 'stopped'; operationId?: string; startedAt?: string; at?: string; relations?: number; warnings?: string[]; error?: string };
     checks?: {
       state: 'running' | 'done' | 'failed' | 'stopped' | 'off';
@@ -794,6 +796,17 @@ export interface WarehouseSetupStatus {
       resumed?: number;
       /** The size the checks ran on, and why a resize was refused. */
       warehouse?: { size: string; resized: boolean; refused?: string };
+      /** What the drafts hold, for Guided Setup's "Draft my models" card (onboarding design D8). */
+      summary?: {
+        models: number;
+        joins: number;
+        relations: number;
+        validated: boolean;
+        sampled: number;
+        domain?: string;
+        stagingHidden?: Array<{ relation: string; finalRelation: string }>;
+        readNotes?: string[];
+      };
     };
   } | null;
   /** The stage running, with its phase and counts. */
@@ -7577,9 +7590,10 @@ export const api = {
 
   /**
    * Stage 2: check the data in the background (again). It resumes where it stopped; `fresh` asks the warehouse
-   * everything again; `anyway` checks those tables without the background time limit.
+   * everything again; `anyway` checks those tables without the background time limit; `domain` and
+   * `includeStaging` draft into that Domain, staging copies too (kept for later runs).
    */
-  async startSetupCheck(connectionId: string, options: { fresh?: boolean; anyway?: string[]; checkSize?: CheckWarehouseSize } = {}): Promise<WarehouseSetupStatus> {
+  async startSetupCheck(connectionId: string, options: { fresh?: boolean; anyway?: string[]; checkSize?: CheckWarehouseSize; domain?: string; includeStaging?: boolean } = {}): Promise<WarehouseSetupStatus> {
     return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/check`, { method: 'POST', body: JSON.stringify(options) });
   },
 

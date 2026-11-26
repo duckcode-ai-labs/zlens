@@ -11,6 +11,7 @@ import {
   databaseOnlyUnavailable,
   draftErrorMessage,
   draftOutcome,
+  draftOutcomeFromChecks,
   draftsFromWarehouse,
   existingProjectFromStatus,
   existingRefreshLabel,
@@ -68,12 +69,13 @@ describe('where the data model lives', () => {
     expect(stepTwoCopy('dbt', existing).title).toBe('Connect your database');
   });
 
-  it('Database only turns on warehouse-first and drafts models after the sync', () => {
+  it('Database only turns on warehouse-first, reads names first and drafts in the background (onboarding D8)', () => {
     expect(modelingModeForSource('warehouse')).toBe('warehouse-first');
     expect(draftsFromWarehouse('warehouse')).toBe(true);
     expect(stepOneBlocker({ source: 'warehouse', requiresDbtReapply: false, dbtConfigured: false })).toBeNull();
-    expect(stepTwoCopy('warehouse', null).description).toContain('Apply and synchronize');
-    expect(stepTwoCopy('warehouse', null).description).toContain('Draft my models');
+    expect(stepTwoCopy('warehouse', null).description).toContain('then Read these tables');
+    expect(stepTwoCopy('warehouse', null).description).toContain('drafts your models in the background');
+    expect(stepTwoCopy('warehouse', null).description).not.toContain('Apply and synchronize');
     const existing = existingProjectFromStatus(warehouseProject);
     expect(existing).toMatchObject({ mode: 'warehouse-first', label: 'Database only', warehouseModeling: true });
     expect(initialModelSource({ existing })).toBe('warehouse');
@@ -196,6 +198,41 @@ describe('Draft my models', () => {
     });
     expect(outcome.message).toMatch(/, each join checked on the data \(1 large table on a sample of its files\)\. Not saved yet/);
     expect(outcome.readNotes).toHaveLength(2);
+  });
+
+  it('says the same of the drafts the background checks wrote (onboarding design D8)', () => {
+    const outcome = draftOutcomeFromChecks({
+      state: 'done',
+      proposalId: 'proposal-4',
+      drafted: 2,
+      summary: {
+        models: 2,
+        joins: 1,
+        relations: 6,
+        validated: true,
+        sampled: 1,
+        domain: 'Jaffle shop',
+        stagingHidden: [{ relation: 'dev.stg_customers', finalRelation: 'dev.customers' }],
+        readNotes: ['ORDERS: checked on a block sample of about 10 million of 1.2 billion rows.'],
+      },
+    });
+    expect(outcome).toEqual({
+      ok: true,
+      proposalId: 'proposal-4',
+      message: 'Drafted 2 models and 1 join from 6 tables, each join checked on the data (1 large table on a sample of its rows). Not saved yet: review and save them in Modeling.',
+      domain: 'Jaffle shop',
+      stagingHidden: [{ relation: 'dev.stg_customers', finalRelation: 'dev.customers' }],
+      readNotes: ['ORDERS: checked on a block sample of about 10 million of 1.2 billion rows.'],
+    });
+    // Nothing yet while the checks run, or when they are off; plain words when they stop or fail.
+    expect(draftOutcomeFromChecks({ state: 'running' })).toBeNull();
+    expect(draftOutcomeFromChecks({ state: 'off' })).toBeNull();
+    expect(draftOutcomeFromChecks(undefined)).toBeNull();
+    expect(draftOutcomeFromChecks({ state: 'stopped' })).toEqual({ ok: true, message: 'The data checks were stopped. Draft my models carries on from where they stopped.' });
+    expect(draftOutcomeFromChecks({ state: 'failed', error: 'warehouse suspended' })).toEqual({ ok: false, message: 'The data checks did not finish: warehouse suspended. Draft my models tries again from where they stopped.' });
+    expect(draftOutcomeFromChecks({ state: 'done', summary: { models: 0, joins: 0, relations: 6, validated: true, sampled: 0 } })).toEqual({ ok: true, message: 'Nothing new to draft: the 6 tables read and their joins are already modeled.' });
+    // A state written before the summary existed still says what was drafted.
+    expect(draftOutcomeFromChecks({ state: 'done', proposalId: 'p', drafted: 3 })?.message).toBe('Drafted 3 models, each join checked on the data. Not saved yet: review and save them in Modeling.');
   });
 
   it('says honestly what ZLens does with rows, and never "never their rows"', () => {

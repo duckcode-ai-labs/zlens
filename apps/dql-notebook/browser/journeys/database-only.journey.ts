@@ -9,9 +9,10 @@ import { cliEntry, installDuckdbConnector, repoRoot, run, startNotebookServer, t
  * that holds only a DuckDB file. `zlens notebook <folder> --yes` creates the
  * project (Database only, its connection set to the file) and opens Guided
  * Setup on "Database only". The connection tests itself and lists its schemas;
- * the person ticks one, Apply and synchronize, Draft my models, and lands in
- * Modeling's review. A reload on the way resumes at the same step, and the
- * drafted tables show as drafted in Apps.
+ * the person ticks one and reads it (names first, onboarding design D8); the
+ * background checks draft the models, and Finish lands in Modeling's review.
+ * A reload on the way resumes at the same step, and the drafted tables show as
+ * drafted in Apps.
  *
  * New-user round 2, Q3: the database file is jaffle_shop.duckdb and its dev
  * schema holds staging copies (stg_customers, stg_orders) beside the final
@@ -67,7 +68,7 @@ test.afterAll(async () => {
   if (workDir) rmSync(workDir, { recursive: true, force: true });
 });
 
-test('Database only from a bare folder: created, connected, schemas, synchronize, draft, resume, review in Modeling', async ({ page }) => {
+test('Database only from a bare folder: created, connected, schemas, names first, drafts in the background, resume, review in Modeling', async ({ page }) => {
   test.setTimeout(240_000);
   // `--yes` created a Database only project around the file, with no placeholder block.
   const config = JSON.parse(readFileSync(join(projectDir, 'dql.config.json'), 'utf8'));
@@ -95,9 +96,10 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   // Value profiles are off in this project, so nothing says values are sent.
   await expect(setup.getByText('Value profiles are on')).toHaveCount(0);
   await expect(setup.getByText(/never (their )?rows/)).toHaveCount(0);
-  // Drafting waits for the synchronized catalog.
+  // Drafting waits for the tables to be read.
   const draft = setup.getByRole('region', { name: 'Draft my models' });
   await expect(draft.getByRole('button', { name: 'Draft my models' })).toBeDisabled();
+  await expect(draft.getByText('Choose schemas and Read these tables first.')).toBeVisible();
 
   // The connection zlens created tests itself and lists the schemas: one plain question.
   await expect(setup.getByText(/Test passed/).first()).toBeVisible({ timeout: 60_000 });
@@ -115,11 +117,15 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   await showStagingSchemas.uncheck();
   await expect(setup.getByRole('checkbox', { name: /^raw/ })).toHaveCount(0);
   await devSchema.check();
-  await setup.getByRole('button', { name: 'Apply and synchronize' }).click();
-  await expect(setup.getByText(/Modeling catalog · \d+ tables and views/).first()).toBeVisible({ timeout: 90_000 });
+  // Two stages (onboarding design D8): Read these tables reads names, types, comments and keys, with no
+  // table scanned, and the data checks behind the drafts follow in the background. No Apply and synchronize.
+  await expect(setup.getByRole('button', { name: 'Apply and synchronize' })).toBeHidden();
+  const readCard = setup.getByRole('region', { name: 'Read these tables' });
+  await readCard.getByRole('button', { name: 'Read these tables' }).click();
+  await expect(readCard.getByRole('status')).toContainText(/Read \d+ tables: names, types, comments, keys\. Ready to ask\./, { timeout: 90_000 });
   await expect(setup.getByText(/LOCAL_[0-9A-F]{8}/)).toHaveCount(0);
 
-  await draft.getByRole('button', { name: 'Draft my models' }).click();
+  // The drafts land by themselves when the checks finish: no Draft my models click.
   await expect(draft.getByRole('status')).toContainText(/Drafted 5 models and \d+ joins? from 7 tables/, { timeout: 120_000 });
   // Honest about what is saved (new-user round 2, problem 4).
   await expect(draft.getByRole('status')).toContainText('Not saved yet: review and save them in Modeling.');

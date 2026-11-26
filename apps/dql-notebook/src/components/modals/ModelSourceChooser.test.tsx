@@ -102,6 +102,17 @@ describe('Draft my models card', () => {
     expect(html).toContain('Choose schemas and Apply and synchronize first.');
   });
 
+  it('a database-only setup drafts in the background: it waits for Read these tables, then shows the checks (onboarding D8)', () => {
+    const waiting = renderToStaticMarkup(<DraftModelsCard staged busy={false} canDraft={false} outcome={null} onDraft={noop} t={t} />);
+    expect(waiting).toContain('Choose schemas and Read these tables first.');
+    expect(waiting).not.toContain('Apply and synchronize');
+    expect(waiting).toContain('While it checks the data in the background');
+    const checking = renderToStaticMarkup(<DraftModelsCard staged busy canDraft outcome={null} progress="Checking keys and joins in SALES: 312 of 1,240 tables" onDraft={noop} t={t} />);
+    expect(checking).toMatch(/<button[^>]*disabled=""[^>]*>Drafting…<\/button>/);
+    expect(checking).toContain('aria-label="Checks"');
+    expect(checking).toContain('Checking keys and joins in SALES: 312 of 1,240 tables');
+  });
+
   it('reports the draft as a status message', () => {
     const html = renderToStaticMarkup(<DraftModelsCard busy={false} canDraft outcome={{ ok: true, proposalId: 'p', message: 'Drafted 2 models and 1 join from 6 tables.' }} onDraft={noop} t={t} />);
     expect(html).toMatch(/<button[^>]*>Draft my models<\/button>/);

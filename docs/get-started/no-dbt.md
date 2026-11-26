@@ -92,9 +92,9 @@ has the full list.
 ```
 
 From there it is the same as a database: Guided Setup lists one schema,
-`main`; tick it, **Apply and synchronize**, then **Draft my models**. Files
-have no declared keys, so ZLens finds the joins from column names and checks
-each one on the data before you certify it.
+`main`; tick it and **Read these tables**. The models are drafted in the
+background. Files have no declared keys, so ZLens finds the joins from column
+names and checks each one on the data before you certify it.
 
 Without a terminal (a script, CI, a desktop launcher) `zlens notebook` never
 waits for an answer. It prints the one command to run:
@@ -557,21 +557,32 @@ With **Database only**, Setup walks through the steps above:
    test passes (**Find available databases & schemas** lists them again).
    Tick the ones that hold your tables. Schemas named `staging`, `stg` or
    `raw` wait behind **Show staging tables** when the database has others.
-3. Click **Apply and synchronize**.
-4. Click **Draft my models**. It runs the same discovery as
-   `zlens model discover --validate` and says what it drafted, for example
-   *Drafted 9 models and 12 joins from 13 tables, each join checked on the
-   data*. It also says:
+3. Click **Read these tables**. ZLens reads names, types, comments and
+   declared keys first, with no table scanned, so it is ready to ask within
+   seconds on a small database and within minutes on a large one. **Stop**
+   ends the read. **Check the data in the background** is ticked: leave it
+   ticked to have ZLens check the data and draft your models next.
+4. **Draft my models** follows those checks and fills in by itself when they
+   finish. You can click **Continue** without waiting. The checks run the
+   same discovery as `zlens model discover --validate`. A table over about 10
+   million rows is checked on a block sample, and a lookup gets 60 seconds.
+   The checks resume where they stopped after a restart. The card says what
+   was drafted, for example *Drafted 9 models and 12 joins from 13 tables,
+   each join checked on the data*. It also says:
    - which staging copies it left out (*Left out 4 staging tables
      (stg_customers, stg_orders, …): a final table holds the same data*),
      with **Show staging tables** to draft them too;
    - the Domain the tables go in, named after your database (*Your tables
-     go in the Domain Jaffle shop*), with **Rename**;
+     go in the Domain Jaffle shop*), with **Rename**. Rename and **Show
+     staging tables** run the checks again, and the answers they already
+     have are not asked of the database again;
    - *9 drafted models waiting for review in Jaffle shop. They are kept
      until you save or discard them.* Nothing is written to the project
      yet, and nothing is lost if you leave Setup or Modeling without saving.
+   With **Check the data in the background** unticked, **Draft my models**
+   starts the checks when you want them.
 5. On the last step, **Review drafted models** opens **Modeling** with the
-   drafts. Save them, then certify the joins Ask may rely on, as in
+   drafts (still on their way if the checks are running). Save them, then certify the joins Ask may rely on, as in
    [step 6](#6-review-and-certify).
 6. Build an App or ask a question.
 
