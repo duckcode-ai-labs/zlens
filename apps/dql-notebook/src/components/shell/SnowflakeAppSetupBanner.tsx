@@ -173,6 +173,19 @@ export function SnowflakeAppSetupBanner({ enabled }: { enabled: boolean }) {
       {message.action === 'choose' && (
         <button type="button" style={linkStyle} onClick={() => dispatch({ type: 'OPEN_SETUP' })}>Choose your data</button>
       )}
+      {/* The Setup page: every stage with its counts, and what could not be checked (onboarding design P5). */}
+      {status && status.stage && status.stage !== 'choose' && (status.state === 'running' || status.state === 'ready' || status.state === 'failed' || status.state === 'stopped' || status.state === 'done') && (
+        <button
+          type="button"
+          style={linkStyle}
+          onClick={() => {
+            dispatch({ type: 'SET_MAIN_VIEW', view: 'settings' });
+            dispatch({ type: 'SET_SETTINGS_TAB', tab: 'database' });
+          }}
+        >
+          Setup
+        </button>
+      )}
       {message.action === 'stop' && status?.operation && (
         <button
           type="button"

@@ -55,6 +55,7 @@ import {
 } from './connection-metadata-scope';
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { StagedReadCard } from './StagedReadCard';
+import { SetupStatusPanel } from './SetupStatusPanel';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
 import { AppearanceSettings } from '../settings/AppearanceSettings';
 import { connectionDetailRows } from './connection-values';
@@ -199,7 +200,7 @@ export function ConnectionPanel({
   initialInfo,
   onConfigured,
   onMetadataSynced,
-  stagedSetup,
+  stagedSetup: stagedSetupProp,
 }: {
   variant?: 'panel' | 'page' | 'setup';
   /** Guided Setup's answer to "Where does your data model live?": Database only hides dbt profiles (design D7). */
@@ -233,6 +234,8 @@ export function ConnectionPanel({
   const [snowflakeBackups, setSnowflakeBackups] = useState<SnowflakeAppBackups | null>(null);
   // The app for Snowflake: a managed project (no Project & dbt tab).
   const snowflakeApp = useSnowflakeApp();
+  // In the app, Settings » Database reads added schemas the two-stage way too (onboarding design P3, P5).
+  const stagedSetup = stagedSetupProp ?? (variant === 'page' && snowflakeApp ? { onReady: () => undefined, credits: true } : undefined);
   useEffect(() => {
     let alive = true;
     void api.getSnowflakeAppBackups().then((status) => { if (alive) setSnowflakeBackups(status); });
@@ -1477,6 +1480,8 @@ export function ConnectionPanel({
   ) : null;
   const databaseEditor = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* The Setup page (onboarding design P5): where the two stages stand, what could not be checked. */}
+      {!isSetup ? <SetupStatusPanel connectionId={info?.default} credits={snowflakeApp} t={t} /> : null}
       <div>
         <div style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Database connection</div>
         <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>

@@ -70,11 +70,19 @@ def read_status():
         raw = session.sql("CALL app_public.launcher_status()").collect()[0][0]
         value = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
     except Exception as error:  # noqa: BLE001 - shown to the person as is
-        return {"status": "", "url": "", "zlens_user": "", "error": str(error)}
+        return {"status": "", "url": "", "zlens_user": "", "setup": None, "error": str(error)}
+    setup = value.get("setup")
+    if isinstance(setup, str):
+        try:
+            setup = json.loads(setup)
+        except ValueError:
+            setup = None
     return {
         "status": str(value.get("status") or "").upper(),
         "url": str(value.get("url") or ""),
         "zlens_user": str(value.get("zlens_user") or ""),
+        # Setup's status, written by ZLens while it reads the chosen schemas and checks the data (onboarding P5).
+        "setup": setup if isinstance(setup, dict) else None,
         "error": "",
     }
 
@@ -318,6 +326,9 @@ if name == "READY" and status["url"]:
     st.success(f"ZLens is ready. Checked at {checked}.")
     if "started_in" in state:
         st.caption(f"Started in {state['started_in']}.")
+    setup_line = str((status.get("setup") or {}).get("line") or "")
+    if setup_line:
+        st.info(setup_line)
     st.link_button("Open ZLens", status["url"], type="primary")
     st.caption(
         "Opens in a new tab, where Snowflake asks you to sign in once. "

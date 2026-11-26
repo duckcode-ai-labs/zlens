@@ -59,9 +59,11 @@ import {
 import { ProjectRefreshCoordinator } from './project-refresh-coordinator.js';
 import { SetupOperationProgress } from './setup-operation-progress.js';
 import { CheckStatementFailure, SetupCheckCache } from './setup-check-cache.js';
+import { SetupStatusWriter } from './setup-status-sql.js';
 import {
   readWarehouseSetupState,
   settleInterruptedStages,
+  setupStatusLine,
   warehouseSetupStage,
   writeWarehouseSetupState,
   type WarehouseSetupStage,
@@ -15544,11 +15546,24 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (settled !== saved) writeWarehouseSetupState(projectRoot, settled);
     return settled;
   })();
+  // The launcher page's setup status (onboarding design P5): a row in the app's own core.setup_status, written
+  // only while setup works (a change of stage at once, progress at most every 30 s), so it never wakes the warehouse.
+  const setupStatusWriter = snowflakeApp && snowflakeAppOptions?.appName
+    ? new SetupStatusWriter({ appName: snowflakeAppOptions.appName, query: (sql) => snowflakeAppQuery(sql) })
+    : undefined;
   const saveWarehouseSetup = (next: WarehouseSetupStateV1): WarehouseSetupStateV1 => {
     warehouseSetup = next;
     writeWarehouseSetupState(projectRoot, next);
+    void setupStatusWriter?.write(setupStatusLine(next, currentSetupOperation()), { force: true });
     return next;
   };
+  if (setupStatusWriter) {
+    operationCoordinator.subscribe((operation) => {
+      if (operation.type !== 'warehouse-read' && operation.type !== 'warehouse-check') return;
+      if (operation.status !== 'running') return;
+      void setupStatusWriter.write(setupStatusLine(warehouseSetup, operation));
+    });
+  }
   const setupOperationRunning = () => warehouseSetup?.read.state === 'running' || warehouseSetup?.checks?.state === 'running';
   const currentSetupOperation = (): LocalOperation | null => {
     const id = warehouseSetup?.read.state === 'running'
@@ -40400,7 +40415,7 @@ export const SETUP_CHECK_STATEMENT_MS = 60_000;
 /** What the background checks could not do, by table, for the Setup page (onboarding design P4, P5). */
 export interface SetupCheckProblem {
   relations: string[];
-  kind: 'too_big' | 'failed' | 'skipped' | 'joins_over_limit';
+  kind: 'too_big' | 'failed' | 'skipped' | 'join' | 'joins_over_limit';
   text: string;
 }
 
@@ -40419,6 +40434,18 @@ export function setupCheckProblems(report: WarehouseDiscoveryReport, cache: Setu
   }
   for (const note of report.readNotes ?? []) {
     if (note.kind === 'skipped') problems.push({ relations: [note.relation], kind: 'skipped', text: note.text });
+  }
+  // Joins a check could not settle (onboarding design P5: what setup dropped before is shown). A time-out is
+  // already listed by its tables; a view that joins is checked only when a person asks.
+  for (const relationship of report.relationships) {
+    const error = relationship.validationError;
+    if (!error || /^not validated: (discovery validates at most|a view that joins)/.test(error) || /exceeded the \d+ ?ms deadline/i.test(error)) continue;
+    const from = nameOf(relationship.fromRelation);
+    const to = nameOf(relationship.toRelation);
+    const key = `join#${from}#${to}#${error}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    problems.push({ relations: [relationship.fromRelation, relationship.toRelation], kind: 'join', text: `${from} → ${to}: join not checked: ${error.replace(/^not validated: /, '')}` });
   }
   const overLimit = report.relationships.filter((relationship) => /^not validated: discovery validates at most/.test(relationship.validationError ?? '')).length;
   if (overLimit > 0) problems.push({ relations: [], kind: 'joins_over_limit', text: `${overLimit.toLocaleString('en-US')} join${overLimit === 1 ? '' : 's'} not checked: the background check validates at most 200 a run; joins with declared keys and small tables went first.` });

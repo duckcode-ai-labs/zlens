@@ -115,3 +115,43 @@ export function warehouseSetupStage(state: WarehouseSetupStateV1 | null): Wareho
   if (state.checks?.state === 'done') return 'checked';
   return 'ready';
 }
+
+/**
+ * Setup in one line, with numbers where there are any: what the launcher page
+ * shows before ZLens opens (onboarding design P5, `core.setup_status`).
+ */
+export function setupStatusLine(
+  state: WarehouseSetupStateV1 | null,
+  operation: { status: string; progress: number; message: string; type: string } | null,
+): { stage: WarehouseSetupStage; line: string; percent: number | null } {
+  const stage = warehouseSetupStage(state);
+  const running = operation && (operation.status === 'running' || operation.status === 'queued') ? operation : null;
+  switch (stage) {
+    case 'choose':
+      return { stage, line: 'Open ZLens and choose the data it reads.', percent: null };
+    case 'reading': {
+      // The operation's own words, without the database's name: the launcher's row names nothing of the person's.
+      const words = running?.message && /^Reading (names|keys and comments)/.test(running.message) ? running.message : 'Reading names.';
+      return { stage, line: words.replace(/ in [^:(]+?(?= ?[:(])/, ''), percent: running?.progress ?? null };
+    }
+    case 'failed':
+      return { stage, line: `ZLens could not read the chosen schemas: ${state?.read.error ?? 'unknown error'}`, percent: null };
+    case 'stopped':
+      return { stage, line: 'Reading was stopped. Open ZLens to start it again.', percent: null };
+    case 'checking': {
+      // The check stage's share of its own work: 50–92 of the operation's 0–100 is the checks, then the index.
+      const percent = running ? Math.max(0, Math.min(100, Math.round(((running.progress - 50) / 49) * 100))) : null;
+      return { stage, line: `ZLens is ready to ask. Background checks: ${percent ?? 0}%.`, percent };
+    }
+    case 'checked': {
+      const problems = state?.checks?.problems?.length ?? 0;
+      return { stage, line: `ZLens is ready to ask. Background checks done: drafts wait for review${problems ? `; ${problems} ${problems === 1 ? 'table' : 'tables'} not checked` : ''}.`, percent: 100 };
+    }
+    default: {
+      // Between the read and the checks it asked for, the checks are about to start, not off.
+      if (state?.check && (state.checks?.state ?? 'off') === 'off') return { stage, line: 'ZLens is ready to ask. Background checks are starting.', percent: 0 };
+      const why = state?.checks?.state === 'stopped' ? 'were stopped' : state?.checks?.state === 'failed' ? 'did not finish' : 'are off';
+      return { stage, line: `ZLens is ready to ask. The background checks ${why}.`, percent: null };
+    }
+  }
+}

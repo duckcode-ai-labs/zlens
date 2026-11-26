@@ -18,8 +18,15 @@ import { SetupOperationProgress, formatDuration, setupMessage, setupPercent, typ
 
 const result = (rows: Array<Record<string, unknown>>): QueryResult => ({ columns: [], rows, rowCount: rows.length, executionTimeMs: 1 });
 
+/** What the container wrote to the app's own core.setup_status (onboarding design P5). */
+const setupStatusWrites: string[] = [];
+
 function fakeAppSettings(): SnowflakeAppQuery {
   return (async (sql: string) => {
+    if (sql.startsWith('MERGE INTO ZLENS_APP.CORE.SETUP_STATUS')) {
+      setupStatusWrites.push(sql);
+      return [];
+    }
     if (sql.includes('GET_CONFIGURATION_VALUE')) return [{ V: 'jsmith' }];
     if (sql.startsWith('SHOW TERSE DATABASES')) return [{ name: 'ZLENS_APP', kind: 'STANDARD' }, { name: 'SALES', kind: 'STANDARD' }];
     if (sql.startsWith('SHOW TERSE SCHEMAS IN DATABASE')) return [{ name: 'INFORMATION_SCHEMA' }, { name: 'PUBLIC' }];
@@ -162,6 +169,12 @@ describe('setup in two stages, run as background operations (onboarding design P
     expect(primaryKeys).toBeGreaterThan(firstColumns);
     // Set up: the wizard does not open again, and the app's own record says done.
     expect(await (await app.call('/api/onboarding/launch')).json()).toMatchObject({ shouldOpen: false });
+    // The launcher page's status row was kept as setup went: reading, then ready and checking, then checked.
+    const stages = setupStatusWrites.map((sql) => /'(\w+)' AS stage/.exec(sql)?.[1]);
+    expect(stages[0]).toBe('reading');
+    expect(stages).toContain('checking');
+    expect(stages.at(-1)).toBe('checked');
+    expect(setupStatusWrites.at(-1)).toContain("'ZLens is ready to ask. Background checks done: drafts wait for review.' AS line, 100 AS percent");
     expect(JSON.parse(readFileSync(join(app.projectRoot, '.dql', 'local', 'snowflake-app-setup.json'), 'utf8'))).toMatchObject({ state: 'done', database: 'SALES' });
   }, 30_000);
 
@@ -391,5 +404,41 @@ describe('the background checks resume where they stopped (onboarding design P4)
     await app.until((value) => value.state === 'done', 15_000);
     const after = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ kind: string }> } } };
     expect(after.setup.checks.problems.filter((problem) => problem.kind === 'too_big')).toEqual([]);
+  }, 30_000);
+});
+
+describe('the idle stop and a running setup (onboarding design P5)', () => {
+  it('a setup stage running counts as activity: ZLens is not stopped halfway; once it stops, the quiet spell counts again', async () => {
+    const warehouse = fakeWarehouse({ hang: true });
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-idle-'));
+    roots.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({
+      project: 'sf', manifestVersion: 3, modeling: { mode: 'warehouse-first' },
+      connections: { default: { driver: 'snowflake', account: 'test-account', username: 'app', database: 'ZLENS_APP' } },
+    }));
+    const clock = { now: 1_000_000 };
+    let idle: { due: () => boolean } | undefined;
+    const port = await startLocalServer({
+      rootDir: projectRoot, projectRoot, executor: warehouse.executor, preferredPort: 0, host: '127.0.0.1',
+      snowflakeIngress: {},
+      snowflakeAppSettings: { userConfiguration: 'ZLENS_USER', appName: 'ZLENS_APP', ttlMs: 0 },
+      snowflakeAppQuery: fakeAppSettings(),
+      snowflakeIdleSuspend: { minutes: 60, service: 'ZLENS_APP.CORE.ZLENS', now: () => clock.now, capture: (created) => { idle = created as unknown as { due: () => boolean }; } },
+      captureServer: (created) => { servers.push(created); },
+    });
+    const call = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers: { 'Sf-Context-Current-User': 'JSMITH', 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
+    expect((await call('/api/connections')).status).toBe(200);
+    const started = await call('/api/connections/default/setup/read', { method: 'POST', body: JSON.stringify({ mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'SALES', schemas: ['PUBLIC'] }], check: true }) });
+    const { operation } = await started.json() as { operation: { id: string } };
+    clock.now += 3 * 60 * 60_000;
+    expect(idle!.due()).toBe(false);
+    await call(`/api/operations/${encodeURIComponent(operation.id)}`, { method: 'DELETE' });
+    for (let tries = 0; tries < 100; tries += 1) {
+      const setup = await (await call('/api/snowflake-app/setup')).json() as { state: string };
+      if (setup.state === 'stopped') break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    clock.now += 61 * 60_000;
+    expect(idle!.due()).toBe(true);
   }, 30_000);
 });
