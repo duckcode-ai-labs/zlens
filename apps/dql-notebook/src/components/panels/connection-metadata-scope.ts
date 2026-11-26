@@ -216,3 +216,56 @@ export function selectedScopeWords(totals: SelectedScopeTotals, checkRowBudget?:
   }
   return `Selected: ${parts.join(' · ')}`;
 }
+
+/** Decision D4: with this many tables or fewer in all, every schema is ticked for the person. */
+export const PRESELECT_TABLE_LIMIT = 100;
+
+/**
+ * What the picker ticks by itself (onboarding design D4): every schema when
+ * the warehouse sized them all and they hold 100 tables or fewer in all; the
+ * one schema there is; otherwise nothing, and the person chooses.
+ */
+export function preselectedScopes(discovery: WarehouseMetadataDiscovery): ConnectionMetadataScopeV1['scopes'] {
+  const only = onlyDiscoveredSchema(discovery);
+  if (only) return [{ catalogOrDatabase: only.catalogOrDatabase, schemas: [only.schema] }];
+  if (discovery.dbtScopes.length > 0) return [];
+  const schemas = discovery.scopes.flatMap((scope) => scope.schemas.filter((schema) => !schema.inDbtProject).map((schema) => ({ scope, schema })));
+  if (schemas.length === 0 || schemas.some(({ schema }) => !schema.size)) return [];
+  const tables = schemas.reduce((count, { schema }) => count + (schema.size?.tables ?? 0), 0);
+  if (tables === 0 || tables > PRESELECT_TABLE_LIMIT) return [];
+  return discovery.scopes
+    .map((scope) => ({ catalogOrDatabase: scope.catalogOrDatabase, schemas: scope.schemas.filter((schema) => !schema.inDbtProject).map((schema) => schema.name) }))
+    .filter((scope) => scope.schemas.length > 0);
+}
+
+function roughDuration(seconds: number): string {
+  if (seconds < 60) return `about ${Math.max(5, Math.round(seconds / 5) * 5)} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `about ${minutes} min`;
+  return `about ${Math.round(minutes / 6) / 10} h`;
+}
+
+/**
+ * The two estimates the picker shows (onboarding design, "Choose your data"):
+ * reading names, and the background data checks. Rough, from the sizes alone,
+ * and said to be estimates; credits only where ZLens runs on the app's own
+ * X-Small warehouse (one credit an hour).
+ */
+export function setupEstimates(
+  totals: SelectedScopeTotals,
+  options: { checkRowBudget?: number; credits?: boolean } = {},
+): { names: string; checks: string; namesSeconds: number; checkSeconds: number } {
+  const columns = totals.columnsByDatabase.reduce((count, entry) => count + entry.columns, 0);
+  const namesSeconds = 4 + totals.tables / 200 + columns / 5_000;
+  const budget = options.checkRowBudget ?? 10_000_000;
+  // A key check per table without a declared key, joins between them, and the rows the checks read, capped per table.
+  const unkeyed = Math.max(0, totals.tables - totals.tablesWithKeys);
+  const checkSeconds = 2 * unkeyed + 0.5 * totals.tablesWithKeys + Math.min(totals.rows, totals.tables * budget) / 5e6;
+  const credits = options.credits ? `, ${checkSeconds / 3600 < 0.05 ? 'under 0.05' : `about ${(Math.round(checkSeconds / 360) / 10).toFixed(1)}`} credits on the app's X-Small warehouse` : '';
+  return {
+    names: `Reading names: ${roughDuration(namesSeconds)}.`,
+    checks: `Checking the data in the background: ${roughDuration(checkSeconds)}${credits} (estimate).`,
+    namesSeconds,
+    checkSeconds,
+  };
+}

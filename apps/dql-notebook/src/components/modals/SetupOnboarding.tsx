@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ZLensMark } from '../shell/ZLensMark';
 import { ArrowLeft, ArrowRight, Boxes, FileText, LayoutDashboard, MessageCircleQuestion, Sparkles } from 'lucide-react';
-import { api, type ProviderSettings, type SetupLaunchResponse, type WaitingWarehouseDrafts, type WarehouseCatalogSummary } from '../../api/client';
+import { api, type ProviderSettings, type SetupLaunchResponse, type WaitingWarehouseDrafts, type WarehouseCatalogSummary, type WarehouseSetupStatus } from '../../api/client';
+import { isSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 import { useNotebook } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 import { ConnectionPanel } from '../panels/ConnectionPanel';
@@ -72,7 +73,11 @@ export function SetupOnboarding({
 }) {
   const { state, dispatch } = useNotebook();
   const t = themes[state.themeMode];
-  const [step, setStep] = useState(1);
+  // The ZLens app for Snowflake (onboarding design P3, decision D1): its connection is set up and its AI is Cortex,
+  // so the wizard asks only what ZLens reads (step 2), then where to start (step 4).
+  const appSetup = Boolean(launch?.snowflakeAppManaged) || isSnowflakeApp();
+  const [step, setStep] = useState(appSetup ? 2 : 1);
+  const [readStatus, setReadStatus] = useState<WarehouseSetupStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [projectState, setProjectState] = useState<SetupState>('missing');
   const [databaseState, setDatabaseState] = useState<SetupState>('missing');
@@ -157,6 +162,13 @@ export function SetupOnboarding({
       setExisting(project);
       // A restart resumes where setup was left (design D7), unless an update must reapply dbt first.
       const resume = progress && !launch?.requiresDbtReapply ? progress : null;
+      if (appSetup) {
+        setSource('warehouse');
+        setProjectState('configured');
+        setProjectDetail('Database only · no dbt project');
+        if (resume?.step === 4) setStep(4);
+        return;
+      }
       setSource((current) => current ?? resume?.source ?? initialModelSource({
         requested: requestedSource,
         requiresDbtReapply: Boolean(launch?.requiresDbtReapply),
@@ -311,7 +323,18 @@ export function SetupOnboarding({
   };
 
   const drafted = Boolean(draft?.proposalId || waitingDrafts);
-  const stepTwo = stepTwoCopy(source, existing, valueProfileOn);
+  const stepTwo = appSetup
+    ? {
+      title: 'Choose your data',
+      description: 'Tick the schemas ZLens reads. It reads names, types, comments and keys first, with no table scanned, so you can ask within minutes; the data checks run in the background. You can add schemas later in Settings » Database.',
+    }
+    : stepTwoCopy(source, existing, valueProfileOn);
+  const readRelations = readStatus?.setup?.read.relations;
+  const onReadReady = (status: WarehouseSetupStatus) => {
+    setReadStatus(status);
+    setDatabaseState('passed');
+    setStep(4);
+  };
   const hint = useMemo(() => {
     if (loading) return 'Loading existing project-local configuration…';
     if (step === 1) {
@@ -324,12 +347,13 @@ export function SetupOnboarding({
         : `${projectState === 'passed' ? 'Ready' : 'Configured'} · ${projectDetail}`;
     }
     if (step === 2) {
+      if (appSetup) return readStatus ? 'Ready to ask · the data checks run in the background.' : 'Read these tables to continue.';
       if (draftsFromWarehouse(source) && draft?.ok && draft.proposalId) return 'Models drafted · review and certify them in Modeling.';
       return databaseState === 'passed' ? `Test passed · ${databaseDetail}` : databaseState === 'configured' ? databaseDetail : 'A failed test rolls back to the previous connection.';
     }
     if (step === 3) return aiSkipped ? 'AI skipped · connect a provider later in Settings.' : aiState === 'missing' ? 'Optional · skip for now or configure a provider.' : `${aiState === 'passed' ? 'Test passed' : 'Configured'} · ${providerSummary(aiProvider)}`;
     return 'Setup complete';
-  }, [aiProvider, aiSkipped, aiState, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, requiresUpgradeReapply, source, step, stepOneBlocked, valueProfileOn]);
+  }, [aiProvider, aiSkipped, aiState, appSetup, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, readStatus, requiresUpgradeReapply, source, step, stepOneBlocked, valueProfileOn]);
 
   const supportingText = t.textSecondary;
   const primaryButton: React.CSSProperties = {
@@ -352,15 +376,20 @@ export function SetupOnboarding({
       ? `ZLens was updated${launch.acknowledgedVersion ? ` from ${launch.acknowledgedVersion}` : ''} to ${launch.version}. Reapply the prefilled dbt project to rebuild its OSS governed snapshot with this version. Saved paths and credentials remain unchanged until Apply succeeds.`
       : `ZLens was updated${launch.acknowledgedVersion ? ` from ${launch.acknowledgedVersion}` : ''} to ${launch.version}. The dbt project was reapplied with this version; review the remaining saved connections before finishing.`
     : launch?.reason === 'first_install'
-      ? `ZLens ${launch.version} is installed. Tell it where your data model lives and connect the database before entering the workspace; AI remains optional.`
+      ? appSetup
+        ? 'ZLens is running in your Snowflake account. Choose the data it reads: it reads names first, so you can ask right away, and checks the data in the background.'
+        : `ZLens ${launch.version} is installed. Tell it where your data model lives and connect the database before entering the workspace; AI remains optional.`
       : null;
-  const nextDisabled = step === 1 && (Boolean(stepOneBlocked) || continuing || loading);
+  const nextDisabled = (step === 1 && (Boolean(stepOneBlocked) || continuing || loading)) || (appSetup && step === 2 && !readStatus);
   const nextLabel = step === 1
     ? (continuing ? 'Setting up…' : source === 'existing' ? 'Continue to credentials' : 'Continue to database')
-    : step === 2 ? 'Continue to optional AI' : 'Continue to finish';
-  // "Finish setup" goes where the highlighted start card says.
-  const finish = setupFinishTarget({ drafted });
+    : step === 2 ? (appSetup ? 'Continue' : 'Continue to optional AI') : 'Continue to finish';
+  // "Finish setup" goes where the highlighted start card says; in the app, Ask (names are read, Ask works).
+  const finish = appSetup ? { target: 'ask' as SetupTarget, action: 'Open Ask' } : setupFinishTarget({ drafted });
   const finishTarget: SetupTarget = finish.target;
+  const firstStep = appSetup ? 2 : 1;
+  const shownSteps = appSetup ? [2, 4] : [1, 2, 3, 4];
+  const shownStep = shownSteps.indexOf(step) + 1;
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Guided Setup" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: t.appBg, color: t.textPrimary, display: 'flex', flexDirection: 'column', fontFamily: t.font }}>
@@ -368,12 +397,12 @@ export function SetupOnboarding({
         <span style={{ display: 'inline-flex', color: t.textPrimary, flexShrink: 0 }}><ZLensMark size={27} /></span>
         <div>
           <div style={{ fontSize: 13.5, fontWeight: 700 }}>{launchTitle}</div>
-          <div style={{ fontSize: 10.5, color: t.textMuted }}>{setupStepTitles(source)}</div>
+          <div style={{ fontSize: 10.5, color: t.textMuted }}>{appSetup ? 'Choose your data → Start' : setupStepTitles(source)}</div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 11.5, color: t.textMuted }}>Step {step} of 4</span>
+          <span style={{ fontSize: 11.5, color: t.textMuted }}>Step {shownStep} of {shownSteps.length}</span>
           <div style={{ display: 'flex', gap: 4 }} aria-hidden>
-            {[1, 2, 3, 4].map((number) => <span key={number} style={{ width: 23, height: 4, borderRadius: 999, background: number <= step ? t.accent : t.pillBg }} />)}
+            {shownSteps.map((number) => <span key={number} style={{ width: 23, height: 4, borderRadius: 999, background: number <= step ? t.accent : t.pillBg }} />)}
           </div>
         </div>
       </header>
@@ -415,10 +444,11 @@ export function SetupOnboarding({
           ) : null}
 
           {step === 2 ? (
-            <SetupSection eyebrow="Step 2 of 4" title={stepTwo.title} description={stepTwo.description} t={t}>
+            <SetupSection eyebrow={`Step ${shownStep} of ${shownSteps.length}`} title={stepTwo.title} description={stepTwo.description} t={t}>
               <ConnectionPanel
                 variant="setup"
                 setupSource={source}
+                {...(appSetup ? { stagedSetup: { onReady: onReadReady, credits: true } } : {})}
                 setupPrimaryAction={source === 'existing' && existing
                   ? <ExistingProjectSyncCard project={existing} busy={syncing} steps={syncSteps} environment={environment} onSync={() => void synchronize()} t={t} />
                   : undefined}
@@ -430,7 +460,7 @@ export function SetupOnboarding({
                   if (result.warehouseCatalog?.relations && !result.warehouseCatalog.error) setCatalogReady(true);
                 }}
               />
-              {draftsFromWarehouse(source) ? (
+              {draftsFromWarehouse(source) && !appSetup ? (
                 <DraftModelsCard
                   busy={drafting}
                   canDraft={catalogReady}
@@ -459,11 +489,18 @@ export function SetupOnboarding({
           {step === 4 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 11, fontWeight: 750, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.accent }}>Step 4 of 4 · Setup complete</div>
+                <div style={{ fontSize: 11, fontWeight: 750, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.accent }}>Step {shownStep} of {shownSteps.length} · {appSetup ? 'Ready to ask' : 'Setup complete'}</div>
                 <h2 style={{ margin: '7px 0 0', fontSize: 22, color: t.textPrimary }}>Where do you want to start?</h2>
-                {aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not set up. You can run queries and build Apps without it; connect a provider in Settings when you want Ask.</div> : null}
+                {appSetup ? (
+                  <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7, lineHeight: 1.55 }}>
+                    {typeof readRelations === 'number' ? `ZLens read ${readRelations.toLocaleString('en-US')} table${readRelations === 1 ? '' : 's'}. ` : ''}
+                    Answers are labeled AI-generated until you review the drafted models. {readStatus?.setup?.check === false
+                      ? 'The data checks are off: start them from the strip at the top when you want drafts to review.'
+                      : 'The data checks run in the background: follow them in the strip at the top or in Background tasks.'}
+                  </div>
+                ) : aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not set up. You can run queries and build Apps without it; connect a provider in Settings when you want Ask.</div> : null}
               </div>
-              {draftsFromWarehouse(source) && aiState !== 'missing' && !aiSkipped ? <DraftMeaningsCard t={t} quiet /> : null}
+              {draftsFromWarehouse(source) && !appSetup && aiState !== 'missing' && !aiSkipped ? <DraftMeaningsCard t={t} quiet /> : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 11 }}>
                 {drafted ? (
                   <StartCard icon={<Boxes size={17} />} title="Review drafted models" body="Check the drafted models and joins, certify the ones that are right, then Ask." action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary={finishTarget === 'domains'} />
@@ -472,7 +509,7 @@ export function SetupOnboarding({
                 {drafted ? null : (
                   <StartCard icon={<Boxes size={17} />} title="Build your domain" body="Add models, relationships, business terms, and skills." action="Open Modeling" onClick={() => finishTo('domains')} t={t} />
                 )}
-                <StartCard icon={<MessageCircleQuestion size={17} />} title="Ask" body={aiState === 'missing' || aiSkipped ? 'Ask needs an AI provider. Connect one in Settings to get answers.' : 'Ask a business question grounded in your governed context.'} action="Open Ask" onClick={() => finishTo('ask')} t={t} />
+                <StartCard icon={<MessageCircleQuestion size={17} />} title="Ask" body={appSetup ? 'Ask a business question about the tables ZLens read. Answers get better as the checks land.' : aiState === 'missing' || aiSkipped ? 'Ask needs an AI provider. Connect one in Settings to get answers.' : 'Ask a business question grounded in your governed context.'} action="Open Ask" onClick={() => finishTo('ask')} t={t} primary={finishTarget === 'ask'} />
                 <StartCard icon={<FileText size={17} />} title="Research notebook" body="Work with SQL, DQL, and charts, then save reusable queries." action="New notebook" onClick={() => finishTo('notebook')} t={t} />
               </div>
             </div>
@@ -481,7 +518,7 @@ export function SetupOnboarding({
       </main>
 
       <footer style={{ flexShrink: 0, minHeight: 58, borderTop: `1px solid ${t.headerBorder}`, background: t.headerBg, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 22px' }}>
-        {step > 1 ? <button type="button" onClick={() => setStep((current) => Math.max(1, current - 1))} style={secondaryButton}><ArrowLeft size={13} /> Back</button> : null}
+        {step > firstStep ? <button type="button" onClick={() => setStep((current) => (appSetup ? 2 : Math.max(1, current - 1)))} style={secondaryButton}><ArrowLeft size={13} /> Back</button> : null}
         <div style={{ flex: 1 }} />
         <span title={hint} style={{ fontSize: 11, color: t.textMuted, maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hint}</span>
         {acknowledgeError ? <span role="alert" style={{ fontSize: 11, color: 'var(--status-error)', maxWidth: 320 }}>{acknowledgeError}</span> : null}
@@ -497,7 +534,7 @@ export function SetupOnboarding({
                 : 'Close setup'}
         </button>
         {step < 4 ? (
-          <button type="button" disabled={nextDisabled} onClick={() => { if (step === 1) void continueFromStepOne(); else setStep((current) => Math.min(4, current + 1)); }} style={{ ...primaryButton, opacity: nextDisabled ? 0.5 : 1, cursor: nextDisabled ? 'not-allowed' : 'pointer' }}>
+          <button type="button" disabled={nextDisabled} onClick={() => { if (step === 1) void continueFromStepOne(); else setStep((current) => (appSetup ? 4 : Math.min(4, current + 1))); }} style={{ ...primaryButton, opacity: nextDisabled ? 0.5 : 1, cursor: nextDisabled ? 'not-allowed' : 'pointer' }}>
             {nextLabel} <ArrowRight size={13} />
           </button>
         ) : (

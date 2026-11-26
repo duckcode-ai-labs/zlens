@@ -31,6 +31,29 @@ describe('the Snowflake app setup strip', () => {
       .toEqual({ tone: 'caution', text: 'Setup from NBA was stopped. Nothing was drafted.', action: 'start' });
   });
 
+  it('asks the person to choose the data before anything is read (onboarding P3)', () => {
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'idle', stage: 'choose' }))
+      .toEqual({ tone: 'info', text: 'Choose the data ZLens reads to start asking.', action: 'choose' });
+  });
+
+  it('says ready to ask while the checks run, with their counts and Stop; offers to check when they are not running', () => {
+    const operation = {
+      id: 'op_2', type: 'warehouse-check', scope: 'warehouse-setup:default', status: 'running' as const, phase: 'check', progress: 55,
+      message: 'Checking keys and joins on the data in SALES · 1 min 05 s', cancellable: true, createdAt: '', updatedAt: '',
+    };
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'SALES', operation })).toEqual({
+      tone: 'info',
+      text: 'Ready to ask. Checking keys and joins on the data in SALES · 1 min 05 s. Answers get better as the checks land.',
+      action: 'stop',
+    });
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'SALES', operation: null })?.action).toBe('check');
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'SALES', checks: 'stopped', operation: null })?.text)
+      .toBe('Ready to ask. The data checks were stopped: answers stay labeled AI-generated until they run and you review the drafts.');
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'SALES', checks: 'off', operation: null })?.text).toMatch(/^Ready to ask\. The data checks are off:/);
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'SALES', error: 'warehouse suspended' }))
+      .toEqual({ tone: 'caution', text: 'Ready to ask. The data checks did not finish: warehouse suspended', action: 'check' });
+  });
+
   it('points to the drafts waiting for review', () => {
     const message = snowflakeAppSetupMessage({
       managed: true,

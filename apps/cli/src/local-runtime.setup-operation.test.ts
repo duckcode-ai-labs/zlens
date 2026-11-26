@@ -1,18 +1,19 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { QueryExecutionOptions, QueryExecutor, QueryResult } from '@zlens/connectors';
-import { startLocalServer } from './local-runtime.js';
+import { projectHasOwnWork, startLocalServer } from './local-runtime.js';
 import type { SnowflakeAppQuery } from './snowflake-app-settings.js';
 import { SetupOperationProgress, formatDuration, setupMessage, setupPercent, type SetupDetail } from './setup-operation-progress.js';
 
 /**
- * Onboarding design P2: the ZLens app for Snowflake sets itself up as a
- * background operation with phases and counts, and Stop cancels it within
- * seconds. A stopped setup drafts nothing and stays stopped until someone
- * starts it again.
+ * Onboarding design P2 and P3: setup runs in two stages, each a background
+ * operation with phases and counts. The person chooses what ZLens reads;
+ * reading names makes it ready to ask; the data checks follow in the
+ * background. Stop cancels a stage within seconds; a stopped stage writes
+ * nothing and starts again only when someone asks.
  */
 
 const result = (rows: Array<Record<string, unknown>>): QueryResult => ({ columns: [], rows, rowCount: rows.length, executionTimeMs: 1 });
@@ -69,9 +70,9 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-async function startApp(executor: QueryExecutor) {
-  const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-operation-'));
-  roots.push(projectRoot);
+async function startApp(executor: QueryExecutor, existingRoot?: string) {
+  const projectRoot = existingRoot ?? mkdtempSync(join(tmpdir(), 'zlens-setup-operation-'));
+  if (!existingRoot) roots.push(projectRoot);
   writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({
     project: 'sf',
     manifestVersion: 3,
@@ -86,7 +87,7 @@ async function startApp(executor: QueryExecutor) {
     captureServer: (created) => { servers.push(created); },
   });
   const call = (path: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${port}${path}`, { ...init, headers: { 'Sf-Context-Current-User': 'JSMITH', 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
-  type Setup = { state: string; database?: string; operationId?: string; operation?: { id: string; status: string; phase: string; message: string; cancellable: boolean; detail?: SetupDetail } | null };
+  type Setup = { state: string; stage?: string; database?: string; relations?: number; operationId?: string; operation?: { id: string; type: string; status: string; phase: string; message: string; cancellable: boolean; detail?: SetupDetail } | null };
   const setup = async (): Promise<Setup> => (await call('/api/snowflake-app/setup')).json() as Promise<Setup>;
   const until = async (done: (value: Setup) => boolean, ms = 15_000): Promise<Setup> => {
     const deadline = Date.now() + ms;
@@ -100,30 +101,35 @@ async function startApp(executor: QueryExecutor) {
   return { projectRoot, call, setup, until };
 }
 
-describe('the app sets itself up as a background operation (onboarding design P2)', () => {
-  it('shows its phase and counts, stops within seconds, drafts nothing, and starts again only when asked', async () => {
+const read = (app: Awaited<ReturnType<typeof startApp>>, body: Record<string, unknown>) => app.call('/api/connections/default/setup/read', { method: 'POST', body: JSON.stringify({ mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'SALES', schemas: ['PUBLIC'] }], ...body }) });
+
+describe('setup in two stages, run as background operations (onboarding design P2, P3)', () => {
+  it('reads nothing until the person chooses; a read shows its counts, stops within seconds, and starts again only when asked', async () => {
     const warehouse = fakeWarehouse({ hang: true });
     const app = await startApp(warehouse.executor);
-    // Any request by the person starts the setup on the granted database.
     expect((await app.call('/api/connections')).status).toBe(200);
+    const launch = await (await app.call('/api/onboarding/launch')).json();
+    expect(launch).toMatchObject({ shouldOpen: true, snowflakeAppManaged: true, setupStage: 'choose' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(warehouse.statements.filter((sql) => sql.includes('INFORMATION_SCHEMA'))).toEqual([]);
+    expect(await app.setup()).toMatchObject({ state: 'idle', stage: 'choose' });
+
+    const started = await read(app, { check: true, tablesExpected: 40 });
+    expect(started.status).toBe(202);
     const reading = await app.until((value) => value.operation?.phase === 'names');
     expect(reading).toMatchObject({ state: 'running', database: 'SALES' });
-    expect(reading.operation).toMatchObject({ status: 'running', cancellable: true, detail: { kind: 'warehouse-setup', phase: 'names', database: 'SALES', schemas: 1 } });
-    expect(reading.operation!.message).toMatch(/^Reading names in SALES: 0 tables so far \(statement 1 of 1\) · \d+ s$/);
-
-    // The operation is also in the background tasks list, with its counts.
+    expect(reading.operation).toMatchObject({ type: 'warehouse-read', status: 'running', cancellable: true, detail: { kind: 'warehouse-setup', phase: 'names', database: 'SALES', schemas: 1, tablesExpected: 40 } });
+    expect(reading.operation!.message).toMatch(/^Reading names in SALES: 0 of 40 tables so far \(statement 1 of 1\) · \d+ s$/);
     const listed = await (await app.call('/api/operations')).json() as { operations: Array<{ id: string; type: string; detail?: unknown }> };
-    expect(listed.operations.find((operation) => operation.id === reading.operation!.id)).toMatchObject({ type: 'warehouse-setup', detail: { phase: 'names' } });
+    expect(listed.operations.find((operation) => operation.id === reading.operation!.id)).toMatchObject({ type: 'warehouse-read', detail: { phase: 'names' } });
 
     const stoppedAt = Date.now();
-    const cancelled = await app.call(`/api/operations/${encodeURIComponent(reading.operation!.id)}`, { method: 'DELETE' });
-    expect(cancelled.status).toBe(200);
+    expect((await app.call(`/api/operations/${encodeURIComponent(reading.operation!.id)}`, { method: 'DELETE' })).status).toBe(200);
     const stopped = await app.until((value) => value.state === 'stopped', 5_000);
     expect(Date.now() - stoppedAt).toBeLessThan(5_000);
-    expect(stopped.operation).toMatchObject({ status: 'cancelled' });
-    // Nothing was read into the project and nothing drafted.
+    expect(stopped.stage).toBe('stopped');
     expect(existsSync(join(app.projectRoot, '.dql', 'warehouse-catalog.json'))).toBe(false);
-    expect(JSON.parse(readFileSync(join(app.projectRoot, '.dql', 'local', 'snowflake-app-setup.json'), 'utf8'))).toMatchObject({ state: 'stopped', database: 'SALES' });
+    expect(JSON.parse(readFileSync(join(app.projectRoot, '.dql', 'local', 'warehouse-setup.json'), 'utf8'))).toMatchObject({ read: { state: 'stopped' }, checks: { state: 'off' } });
 
     // It does not start again by itself.
     const before = warehouse.statements.length;
@@ -132,29 +138,75 @@ describe('the app sets itself up as a background operation (onboarding design P2
     expect((await app.setup()).state).toBe('stopped');
     expect(warehouse.statements.length).toBe(before);
 
-    // Start again: a new operation.
-    const again = await app.call('/api/snowflake-app/setup', { method: 'POST', body: '{}' });
-    expect(again.status).toBe(202);
-    const restarted = await app.until((value) => value.operation?.phase === 'names' && value.operationId !== reading.operationId);
+    // Start again (the strip's button): the same choice, read again.
+    expect((await app.call('/api/snowflake-app/setup', { method: 'POST', body: '{}' })).status).toBe(202);
+    const restarted = await app.until((value) => value.operation?.phase === 'names' && value.operation.id !== reading.operation!.id);
     expect(restarted.state).toBe('running');
     await app.call(`/api/operations/${encodeURIComponent(restarted.operation!.id)}`, { method: 'DELETE' });
     await app.until((value) => value.state === 'stopped', 5_000);
   }, 30_000);
 
-  it('reads names, then keys and comments, then checks the drafts, and says done', async () => {
+  it('is ready to ask once names are read, then checks the data in the background and says done', async () => {
     const warehouse = fakeWarehouse({ hang: false });
     const app = await startApp(warehouse.executor);
     expect((await app.call('/api/connections')).status).toBe(200);
-    const done = await app.until((value) => value.state === 'done' || value.state === 'failed', 20_000);
-    expect(done).toMatchObject({ state: 'done', database: 'SALES' });
-    expect(done.operation).toMatchObject({ status: 'succeeded', type: 'warehouse-setup' });
-    // The last counts it reported: one table read.
-    expect(done.operation?.detail).toMatchObject({ kind: 'warehouse-setup', tables: 1 });
+    expect((await read(app, { check: true })).status).toBe(202);
+    const done = await app.until((value) => value.state === 'done' || value.state === 'failed' || value.stage === 'failed', 20_000);
+    expect(done).toMatchObject({ state: 'done', stage: 'checked', database: 'SALES', relations: 1 });
+    const status = await (await app.call('/api/connections/default/setup')).json() as { stage: string; setup: { read: { state: string; relations: number }; checks: { state: string } } };
+    expect(status).toMatchObject({ stage: 'checked', setup: { read: { state: 'done', relations: 1 }, checks: { state: 'done' } } });
     // Names, then keys and comments, then the checks: in that order.
     const firstColumns = warehouse.statements.findIndex((sql) => sql.includes('INFORMATION_SCHEMA.COLUMNS'));
     const primaryKeys = warehouse.statements.findIndex((sql) => sql.startsWith('SHOW PRIMARY KEYS'));
     expect(firstColumns).toBeGreaterThan(-1);
     expect(primaryKeys).toBeGreaterThan(firstColumns);
+    // Set up: the wizard does not open again, and the app's own record says done.
+    expect(await (await app.call('/api/onboarding/launch')).json()).toMatchObject({ shouldOpen: false });
+    expect(JSON.parse(readFileSync(join(app.projectRoot, '.dql', 'local', 'snowflake-app-setup.json'), 'utf8'))).toMatchObject({ state: 'done', database: 'SALES' });
+  }, 30_000);
+
+  it('with the checks off, stops at ready; Check the data runs them', async () => {
+    const warehouse = fakeWarehouse({ hang: false });
+    const app = await startApp(warehouse.executor);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect((await read(app, { check: false })).status).toBe(202);
+    const ready = await app.until((value) => value.state === 'ready', 15_000);
+    expect(ready).toMatchObject({ stage: 'ready', relations: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await app.setup()).state).toBe('ready');
+    expect((await app.call('/api/connections/default/setup/check', { method: 'POST', body: '{}' })).status).toBe(202);
+    expect(await app.until((value) => value.state === 'done', 15_000)).toMatchObject({ stage: 'checked' });
+  }, 30_000);
+
+  it('a project with work of its own (a saved query) opens no wizard, whatever it recorded', async () => {
+    const warehouse = fakeWarehouse({ hang: false });
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-own-work-'));
+    roots.push(projectRoot);
+    mkdirSync(join(projectRoot, 'blocks', 'nba'), { recursive: true });
+    writeFileSync(join(projectRoot, 'blocks', 'nba', 'wins.dql'), 'block "wins" {\n  query = "SELECT 1"\n}\n');
+    const app = await startApp(warehouse.executor, projectRoot);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect(await (await app.call('/api/onboarding/launch')).json()).toMatchObject({ shouldOpen: false, snowflakeAppManaged: true });
+    expect(projectHasOwnWork(projectRoot)).toBe(true);
+    const fresh = mkdtempSync(join(tmpdir(), 'zlens-setup-fresh-'));
+    roots.push(fresh);
+    mkdirSync(join(fresh, 'notebooks'), { recursive: true });
+    writeFileSync(join(fresh, 'notebooks', 'welcome.dqlnb'), '{}');
+    expect(projectHasOwnWork(fresh)).toBe(false);
+  }, 30_000);
+
+  it('an install set up before keeps its model: no wizard, nothing read or drafted again', async () => {
+    const warehouse = fakeWarehouse({ hang: false });
+    const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-upgrade-'));
+    roots.push(projectRoot);
+    mkdirSync(join(projectRoot, '.dql', 'local'), { recursive: true });
+    writeFileSync(join(projectRoot, '.dql', 'local', 'snowflake-app-setup.json'), JSON.stringify({ state: 'done', database: 'SALES', schemas: ['PUBLIC'], relations: 5, drafted: 5, at: '2026-11-20T00:00:00Z' }));
+    const app = await startApp(warehouse.executor, projectRoot);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect(await (await app.call('/api/onboarding/launch')).json()).toMatchObject({ shouldOpen: false, snowflakeAppManaged: true });
+    expect(await app.setup()).toMatchObject({ state: 'done', database: 'SALES', relations: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(warehouse.statements.filter((sql) => sql.includes('INFORMATION_SCHEMA'))).toEqual([]);
   }, 30_000);
 });
 

@@ -14,6 +14,7 @@ import {
   type WarehouseCatalogSummary,
   type WarehouseMetadataDiscovery,
   type WarehouseMetadataStatus,
+  type WarehouseSetupStatus,
 } from '../../api/client';
 import { PanelFrame } from '@zlens/ui';
 import { DriverLogo } from './DriverLogo';
@@ -45,12 +46,15 @@ import {
   parseMetadataScopeEditor,
   toggleAdditionalMetadataScope,
   metadataScopeMode,
+  PRESELECT_TABLE_LIMIT,
+  preselectedScopes,
   schemaSizeWords,
   scopeOverLimits,
   selectedScopeTotals,
   selectedScopeWords,
 } from './connection-metadata-scope';
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
+import { StagedReadCard } from './StagedReadCard';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
 import { AppearanceSettings } from '../settings/AppearanceSettings';
 import { connectionDetailRows } from './connection-values';
@@ -195,6 +199,7 @@ export function ConnectionPanel({
   initialInfo,
   onConfigured,
   onMetadataSynced,
+  stagedSetup,
 }: {
   variant?: 'panel' | 'page' | 'setup';
   /** Guided Setup's answer to "Where does your data model live?": Database only hides dbt profiles (design D7). */
@@ -206,6 +211,11 @@ export function ConnectionPanel({
   onConfigured?: (detail: string) => void;
   /** Apply and synchronize (or Refresh metadata) finished: Guided Setup can draft models from it. */
   onMetadataSynced?: (result: { status: WarehouseMetadataStatus; warehouseCatalog?: WarehouseCatalogSummary }) => void;
+  /**
+   * Setup in two stages (onboarding design P3): "Read these tables" reads names only and the data checks run in
+   * the background, in place of Apply and synchronize. `credits`: say the checks' warehouse credits.
+   */
+  stagedSetup?: { onReady: (status: WarehouseSetupStatus) => void; credits: boolean };
 } = {}) {
   const state = useNotebookStore(useShallow((store) => ({
     settingsTab: store.settingsTab,
@@ -403,8 +413,10 @@ export function ConnectionPanel({
       setMetadataDiscovery(discovery);
       setMetadataMessage(discovery.message);
       const only = onlyDiscoveredSchema(discovery);
-      if (isSetup && only && parseMetadataScopeEditor(metadataScopeText).length === 0) {
-        setMetadataScopeText(formatMetadataScopeEditor([{ catalogOrDatabase: only.catalogOrDatabase, schemas: [only.schema] }]));
+      // Two-stage setup ticks every schema when they hold 100 tables or fewer in all (decision D4).
+      const ticked = stagedSetup ? preselectedScopes(discovery) : only ? [{ catalogOrDatabase: only.catalogOrDatabase, schemas: [only.schema] }] : [];
+      if (isSetup && ticked.length > 0 && parseMetadataScopeEditor(metadataScopeText).length === 0) {
+        setMetadataScopeText(formatMetadataScopeEditor(ticked));
       }
     } catch (error) {
       setMetadataDiscovery(null);
@@ -1210,6 +1222,7 @@ export function ConnectionPanel({
   // What is ticked, and whether one Apply and synchronize can read it (onboarding design P1).
   const selectedTotals = metadataDiscovery ? selectedScopeTotals(metadataDiscovery, selectedAdditionalMetadataScopes) : null;
   const scopeTooBig = selectedTotals && metadataDiscovery ? scopeOverLimits(selectedTotals, metadataDiscovery.limits) : null;
+  const discoveredTables = metadataDiscovery ? metadataDiscovery.scopes.reduce((count, scope) => count + scope.schemas.reduce((sum, schema) => sum + (schema.inDbtProject ? 0 : schema.size?.tables ?? 0), 0), 0) : 0;
   // RFC 0007: without dbt, the selected schemas are the whole modeled warehouse.
   const warehouseFirst = info?.modelingMode === 'warehouse-first';
   // Guided Setup asks one plain question; index mode, the typed list and the
@@ -1330,6 +1343,11 @@ export function ConnectionPanel({
                 </label>
               );
             })()}
+            {stagedSetup && discoveredTables > PRESELECT_TABLE_LIMIT ? (
+              <div style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
+                {discoveredTables.toLocaleString('en-US')} tables in all. A good start is one area under {PRESELECT_TABLE_LIMIT} tables: you can add schemas later in Settings » Database.
+              </div>
+            ) : null}
             {selectedTotals && selectedTotals.sized > 0 ? (
               <div style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.font }}>
                 {selectedScopeWords(selectedTotals, metadataDiscovery.limits?.checkRowBudget)}
@@ -1396,7 +1414,7 @@ export function ConnectionPanel({
         </div>
       ) : null}
       </AdvancedDisclosure>
-      {info?.warehouseCatalog ? (
+      {info?.warehouseCatalog && !(stagedSetup && !info.warehouseCatalog.error && !info.warehouseCatalog.relations) ? (
         <div style={{ fontSize: 11.5, color: info.warehouseCatalog.error ? 'var(--status-error)' : info.warehouseCatalog.relations ? 'var(--status-success)' : 'var(--status-warning)', fontFamily: t.font }}>
           {info.warehouseCatalog.error
             ? `Modeling catalog could not be read · ${info.warehouseCatalog.error}`
@@ -1412,10 +1430,26 @@ export function ConnectionPanel({
       ) : null}
       {metadataMessage ? (
         <div style={{ fontSize: 11.5, color: metadataMessage.toLowerCase().includes('failed') || metadataMessage.toLowerCase().includes('error') ? 'var(--status-error)' : t.textSecondary, fontFamily: t.font }}>
-          {metadataMessage}
+          {/* Two-stage setup has no Apply and synchronize: its button is Read these tables. */}
+          {stagedSetup ? metadataMessage.replace('then Apply and synchronize', 'then Read these tables') : metadataMessage}
         </div>
       ) : null}
-      <div style={{ display: 'flex', gap: 8 }}>
+      {stagedSetup ? (
+        <StagedReadCard
+          connectionId={info?.default}
+          selected={selectedAdditionalMetadataScopes}
+          mode={metadataScopeMode(projectHasDbt, selectedAdditionalMetadataScopes)}
+          totals={selectedTotals}
+          checkRowBudget={metadataDiscovery?.limits?.checkRowBudget}
+          credits={stagedSetup.credits}
+          blocked={!testResult?.ok
+            ? 'Waiting for the connection test.'
+            : scopeTooBig ?? (selectedAdditionalMetadataScopes.length === 0 ? 'Tick at least one schema.' : null)}
+          onReady={stagedSetup.onReady}
+          t={t}
+        />
+      ) : null}
+      <div style={{ display: stagedSetup ? 'none' : 'flex', gap: 8 }}>
         <button
           type="button"
           onClick={() => void handleMetadataApply()}

@@ -134,7 +134,8 @@ const count = (value: number, one: string, many: string) => `${value.toLocaleStr
 export function setupMessage(detail: SetupDetail): string {
   const where = detail.database ? ` in ${detail.database}` : '';
   const time = formatDuration(detail.elapsedMs);
-  const tables = detail.tablesExpected
+  // Sizes are what the catalog said before the read; a read that finds more says how many it found.
+  const tables = detail.tablesExpected && detail.tables <= detail.tablesExpected
     ? `${detail.tables.toLocaleString('en-US')} of ${count(detail.tablesExpected, 'table', 'tables')}`
     : count(detail.tables, 'table', 'tables');
   const statements = detail.statements ? ` (statement ${Math.min(detail.statements, (detail.statementsDone ?? 0) + (detail.statementsDone === detail.statements ? 0 : 1))} of ${detail.statements})` : '';

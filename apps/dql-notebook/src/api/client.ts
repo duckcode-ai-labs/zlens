@@ -754,15 +754,37 @@ export interface SetupLaunchResponse {
   requiresDbtReapply: boolean;
   shouldOpen: boolean;
   reason: 'first_install' | 'version_upgrade' | null;
-  /** The ZLens app for Snowflake: it sets itself up, so the setup wizard stays closed. */
+  /** The ZLens app for Snowflake: its connection is set up; the wizard asks only what it reads (onboarding design P3). */
   snowflakeAppManaged?: boolean;
+  /** In the app: where setup stands. */
+  setupStage?: WarehouseSetupStage;
+}
+
+/** Where a two-stage setup stands (onboarding design P3). */
+export type WarehouseSetupStage = 'choose' | 'reading' | 'ready' | 'checking' | 'checked' | 'failed' | 'stopped';
+
+export interface WarehouseSetupStatus {
+  stage: WarehouseSetupStage;
+  setup: {
+    version: 1;
+    connectionId: string;
+    scopes: Array<{ catalogOrDatabase: string; schemas: string[] }>;
+    check: boolean;
+    read: { state: 'running' | 'done' | 'failed' | 'stopped'; operationId?: string; startedAt?: string; at?: string; relations?: number; warnings?: string[]; error?: string };
+    checks?: { state: 'running' | 'done' | 'failed' | 'stopped' | 'off'; operationId?: string; startedAt?: string; at?: string; proposalId?: string; drafted?: number; search?: 'meaning' | 'words'; searchNote?: string; error?: string };
+  } | null;
+  /** The stage running, with its phase and counts. */
+  operation: LocalOperation | null;
 }
 
 /** The ZLens app for Snowflake setting itself up: reading the granted database's tables, drafting the models. */
 export interface SnowflakeAppSetupStatus {
   managed: boolean;
-  /** `stopped`: someone pressed Stop; it starts again only when asked. */
-  state: 'idle' | 'running' | 'done' | 'failed' | 'stopped';
+  /** `ready`: names are read and Ask works; the data checks run (or ran) in the background. `stopped`: someone pressed Stop. */
+  state: 'idle' | 'running' | 'ready' | 'done' | 'failed' | 'stopped';
+  stage?: WarehouseSetupStage;
+  /** When ready: the background checks' own state. */
+  checks?: 'running' | 'done' | 'failed' | 'stopped' | 'off';
   database?: string;
   schemas?: string[];
   relations?: number;
@@ -7516,6 +7538,21 @@ export const api = {
     connectionId: string,
   ): Promise<{ scope: ConnectionMetadataScopeV1; status: WarehouseMetadataStatus; warehouseCatalog?: WarehouseCatalogSummary }> {
     return request(`/api/connections/${encodeURIComponent(connectionId)}/metadata-scope`);
+  },
+
+  /** Where the two-stage setup stands (onboarding design P3). */
+  async getWarehouseSetup(connectionId: string): Promise<WarehouseSetupStatus> {
+    return requestUncached(`/api/connections/${encodeURIComponent(connectionId)}/setup`);
+  },
+
+  /** Stage 1: read the names of the chosen schemas (no table is scanned); the data checks follow unless `check` is false. */
+  async startSetupRead(connectionId: string, input: ConnectionMetadataScopeInput & { check: boolean; tablesExpected?: number }): Promise<WarehouseSetupStatus> {
+    return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/read`, { method: 'POST', body: JSON.stringify(input) });
+  },
+
+  /** Stage 2: check the data in the background (again). */
+  async startSetupCheck(connectionId: string): Promise<WarehouseSetupStatus> {
+    return request(`/api/connections/${encodeURIComponent(connectionId)}/setup/check`, { method: 'POST', body: '{}' });
   },
 
   async applyConnectionMetadataScope(
