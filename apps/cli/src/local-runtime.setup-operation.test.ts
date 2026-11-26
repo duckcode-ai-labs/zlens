@@ -326,13 +326,14 @@ describe('long schema syncs and drafts are answered as long requests (onboarding
 function fakeCheckedWarehouse() {
   const tables = ['CUSTOMERS', 'ORDERS', 'EVENTS'];
   const checks: string[] = [];
-  const control = { holdOn: undefined as RegExp | undefined, timeoutOn: undefined as RegExp | undefined, canceledOn: undefined as RegExp | undefined };
+  const control = { holdOn: undefined as RegExp | undefined, timeoutOn: undefined as RegExp | undefined, canceledOn: undefined as RegExp | undefined, readFailsWith: undefined as Error | undefined };
   const executePositional = async (sql: string, _params: unknown[], config: { database?: string }, queryOptions?: QueryExecutionOptions): Promise<QueryResult> => {
     if (sql.includes('CURRENT_ACCOUNT()')) {
       return result([{ DQL_ACCOUNT_LOCATOR: 'XY1', DQL_ACCOUNT_NAME: 'TEST', DQL_ORGANIZATION: 'ORG', DQL_ACCOUNT: 'ORG-TEST', DQL_DATABASE: config.database, DQL_ROLE: 'APP', DQL_WAREHOUSE: 'WH' }]);
     }
     if (sql.startsWith('SHOW TERSE SCHEMAS')) return result([{ database_name: 'SALES', name: 'PUBLIC' }]);
     if (sql.includes('INFORMATION_SCHEMA.COLUMNS')) {
+      if (control.readFailsWith) throw control.readFailsWith;
       return result(tables.flatMap((table) => [
         { TABLE_CATALOG: 'SALES', TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: table, COLUMN_NAME: `${table.slice(0, -1)}_ID`, DATA_TYPE: 'NUMBER', ORDINAL_POSITION: 1, IS_NULLABLE: 'NO' },
         { TABLE_CATALOG: 'SALES', TABLE_SCHEMA: 'PUBLIC', TABLE_NAME: table, COLUMN_NAME: 'CUSTOMER_ID', DATA_TYPE: 'NUMBER', ORDINAL_POSITION: 2, IS_NULLABLE: 'YES' },
@@ -422,7 +423,7 @@ describe('the background checks resume where they stopped (onboarding design P4)
     expect((await read(app, { check: true })).status).toBe(202);
     await app.until((value) => value.state === 'done', 15_000);
     const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ relations: string[]; kind: string; text: string }> } } };
-    expect(status.setup.checks.problems).toContainEqual({ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked. A check took longer than the 60-second limit for background checks, so it was skipped, and the drafts do not rely on it.' });
+    expect(status.setup.checks.problems).toContainEqual({ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked. A check took longer than the 60-second limit for background checks, so ZLens skipped it, and the drafts do not rely on it. Ask can still use it: its columns were read.' });
     const timedOut = warehouse.checks.filter((sql) => warehouse.control.timeoutOn!.test(sql)).length;
 
     // Checking again keeps the answer: the slow statement is not run again.
@@ -447,8 +448,23 @@ describe('the background checks resume where they stopped (onboarding design P4)
     await app.until((value) => value.state === 'done', 15_000);
     const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ relations: string[]; kind: string; text: string }> } } };
     const listed = status.setup.checks.problems.filter((problem) => problem.relations.includes('SALES.PUBLIC.EVENTS'));
-    expect(listed).toEqual([{ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked. A check took longer than the 60-second limit for background checks, so it was skipped, and the drafts do not rely on it.' }]);
+    expect(listed).toEqual([{ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked. A check took longer than the 60-second limit for background checks, so ZLens skipped it, and the drafts do not rely on it. Ask can still use it: its columns were read.' }]);
     expect(JSON.stringify(status)).not.toContain('SQL execution canceled');
+  }, 30_000);
+
+  it('a read that runs into its time limit fails in plain words: the Setup page, the launcher and the tasks panel alike', async () => {
+    const warehouse = fakeCheckedWarehouse();
+    warehouse.control.readFailsWith = Object.assign(new Error('Snowflake query exceeded the 60000ms deadline.'), { vendorCode: 'TIMEOUT' });
+    const app = await startApp(warehouse.executor);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect((await read(app, { check: true })).status).toBe(202);
+    await app.until((value) => value.state === 'failed' || value.stage === 'failed', 15_000);
+    const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { read: { state: string; error?: string; operationId: string } } };
+    expect(status.setup.read).toMatchObject({ state: 'failed', error: 'a statement took longer than 60 seconds, so ZLens stopped it' });
+    const operation = await (await app.call(`/api/operations/${encodeURIComponent(status.setup.read.operationId)}`)).json() as { operation?: { error?: { message?: string } }; error?: { message?: string } };
+    expect((operation.operation ?? operation).error?.message).toBe('a statement took longer than 60 seconds, so ZLens stopped it');
+    expect(setupStatusWrites.at(-1)).toContain('ZLens could not read the chosen schemas: a statement took longer than 60 seconds, so ZLens stopped it');
+    expect(JSON.stringify(status)).not.toMatch(/deadline|SQL execution canceled/);
   }, 30_000);
 
   it('writes the drafts as a phase of its own, with its counts, and keeps answering meanwhile (target: an update every 3 s)', async () => {

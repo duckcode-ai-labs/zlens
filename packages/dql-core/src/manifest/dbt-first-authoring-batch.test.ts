@@ -82,4 +82,26 @@ describe('batch modeling authoring', () => {
     expect(stopped).toBeInstanceOf(Error);
     expect((stopped as Error).name).toBe('AbortError');
   });
+
+  it('composed in turns, other work runs at least every 3 s however large the batch (target: counts every 3 s)', async () => {
+    const { root, changes } = commerce(400);
+    const progressAt: number[] = [];
+    let lastTick = Date.now();
+    let longestTick = 0;
+    const ticker = setInterval(() => {
+      const now = Date.now();
+      longestTick = Math.max(longestTick, now - lastTick);
+      lastTick = now;
+    }, 10);
+    const started = Date.now();
+    await previewModelingChangesAsync(root, changes, { onProgress: () => progressAt.push(Date.now()) });
+    clearInterval(ticker);
+    const gaps = progressAt.slice(1).map((at, index) => at - progressAt[index]!);
+    // The default turn is 200 ms: a server answers and the counts move far inside the 3 s target.
+    expect(Math.max(0, ...gaps)).toBeLessThan(3_000);
+    expect(longestTick).toBeLessThan(3_000);
+    // A batch longer than one turn did give the event loop back.
+    if (Date.now() - started > 400) expect(progressAt.length).toBeGreaterThan(2);
+  }, 60_000);
 });
+

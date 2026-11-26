@@ -63,8 +63,11 @@ import { SetupStatusWriter } from './setup-status-sql.js';
 import { budgetWarehouseDraft } from './warehouse-draft-budget.js';
 import { AppWarehouseSizer, appOwnWarehouse, isCheckWarehouseSize, type CheckWarehouseSize } from './snowflake-app-warehouse.js';
 import {
+  isTimeLimitError,
+  plainSetupError,
   readWarehouseSetupState,
   settleInterruptedStages,
+  timeLimitProblemText,
   setupStatusLine,
   warehouseSetupStage,
   writeWarehouseSetupState,
@@ -15760,6 +15763,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         };
         outcome = { ...(proposal ? { proposalId: proposal.id } : {}), drafted: proposal ? drafted.entities.length : 0, ...search, summary };
         return outcome;
+      } catch (error) {
+        throw plainTimeLimitError(error, signal);
       } finally {
         stopHeartbeat();
       }
@@ -15805,7 +15810,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } else if (final?.status === 'cancelled') {
         saveWarehouseSetup({ ...latest, checks: { state: 'stopped', operationId: operation.id, startedAt, at, warehouse: warehouseUse } });
       } else {
-        saveWarehouseSetup({ ...latest, checks: { state: 'failed', operationId: operation.id, startedAt, at, error: final?.error?.message ?? 'the checks did not finish', warehouse: warehouseUse } });
+        saveWarehouseSetup({ ...latest, checks: { state: 'failed', operationId: operation.id, startedAt, at, error: plainSetupError(final?.error?.message ?? 'the checks did not finish'), warehouse: warehouseUse } });
         console.warn(`[zlens] The background checks did not finish: ${final?.error?.message ?? 'unknown error'}`);
       }
     });
@@ -15898,6 +15903,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           warnings: warehouseCatalog?.warnings ?? [],
         };
         return read;
+      } catch (error) {
+        throw plainTimeLimitError(error, signal);
       } finally {
         stopHeartbeat();
       }
@@ -15914,7 +15921,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } else if (final?.status === 'cancelled') {
         saveWarehouseSetup({ ...latest, read: { state: 'stopped', operationId: operation.id, startedAt, at } });
       } else {
-        saveWarehouseSetup({ ...latest, read: { state: 'failed', operationId: operation.id, startedAt, at, error: final?.error?.message ?? 'the read did not finish' } });
+        saveWarehouseSetup({ ...latest, read: { state: 'failed', operationId: operation.id, startedAt, at, error: plainSetupError(final?.error?.message ?? 'the read did not finish') } });
         console.warn(`[zlens] Could not read the chosen schemas: ${final?.error?.message ?? 'unknown error'}`);
       }
     });
@@ -40587,13 +40594,13 @@ export function setupCheckProblems(report: WarehouseDiscoveryReport, cache: Setu
   for (const failure of cache.failures()) {
     // A check Snowflake cancelled at its time limit, kept by a version before the driver said so ("SQL execution
     // canceled"): a time-out too. Stop's own cancels are never kept.
-    const timedOut = failure.timedOut === true || /\bSQL execution canceled\b/i.test(failure.error);
+    const timedOut = failure.timedOut === true || isTimeLimitError(failure.error);
     const key = `${failure.relations.map((relation) => relation.toLowerCase()).sort().join('|')}#${timedOut ? 'time' : failure.error}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const names = failure.relations.length ? failure.relations.map(nameOf).join(' and ') : 'A check';
     problems.push(timedOut
-      ? { relations: failure.relations, kind: 'too_big', text: `${names}: not checked. A check took longer than the ${Math.round(statementMs / 1000)}-second limit for background checks, so it was skipped, and the drafts do not rely on it.` }
+      ? { relations: failure.relations, kind: 'too_big', text: timeLimitProblemText(names, failure.relations.length, Math.round(statementMs / 1000)) }
       : { relations: failure.relations, kind: 'failed', text: `${names}: a check failed: ${failure.error}` });
   }
   for (const note of report.readNotes ?? []) {
@@ -40634,12 +40641,24 @@ export interface SetupCheckOptions {
   onStatement?: (relations: string[]) => void;
 }
 
+/**
+ * A setup stage that failed on a statement's time limit fails in plain words, so the background tasks panel says
+ * what the Setup page says. Stop's own cancel, and any other error, is left as it is.
+ */
+function plainTimeLimitError(error: unknown, signal: AbortSignal): unknown {
+  if (signal.aborted) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  if (!isTimeLimitError(message)) return error;
+  return Object.assign(new Error(plainSetupError(message)), { cause: error });
+}
+
 /** A statement that ran over its time limit (Snowflake's TIMEOUT, or any driver's deadline). */
 function isStatementTimeout(error: unknown): boolean {
   if (error instanceof CheckStatementFailure) return error.timedOut;
   const vendor = (error as { vendorCode?: unknown } | null)?.vendorCode;
   if (vendor === 'TIMEOUT') return true;
-  return /exceeded the \d+ ?ms deadline|statement timed out|timeout/i.test(error instanceof Error ? error.message : String(error));
+  const message = error instanceof Error ? error.message : String(error);
+  return isTimeLimitError(message) || /timeout/i.test(message);
 }
 
 async function checkDraftOnWarehouse(
