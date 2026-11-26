@@ -237,6 +237,8 @@ import {
   type DiffReport,
   previewModelingChange,
   previewModelingChanges,
+  previewModelingChangesAsync,
+  type ModelingChangesPreview,
   applyModelingChanges,
   applyModelingChange,
   previewDbtSourcePatch,
@@ -8777,7 +8779,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return harvested.length ? [...operations, ...harvested] : operations;
   };
 
-  const previewContextAuthoring = (input: {
+  type ContextAuthoringInput = {
     origin: ContextAuthoringOrigin;
     operations: ContextAuthoringOperation[];
     /** The draft this one revises: carried forward, then overwritten by `operations` sharing an id. */
@@ -8791,7 +8793,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     domainNames?: Record<string, string>;
     /** False: build it without keeping it (Save checks a reviewed proposal against the current project this way). */
     persist?: boolean;
-  }): ContextAuthoringProposalV1 => {
+  };
+  /** The proposal, built around its modeling batch: the caller composes the batch, at once or in turns. */
+  const composeContextAuthoring = function* (input: ContextAuthoringInput): Generator<ModelingAuthoringChange[], ContextAuthoringProposalV1, ModelingChangesPreview> {
     const snapshot = projectSnapshot();
     if (input.expectedSnapshotId && input.expectedSnapshotId !== snapshot.snapshotId) {
       throw Object.assign(new Error('Project sources changed before the authoring proposal was previewed.'), { code: 'PROPOSAL_STALE' });
@@ -8892,7 +8896,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const patches: ContextAuthoringPatchV1[] = [];
     const modelingOperations = scopedOperations.filter((operation): operation is Extract<ContextAuthoringOperation, { kind: 'modeling_change' }> => operation.kind === 'modeling_change');
     if (modelingOperations.length > 0) {
-      const batch = previewModelingChanges(projectRoot, modelingOperations.map((operation) => operation.change));
+      const batch: ModelingChangesPreview = yield modelingOperations.map((operation) => operation.change);
       // The batch attributes each path while composing its shadow, so a change
       // that depends on an earlier one (an entity in a Domain this same batch
       // creates) is attributed correctly and without re-previewing per patch.
@@ -8985,6 +8989,25 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     });
     if (input.persist !== false) contextProposalStore.save(proposal);
     return proposal;
+  };
+  const previewContextAuthoring = (input: ContextAuthoringInput): ContextAuthoringProposalV1 => {
+    const composing = composeContextAuthoring(input);
+    let step = composing.next();
+    while (!step.done) step = composing.next(previewModelingChanges(projectRoot, step.value));
+    return step.value;
+  };
+  /**
+   * The same proposal with its modeling batch composed in turns, so ZLens keeps answering while a large one is
+   * written (the background setup's drafts: the onboarding large test, 26 Nov 2026), with how far it is.
+   */
+  const previewContextAuthoringInTurns = async (
+    input: ContextAuthoringInput,
+    options: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal } = {},
+  ): Promise<ContextAuthoringProposalV1> => {
+    const composing = composeContextAuthoring(input);
+    let step = composing.next();
+    while (!step.done) step = composing.next(await previewModelingChangesAsync(projectRoot, step.value, options));
+    return step.value;
   };
 
 
@@ -15395,7 +15418,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
   // Modeling » Draft from warehouse, callable on its own: the route below, and the ZLens app for Snowflake
   // drafting its models by itself after its first sync.
-  const draftWarehouseProposal = async (body: { validate?: boolean; queryHistory?: boolean; domain?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' }, snapshot: ReturnType<typeof projectSnapshot>, signal?: AbortSignal, setupChecks?: SetupCheckOptions) => {
+  const draftWarehouseProposal = async (body: { validate?: boolean; queryHistory?: boolean; domain?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' }, snapshot: ReturnType<typeof projectSnapshot>, signal?: AbortSignal, setupChecks?: SetupCheckOptions, onDrafts?: (done: number, total: number) => void) => {
     // Staging copies of a final table are left out unless the person asks
     // for them ("Show staging tables"), so the map has one Customer.
     const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
@@ -15453,12 +15476,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       change,
       evidence: evidenceFor(change),
     }));
-    const proposal = previewContextAuthoring({
-      origin: 'warehouse_discovery',
+    const authoring = {
+      origin: 'warehouse_discovery' as const,
       operations,
       expectedSnapshotId: snapshot.snapshotId,
       domainNames: Object.fromEntries(report.domains.map((item) => [item.id, item.name])),
-    });
+    };
+    // The background setup writes its drafts in turns, so its counts keep moving and ZLens keeps answering: written
+    // at once, 150 tables' drafts held it for 3 to 4 s (the onboarding large test, 26 Nov 2026; target 3 s).
+    const proposal = setupChecks
+      ? await previewContextAuthoringInTurns(authoring, { ...(onDrafts ? { onProgress: onDrafts } : {}), ...(signal ? { signal } : {}) })
+      : previewContextAuthoring(authoring);
     // The newest draft replaces the ones before it; they wait for no one now.
     closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
     return { report, proposal };
@@ -15681,11 +15709,21 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             progress.update({ checks: counts });
           },
         };
+        // Writing the drafts for review is a phase of its own, with its counts (target: an update every 3 s).
+        let writingDrafts = false;
+        const onDrafts = (done: number, total: number) => {
+          if (!writingDrafts) {
+            writingDrafts = true;
+            progress.phase('draft', { drafts: { done, total } });
+          } else {
+            progress.update({ drafts: { done, total } });
+          }
+        };
         const { report: drafted, proposal } = await draftWarehouseProposal({
           validate: true,
           ...(draftOptions.domain ? { domain: draftOptions.domain } : {}),
           ...(draftOptions.includeStaging ? { includeStaging: true } : {}),
-        }, projectSnapshot(), signal, setupChecks);
+        }, projectSnapshot(), signal, setupChecks, onDrafts);
         signal.throwIfAborted();
         // What could not be checked, by table, for the Setup page (onboarding design P4, P5).
         problems = setupCheckProblems(drafted, cache, CHECK_ROW_BUDGET, SETUP_CHECK_STATEMENT_MS);
@@ -40547,12 +40585,15 @@ export function setupCheckProblems(report: WarehouseDiscoveryReport, cache: Setu
   const seen = new Set<string>();
   const nameOf = (relation: string) => tableName(relation) || relation;
   for (const failure of cache.failures()) {
-    const key = `${failure.relations.map((relation) => relation.toLowerCase()).sort().join('|')}#${failure.timedOut ? 'time' : failure.error}`;
+    // A check Snowflake cancelled at its time limit, kept by a version before the driver said so ("SQL execution
+    // canceled"): a time-out too. Stop's own cancels are never kept.
+    const timedOut = failure.timedOut === true || /\bSQL execution canceled\b/i.test(failure.error);
+    const key = `${failure.relations.map((relation) => relation.toLowerCase()).sort().join('|')}#${timedOut ? 'time' : failure.error}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const names = failure.relations.length ? failure.relations.map(nameOf).join(' and ') : 'A check';
-    problems.push(failure.timedOut
-      ? { relations: failure.relations, kind: 'too_big', text: `${names}: not checked: a check ran over ${Math.round(statementMs / 1000)} s, too big for the background check.` }
+    problems.push(timedOut
+      ? { relations: failure.relations, kind: 'too_big', text: `${names}: not checked. A check took longer than the ${Math.round(statementMs / 1000)}-second limit for background checks, so it was skipped, and the drafts do not rely on it.` }
       : { relations: failure.relations, kind: 'failed', text: `${names}: a check failed: ${failure.error}` });
   }
   for (const note of report.readNotes ?? []) {

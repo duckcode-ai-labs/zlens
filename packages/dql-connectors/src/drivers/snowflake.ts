@@ -199,24 +199,33 @@ export class SnowflakeConnector implements DatabaseConnector {
     }, deadlineMs);
 
     try {
-      statement = await new Promise<any>((resolve, reject) => {
-        submittedStatement = this.connection.execute({
-        sqlText: sql,
-        binds: params ?? [],
-        parameters: { QUERY_TAG: snowflakeQueryTag(this.ownQueryTag, { purpose: options.purpose ?? 'data', ...currentQueryLabels() }) },
-        // Snowflake otherwise materializes every row in the complete callback.
-        // Streaming is mandatory for bounded enterprise result consumption.
-        streamResult: true,
-        complete: (err: Error | undefined, stmt: any) => {
-          if (err) {
-            reject(snowflakeQueryError(err, stmt ?? submittedStatement));
-            return;
-          }
-          resolve(stmt ?? submittedStatement);
-        },
-      });
-        if (cancelled || timedOut) cancelStatement();
-      });
+      try {
+        statement = await new Promise<any>((resolve, reject) => {
+          submittedStatement = this.connection.execute({
+          sqlText: sql,
+          binds: params ?? [],
+          parameters: { QUERY_TAG: snowflakeQueryTag(this.ownQueryTag, { purpose: options.purpose ?? 'data', ...currentQueryLabels() }) },
+          // Snowflake otherwise materializes every row in the complete callback.
+          // Streaming is mandatory for bounded enterprise result consumption.
+          streamResult: true,
+          complete: (err: Error | undefined, stmt: any) => {
+            if (err) {
+              reject(snowflakeQueryError(err, stmt ?? submittedStatement));
+              return;
+            }
+            resolve(stmt ?? submittedStatement);
+          },
+        });
+          if (cancelled || timedOut) cancelStatement();
+        });
+      } catch (error) {
+        // A statement cancelled while it still runs ends with Snowflake's own "SQL execution canceled" (000604).
+        // When the deadline or the caller cancelled it, that is what it says (the onboarding large test, 26 Nov
+        // 2026: a view over 600M rows ran into the setup check's 60 s limit and read as a failed check).
+        if (timedOut) throw snowflakeControlError('TIMEOUT', `Snowflake query exceeded the ${deadlineMs}ms deadline.`);
+        if (cancelled) throw snowflakeControlError('EXECUTION_CANCELLED', 'Snowflake query was cancelled.');
+        throw error;
+      }
 
       if (timedOut) throw snowflakeControlError('TIMEOUT', `Snowflake query exceeded the ${deadlineMs}ms deadline.`);
       if (cancelled) throw snowflakeControlError('EXECUTION_CANCELLED', 'Snowflake query was cancelled.');

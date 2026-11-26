@@ -87,6 +87,7 @@ export {
 export {
   previewModelingChange,
   previewModelingChanges,
+  previewModelingChangesAsync,
   applyModelingChange,
   applyModelingChanges,
   previewDbtSourcePatch,

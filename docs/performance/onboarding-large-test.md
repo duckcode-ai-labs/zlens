@@ -6,10 +6,10 @@ promises, for a scope of 1,000 tables:
 | Target | Measured on DuckDB, 1,005 tables |
 | --- | --- |
 | Ready to ask within 2 minutes | 0.5 to 0.6 s |
-| Counts update at least every 3 s while a stage runs | longest gap 0.3 s while reading, 0.5 s while checking (a single 2.9 s pause while the drafts are written) |
+| Counts update at least every 3 s while a stage runs | longest gap 0.3 s while reading, 0.9 s while checking; longest wait for an answer 0.7 s (it was 2.9 s while the drafts were written, before they were written in turns) |
 | Stop stops the background checks within 5 s | 0.3 to 0.7 s |
 | A resume repeats no finished check | 0 statements asked twice (195 kept answers reused) |
-| Answers no worse than before | to measure on Snowflake with the release gate |
+| Answers no worse than before | the release gate on Snowflake: 76 of 76, as before (see below) |
 
 ## The data
 
@@ -43,6 +43,9 @@ What the script does:
 
 What it records:
 - the longest gap between two updates of the counts;
+- the longest wait for an answer from ZLens. A server busy at the very end of
+  a stage shows only here, since the stage has finished by the time it
+  answers again;
 - how long Stop took;
 - how many answers the resume reused;
 - how many statements were asked twice. This is read from
@@ -84,9 +87,57 @@ The Setup page lists two items it did not do:
 - "855 more tables were read and checked but not drafted";
 - "1,958 joins not checked: the background check validates at most 200 a run".
 
-## Still to measure on Snowflake
+## The drafts written in turns (26 November 2026)
 
-- The same scope on an X-Small warehouse, with the same script.
-- The release gate's questions, asked at Ready (names only) and again after
-  the checks, on a database without declared keys.
-- The gate on today's build and on this one, to confirm answers are no worse.
+On Snowflake the same test showed one 4.1 s wait (results below): writing the
+150 drafted tables for review held ZLens for 3 to 4 s, so the counts stood
+still and Ask waited. A CPU profile put almost all of it in composing the
+review, which parsed the whole warehouse catalog again for each change, twice.
+
+Now:
+- the catalog is parsed once for the whole batch, and each change is written
+  as previewed, not previewed again;
+- the background setup writes its drafts in turns, giving the event loop back
+  at least every 200 ms, as a phase of its own with its counts ("Writing the
+  drafts for review: 120 of 412 changes").
+
+| DuckDB, 1,005 tables, twice each | Before | After |
+| --- | --- | --- |
+| Longest wait for an answer while checking | 2.9 s, 2.8 s | 0.7 s, 0.6 s |
+| Longest gap between updates while checking | 0.8 s, 0.5 s | 0.9 s, 0.8 s |
+| Longest the server did nothing else (CPU profile) | 3.1 s | 0.9 s |
+| Resume to done | 13.8 s, 13.4 s | 11.5 s, 11.3 s |
+
+## Results on Snowflake, 26 November 2026
+
+An X-Small warehouse in a sandbox account, the build with all of the
+onboarding work.
+
+**The data:** 1,000 copies of the 24 TPC-DS sample tables, 500 to 5,000 rows
+each with their own column names and no declared keys, in 10 schemas, plus 8
+views over the TPC-H SF100 sample in another database (ORDERS 150 million
+rows, LINEITEM 600 million).
+
+| Step | Result |
+| --- | --- |
+| Discovery with sizes | 14.3 s |
+| Ready to ask, 1,008 tables and views | 10.6 s; longest gap between updates 1.8 s |
+| Stop after 20 s of checks | 0.9 s |
+| A resume repeats no finished check | 0 statements asked twice |
+| Background checks to done | 14.5 min: 150 models and 191 joins drafted, each join checked on the data; 858 tables read and checked but not drafted |
+| Longest gap while checking | 4.1 s, while the drafts were written (fixed above) |
+| Warehouse credits | about 0.27 for the test, 0.04 to make the data |
+
+The two largest views ran into the 60 s limit for each background check, as
+designed: views are never sampled. The Setup page showed Snowflake's own
+"SQL execution canceled": the driver lost its own deadline when Snowflake
+ended the statement before any row. It now says the statement ran over its
+deadline, and the Setup page says: "LINEITEM and ORDERS: not checked. A check
+took longer than the 60-second limit for background checks, so it was
+skipped, and the drafts do not rely on it."
+
+**Answers.** The release gate's questions on Snowflake, with Cortex:
+- on a project set up before (its model kept, nothing drafted again on
+  upgrade): 76 of 76 in two rounds, against 75 of 76 for the last release;
+- on a fresh project with no model, on a database without declared keys: 21
+  of 38 at Ready (names only), 35 of 38 after the 49 s of checks.

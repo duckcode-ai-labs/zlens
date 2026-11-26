@@ -255,6 +255,8 @@ describe('the words of a setup in progress', () => {
     expect(setupMessage({ ...base, statementsDone: 0, statements: 2, tablesExpected: 1240 })).toBe('Reading names in SALES: 420 of 1,240 tables so far (statement 1 of 2) · 12 s');
     expect(setupMessage({ ...base, phase: 'catalog', statementsDone: 3, statements: 5 })).toBe('Reading keys and comments in SALES (statement 4 of 5): 420 tables · 12 s');
     expect(setupMessage({ ...base, phase: 'check', elapsedMs: 185_000 })).toBe('Checking keys and joins on the data in SALES · 3 min 05 s');
+    expect(setupMessage({ ...base, phase: 'draft', drafts: { done: 120, total: 1_420 } })).toBe('Writing the drafts for review: 120 of 1,420 changes · 12 s');
+    expect(setupMessage({ ...base, phase: 'draft' })).toBe('Writing the drafts for review · 12 s');
     expect(formatDuration(3_725_000)).toBe('1 h 02 min');
   });
 
@@ -262,6 +264,9 @@ describe('the words of a setup in progress', () => {
     expect(setupPercent({ ...base, statementsDone: 0, statements: 2 })).toBe(5);
     expect(setupPercent({ ...base, statementsDone: 1, statements: 2 })).toBe(18);
     expect(setupPercent({ ...base, phase: 'check' })).toBe(50);
+    expect(setupPercent({ ...base, phase: 'draft', drafts: { done: 0, total: 300 } })).toBe(92);
+    expect(setupPercent({ ...base, phase: 'draft', drafts: { done: 300, total: 300 } })).toBe(95);
+    expect(setupPercent({ ...base, phase: 'index' })).toBe(95);
   });
 
   it('reports again on a heartbeat while a statement runs', async () => {
@@ -321,7 +326,7 @@ describe('long schema syncs and drafts are answered as long requests (onboarding
 function fakeCheckedWarehouse() {
   const tables = ['CUSTOMERS', 'ORDERS', 'EVENTS'];
   const checks: string[] = [];
-  const control = { holdOn: undefined as RegExp | undefined, timeoutOn: undefined as RegExp | undefined };
+  const control = { holdOn: undefined as RegExp | undefined, timeoutOn: undefined as RegExp | undefined, canceledOn: undefined as RegExp | undefined };
   const executePositional = async (sql: string, _params: unknown[], config: { database?: string }, queryOptions?: QueryExecutionOptions): Promise<QueryResult> => {
     if (sql.includes('CURRENT_ACCOUNT()')) {
       return result([{ DQL_ACCOUNT_LOCATOR: 'XY1', DQL_ACCOUNT_NAME: 'TEST', DQL_ORGANIZATION: 'ORG', DQL_ACCOUNT: 'ORG-TEST', DQL_DATABASE: config.database, DQL_ROLE: 'APP', DQL_WAREHOUSE: 'WH' }]);
@@ -338,6 +343,8 @@ function fakeCheckedWarehouse() {
     // A data check.
     checks.push(sql);
     if (control.timeoutOn?.test(sql)) throw Object.assign(new Error('Snowflake query exceeded the 60000ms deadline.'), { vendorCode: 'TIMEOUT' });
+    // A driver before 26 Nov 2026: a statement cancelled at its time limit while it ran said only this.
+    if (control.canceledOn?.test(sql)) throw Object.assign(new Error('Snowflake query failed: SQL execution canceled'), { vendorCode: '000604' });
     if (control.holdOn?.test(sql)) {
       return new Promise<QueryResult>((_resolve, reject) => {
         const signal = queryOptions?.signal;
@@ -415,7 +422,7 @@ describe('the background checks resume where they stopped (onboarding design P4)
     expect((await read(app, { check: true })).status).toBe(202);
     await app.until((value) => value.state === 'done', 15_000);
     const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ relations: string[]; kind: string; text: string }> } } };
-    expect(status.setup.checks.problems).toContainEqual({ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked: a check ran over 60 s, too big for the background check.' });
+    expect(status.setup.checks.problems).toContainEqual({ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked. A check took longer than the 60-second limit for background checks, so it was skipped, and the drafts do not rely on it.' });
     const timedOut = warehouse.checks.filter((sql) => warehouse.control.timeoutOn!.test(sql)).length;
 
     // Checking again keeps the answer: the slow statement is not run again.
@@ -429,6 +436,36 @@ describe('the background checks resume where they stopped (onboarding design P4)
     await app.until((value) => value.state === 'done', 15_000);
     const after = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ kind: string }> } } };
     expect(after.setup.checks.problems.filter((problem) => problem.kind === 'too_big')).toEqual([]);
+  }, 30_000);
+
+  it('a check Snowflake cancelled at the time limit says so, not "SQL execution canceled" (the large test, 26 Nov 2026)', async () => {
+    const warehouse = fakeCheckedWarehouse();
+    warehouse.control.canceledOn = /COUNT\(DISTINCT[^)]*\) AS nd_0 FROM "SALES"\."PUBLIC"\."EVENTS"/;
+    const app = await startApp(warehouse.executor);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect((await read(app, { check: true })).status).toBe(202);
+    await app.until((value) => value.state === 'done', 15_000);
+    const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { problems: Array<{ relations: string[]; kind: string; text: string }> } } };
+    const listed = status.setup.checks.problems.filter((problem) => problem.relations.includes('SALES.PUBLIC.EVENTS'));
+    expect(listed).toEqual([{ relations: ['SALES.PUBLIC.EVENTS'], kind: 'too_big', text: 'EVENTS: not checked. A check took longer than the 60-second limit for background checks, so it was skipped, and the drafts do not rely on it.' }]);
+    expect(JSON.stringify(status)).not.toContain('SQL execution canceled');
+  }, 30_000);
+
+  it('writes the drafts as a phase of its own, with its counts, and keeps answering meanwhile (target: an update every 3 s)', async () => {
+    const warehouse = fakeCheckedWarehouse();
+    const app = await startApp(warehouse.executor);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect((await read(app, { check: true })).status).toBe(202);
+    await app.until((value) => value.state === 'done', 15_000);
+    const status = await (await app.call('/api/connections/default/setup')).json() as { setup: { checks: { state: string; operationId: string; proposalId?: string } } };
+    expect(status.setup.checks.proposalId).toBeTruthy();
+    const operation = await (await app.call(`/api/operations/${encodeURIComponent(status.setup.checks.operationId)}`)).json() as { operation?: { phase: string; message: string; detail?: SetupDetail } } & { phase?: string; message?: string; detail?: SetupDetail };
+    const last = operation.operation ?? operation;
+    expect(last.detail?.phase).toBe('draft');
+    expect(last.detail?.drafts?.total).toBeGreaterThan(0);
+    expect(last.detail?.drafts?.done).toBe(last.detail?.drafts?.total);
+    // What the page said while the drafts were written (a finished operation says Complete).
+    expect(setupMessage(last.detail!)).toMatch(/^Writing the drafts for review: (\d+) of \1 changes? · \d+ s$/);
   }, 30_000);
 });
 
