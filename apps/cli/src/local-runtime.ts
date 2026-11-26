@@ -60,6 +60,7 @@ import { ProjectRefreshCoordinator } from './project-refresh-coordinator.js';
 import { SetupOperationProgress } from './setup-operation-progress.js';
 import { CheckStatementFailure, SetupCheckCache } from './setup-check-cache.js';
 import { SetupStatusWriter } from './setup-status-sql.js';
+import { budgetWarehouseDraft } from './warehouse-draft-budget.js';
 import { AppWarehouseSizer, appOwnWarehouse, isCheckWarehouseSize, type CheckWarehouseSize } from './snowflake-app-warehouse.js';
 import {
   readWarehouseSetupState,
@@ -15396,11 +15397,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // A hybrid project drafts either side: its dbt models, or the warehouse
     // tables dbt does not build (the default, as before).
     const projectMode = modelingModeOf(loadProjectConfig(projectRoot));
-    const report = projectMode === 'dbt-first' || (projectMode === 'hybrid' && body.source === 'dbt')
+    const drafted = projectMode === 'dbt-first' || (projectMode === 'hybrid' && body.source === 'dbt')
       ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, scope: draftScopeFromBody(body.scope), executor })
       : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor, ...(signal ? { signal } : {}), ...(setupChecks ? { setup: setupChecks } : {}) });
     // Stopped: no draft is written from a half-checked report.
     signal?.throwIfAborted();
+    // The background setup checks every table read, but drafts at most the draft budget's tables for review
+    // (onboarding design, Reuse: the 150-table budget, on the warehouse path too); the rest are listed. Past it,
+    // building the review kept ZLens busy for minutes (1,005 tables: 129 s, the large test).
+    const report = setupChecks && !drafted.scope ? budgetWarehouseDraft(drafted, undefined, { checkedJoinsOnly: true }) : drafted;
     // New Domains and subject areas are created by the proposal's own scope
     // step, as for dbt discovery, so the batch stays in dependency order.
     // A drafted join lives in the subject area of the entity it starts
@@ -40454,7 +40459,7 @@ export const SETUP_CHECK_STATEMENT_MS = 60_000;
 /** What the background checks could not do, by table, for the Setup page (onboarding design P4, P5). */
 export interface SetupCheckProblem {
   relations: string[];
-  kind: 'too_big' | 'failed' | 'skipped' | 'join' | 'joins_over_limit';
+  kind: 'too_big' | 'failed' | 'skipped' | 'join' | 'joins_over_limit' | 'not_drafted';
   text: string;
 }
 
@@ -40486,8 +40491,13 @@ export function setupCheckProblems(report: WarehouseDiscoveryReport, cache: Setu
     seen.add(key);
     problems.push({ relations: [relationship.fromRelation, relationship.toRelation], kind: 'join', text: `${from} → ${to}: join not checked: ${error.replace(/^not validated: /, '')}` });
   }
-  const overLimit = report.relationships.filter((relationship) => /^not validated: discovery validates at most/.test(relationship.validationError ?? '')).length;
-  if (overLimit > 0) problems.push({ relations: [], kind: 'joins_over_limit', text: `${overLimit.toLocaleString('en-US')} join${overLimit === 1 ? '' : 's'} not checked: the background check validates at most 200 a run; joins with declared keys and small tables went first.` });
+  // Checked but over the draft budget: listed, so a person can draft them next (Modeling » Draft from warehouse).
+  if (report.scope?.description === 'the tables setup read' && report.scope.leftOut.length > 0) {
+    const left = report.scope.leftOut.length;
+    problems.push({ relations: [], kind: 'not_drafted', text: `${left.toLocaleString('en-US')} more table${left === 1 ? ' was' : 's were'} read and checked but not drafted: the drafts hold the ${report.scope.budget} most connected business tables, to keep the review short. Ask reads them all; Modeling » Draft from warehouse drafts the next ones.` });
+  }
+  const overLimit = report.uncheckedJoins ?? report.relationships.filter((relationship) => /^not validated: discovery validates at most/.test(relationship.validationError ?? '')).length;
+  if (overLimit > 0) problems.push({ relations: [], kind: 'joins_over_limit', text: `${overLimit.toLocaleString('en-US')} join${overLimit === 1 ? '' : 's'} not checked: the background check validates at most 200 a run; joins with declared keys and small tables went first${report.uncheckedJoins !== undefined ? '. They are not in the drafts' : ''}.` });
   void rowBudget;
   return problems;
 }
