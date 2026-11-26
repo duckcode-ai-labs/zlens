@@ -231,6 +231,9 @@ describe('Draft my models', () => {
     expect(draftOutcomeFromChecks({ state: 'stopped' })).toEqual({ ok: true, message: 'The data checks were stopped. Draft my models carries on from where they stopped.' });
     expect(draftOutcomeFromChecks({ state: 'failed', error: 'warehouse suspended' })).toEqual({ ok: false, message: 'The data checks did not finish: warehouse suspended. Draft my models tries again from where they stopped.' });
     expect(draftOutcomeFromChecks({ state: 'done', summary: { models: 0, joins: 0, relations: 6, validated: true, sampled: 0 } })).toEqual({ ok: true, message: 'Nothing new to draft: the 6 tables read and their joins are already modeled.' });
+    // Over the draft budget: says how many tables wait for Modeling.
+    expect(draftOutcomeFromChecks({ state: 'done', proposalId: 'p', summary: { models: 150, joins: 200, relations: 1005, validated: true, sampled: 0, leftOut: 855 } })?.message)
+      .toBe('Drafted 150 models and 200 joins from 1005 tables, each join checked on the data. 855 tables were not drafted this time: draft them from Modeling. Not saved yet: review and save them in Modeling.');
     // A state written before the summary existed still says what was drafted.
     expect(draftOutcomeFromChecks({ state: 'done', proposalId: 'p', drafted: 3 })?.message).toBe('Drafted 3 models, each join checked on the data. Not saved yet: review and save them in Modeling.');
   });

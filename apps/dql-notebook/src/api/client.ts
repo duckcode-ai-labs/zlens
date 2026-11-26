@@ -803,6 +803,8 @@ export interface WarehouseSetupStatus {
         relations: number;
         validated: boolean;
         sampled: number;
+        /** Tables read but over the draft budget, left for Modeling to draft. */
+        leftOut?: number;
         domain?: string;
         stagingHidden?: Array<{ relation: string; finalRelation: string }>;
         readNotes?: string[];

@@ -15687,6 +15687,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           relations: drafted.relations,
           validated: drafted.validated,
           sampled: (drafted.readNotes ?? []).filter((note) => note.kind === 'sampled').length,
+          ...(drafted.scope?.leftOut.length ? { leftOut: drafted.scope.leftOut.length } : {}),
           ...(newDomain ? { domain: newDomain } : {}),
           ...(drafted.stagingHidden?.length ? { stagingHidden: drafted.stagingHidden } : {}),
           ...(drafted.readNotes?.length ? { readNotes: drafted.readNotes.map((note) => note.text) } : {}),

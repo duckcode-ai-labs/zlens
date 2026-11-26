@@ -347,7 +347,7 @@ export function draftOutcomeFromChecks(checks: NonNullable<WarehouseSetupStatus[
     ok: true,
     proposalId: checks.proposalId,
     message: summary
-      ? `Drafted ${plural(summary.models, 'model')} and ${plural(summary.joins, 'join')} from ${plural(summary.relations, 'table')}${summary.validated ? `, each join checked on the data${sampled}` : ''}. Not saved yet: review and save them in Modeling.`
+      ? `Drafted ${plural(summary.models, 'model')} and ${plural(summary.joins, 'join')} from ${plural(summary.relations, 'table')}${summary.validated ? `, each join checked on the data${sampled}` : ''}.${summary.leftOut ? ` ${plural(summary.leftOut, 'table')} ${summary.leftOut === 1 ? 'was' : 'were'} not drafted this time: draft ${summary.leftOut === 1 ? 'it' : 'them'} from Modeling.` : ''} Not saved yet: review and save them in Modeling.`
       : `Drafted ${plural(checks.drafted ?? 0, 'model')}, each join checked on the data. Not saved yet: review and save them in Modeling.`,
     ...(summary?.domain ? { domain: summary.domain } : {}),
     ...(summary?.stagingHidden?.length ? { stagingHidden: summary.stagingHidden } : {}),

@@ -80,6 +80,8 @@ export function SetupOnboarding({
   const [step, setStep] = useState(appSetup ? 2 : 1);
   const [readStatus, setReadStatus] = useState<WarehouseSetupStatus | null>(null);
   const [checkStarting, setCheckStarting] = useState(false);
+  // "Show staging tables" as just ticked, before the checks it starts say so.
+  const [stagingWanted, setStagingWanted] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [projectState, setProjectState] = useState<SetupState>('missing');
   const [databaseState, setDatabaseState] = useState<SetupState>('missing');
@@ -351,7 +353,7 @@ export function SetupOnboarding({
   }, [checkedProposal]);
   const checkDraft = ossStaged ? draftOutcomeFromChecks(readStatus?.setup?.checks) : null;
   const shownDraft = ossStaged ? checkDraft : draft;
-  const stagedIncludeStaging = readStatus?.setup?.draft?.includeStaging === true;
+  const stagedIncludeStaging = stagingWanted ?? readStatus?.setup?.draft?.includeStaging === true;
   /** Start the background checks again: Draft my models, Rename, Show staging tables (they resume from what is kept). */
   const recheck = async (options: { domain?: string; includeStaging?: boolean } = {}) => {
     if (!setupConnection) return;
@@ -519,7 +521,7 @@ export function SetupOnboarding({
                   onDraft={() => void recheck()}
                   waiting={waitingDrafts}
                   includeStaging={stagedIncludeStaging}
-                  onToggleStaging={(include) => void recheck({ includeStaging: include })}
+                  onToggleStaging={(include) => { setStagingWanted(include); void recheck({ includeStaging: include }); }}
                   onRename={(name) => void recheck({ domain: name })}
                   t={t}
                 />
