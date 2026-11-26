@@ -53,7 +53,7 @@ jobs:
     name: answerability (runtime-driven)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for provider-recorded cassettes
         id: cassettes
@@ -79,9 +79,9 @@ jobs:
           fi
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         if: ${{ steps.cassettes.outputs.ready == 'true' }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: ${{ steps.cassettes.outputs.ready == 'true' }}
         with:
           node-version: 20
@@ -258,7 +258,7 @@ jobs:
 
       - name: Upload reports
         if: ${{ always() && steps.cassettes.outputs.ready == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: answerability-reports
           path: |
