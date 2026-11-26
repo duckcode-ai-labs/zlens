@@ -45,6 +45,10 @@ import {
   parseMetadataScopeEditor,
   toggleAdditionalMetadataScope,
   metadataScopeMode,
+  schemaSizeWords,
+  scopeOverLimits,
+  selectedScopeTotals,
+  selectedScopeWords,
 } from './connection-metadata-scope';
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
@@ -1203,6 +1207,9 @@ export function ConnectionPanel({
   const connected = Boolean(info && Object.values(info.connections ?? {}).some((connection) => !isPlaceholderLocalConnection(connection)));
   const metadataStatus = info?.metadataStatus;
   const selectedAdditionalMetadataScopes = parseMetadataScopeEditor(metadataScopeText);
+  // What is ticked, and whether one Apply and synchronize can read it (onboarding design P1).
+  const selectedTotals = metadataDiscovery ? selectedScopeTotals(metadataDiscovery, selectedAdditionalMetadataScopes) : null;
+  const scopeTooBig = selectedTotals && metadataDiscovery ? scopeOverLimits(selectedTotals, metadataDiscovery.limits) : null;
   // RFC 0007: without dbt, the selected schemas are the whole modeled warehouse.
   const warehouseFirst = info?.modelingMode === 'warehouse-first';
   // Guided Setup asks one plain question; index mode, the typed list and the
@@ -1301,6 +1308,9 @@ export function ConnectionPanel({
                           {schema.inDbtProject
                             ? ` · in dbt (${schema.dbtRelationCount} relation${schema.dbtRelationCount === 1 ? '' : 's'}), included automatically`
                             : warehouseFirst ? '' : ' · outside dbt, select only if reporting needs it'}
+                          {schema.size ? (
+                            <span style={{ display: 'block', fontSize: 10.5, color: t.textMuted }}>{schemaSizeWords(schema.size)}</span>
+                          ) : null}
                         </span>
                       </label>
                     );
@@ -1320,6 +1330,19 @@ export function ConnectionPanel({
                 </label>
               );
             })()}
+            {selectedTotals && selectedTotals.sized > 0 ? (
+              <div style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.font }}>
+                {selectedScopeWords(selectedTotals, metadataDiscovery.limits?.checkRowBudget)}
+              </div>
+            ) : null}
+            {scopeTooBig ? (
+              <div role="alert" style={{ fontSize: 11, color: 'var(--status-warning)', fontFamily: t.font }}>{scopeTooBig}</div>
+            ) : null}
+            {metadataDiscovery.sizesUnavailable?.length ? (
+              <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: t.font }}>
+                Sizes could not be read for {metadataDiscovery.sizesUnavailable.join(', ')}; its schemas are listed without them.
+              </div>
+            ) : null}
             {metadataDiscovery.truncated ? (
               <div style={{ fontSize: 10.5, color: 'var(--status-warning)', fontFamily: t.font }}>
                 Discovery reached its safety limit. Narrow the connection role or enter another known database/schema manually.
@@ -1396,8 +1419,9 @@ export function ConnectionPanel({
         <button
           type="button"
           onClick={() => void handleMetadataApply()}
-          disabled={metadataSyncing || !testResult?.ok}
-          style={{ height: 32, padding: '0 13px', borderRadius: 8, border: 'none', background: t.accent, color: 'var(--accent-fg)', fontSize: 12, fontWeight: 700, cursor: metadataSyncing || !testResult?.ok ? 'not-allowed' : 'pointer', opacity: metadataSyncing || !testResult?.ok ? 0.55 : 1, fontFamily: t.font }}
+          disabled={metadataSyncing || !testResult?.ok || Boolean(scopeTooBig)}
+          title={scopeTooBig ?? undefined}
+          style={{ height: 32, padding: '0 13px', borderRadius: 8, border: 'none', background: t.accent, color: 'var(--accent-fg)', fontSize: 12, fontWeight: 700, cursor: metadataSyncing || !testResult?.ok || scopeTooBig ? 'not-allowed' : 'pointer', opacity: metadataSyncing || !testResult?.ok || scopeTooBig ? 0.55 : 1, fontFamily: t.font }}
         >
           {metadataSyncing ? 'Synchronizing…' : 'Apply and synchronize'}
         </button>
