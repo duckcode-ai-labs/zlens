@@ -78,43 +78,55 @@ export function certifyStepLabel(run: ListedRun): CertifyStepLabel {
   return 'AI-generated';
 }
 
-/** A run that is a standalone question a person could certify: asked in Ask, answered or found missing, not a follow-up. */
-function isCertifiableQuestion(run: ListedRun): boolean {
-  if (run.requestedMode !== 'auto' && run.requestedMode !== 'ask') return false;
-  if (!run.question?.trim()) return false;
-  if (run.status === 'needs_clarification' || run.status === 'cancelled' || run.route === 'clarify' || run.route === 'conversation') return false;
-  // "What about 2009?" only means something after the answer before it.
-  const decision = run.routeDecision && typeof run.routeDecision === 'object' ? run.routeDecision as { followsUp?: unknown } : undefined;
-  if (decision?.followsUp) return false;
-  if (run.conversationBinding === 'prior_result' || run.conversationBinding === 'task_dependency') return false;
-  return true;
+/**
+ * A question that only means something after the answer before it ("What about 2009?", "Which of those had a
+ * winning record?"). The server marks one that reused the prior result; the openers catch the rest. Not the
+ * route decision's `followsUp`: every Ask pipeline run carries it.
+ */
+const FOLLOW_UP_OPENER = /^(?:(?:what|how) about|and|also|same(?: for| but)?|now|then|instead|(?:which|what|who|how many) of (?:those|these|them|that))\b/i;
+function isFollowUp(run: ListedRun): boolean {
+  if (run.conversationBinding === 'prior_result' || run.conversationBinding === 'task_dependency') return true;
+  return FOLLOW_UP_OPENER.test(run.question.trim());
 }
 
+/** An Ask question a person could certify on its own: asked in Ask, not a chat reply or a follow-up. */
+function isAskQuestion(run: ListedRun): boolean {
+  if (run.requestedMode !== 'auto' && run.requestedMode !== 'ask') return false;
+  if (!run.question?.trim() || run.route === 'conversation') return false;
+  return !isFollowUp(run);
+}
+
+/** Ask asked back about it: too vague to certify as it stands. */
+const askedBack = (run: ListedRun) => run.status === 'needs_clarification' || run.route === 'clarify';
+
 /**
- * The questions to certify next, from the Ask history read (newest first, as the server lists it): one step per
- * question, its label from its last answer, most asked first, then the most recently asked. Questions whose last
- * answer is Certified are done, so they are not listed.
+ * The questions to certify next, from the Ask history read: one step per question (however cased or punctuated),
+ * its label from its last answer, most asked first, then the most recently asked. Left out: questions whose last
+ * answer is Certified (done) and questions Ask last asked back about (too vague as they stand).
  */
 export function certifySteps(runs: ReadonlyArray<ListedRun>, limit: number): CertifyStep[] {
   if (limit <= 0) return [];
-  const byQuestion = new Map<string, { latest: ListedRun; runs: number; askedTimes: number; draftPath?: string }>();
+  const byQuestion = new Map<string, { latest?: ListedRun; vague: boolean; runs: number; askedTimes: number; draftPath?: string }>();
   const newestFirst = [...runs].sort((left, right) => String(right.startedAt).localeCompare(String(left.startedAt)));
   for (const run of newestFirst) {
-    if (!isCertifiableQuestion(run)) continue;
+    if (!isAskQuestion(run)) continue;
     const key = certifyQuestionKey(run.question);
     if (!key) continue;
-    const entry = byQuestion.get(key);
-    const askedTimes = typeof run.reviewDraft?.askedTimes === 'number' ? run.reviewDraft.askedTimes : 0;
-    if (!entry) {
-      byQuestion.set(key, { latest: run, runs: 1, askedTimes, ...(run.reviewDraft?.path ? { draftPath: run.reviewDraft.path } : {}) });
-      continue;
+    const entry = byQuestion.get(key) ?? { vague: false, runs: 0, askedTimes: 0 };
+    if (!byQuestion.has(key)) {
+      byQuestion.set(key, entry);
+      // Its newest run decides: asked back about last time, it is not a question to certify yet.
+      entry.vague = askedBack(run);
     }
     entry.runs += 1;
-    entry.askedTimes = Math.max(entry.askedTimes, askedTimes);
+    if (typeof run.reviewDraft?.askedTimes === 'number') entry.askedTimes = Math.max(entry.askedTimes, run.reviewDraft.askedTimes);
     if (!entry.draftPath && run.reviewDraft?.path) entry.draftPath = run.reviewDraft.path;
+    // The last answer (a stopped run is not one).
+    if (!entry.latest && run.status !== 'cancelled' && !askedBack(run)) entry.latest = run;
   }
   return [...byQuestion.values()]
-    .map((entry) => {
+    .flatMap((entry) => {
+      if (entry.vague || !entry.latest) return [];
       const label = certifyStepLabel(entry.latest);
       const step: CertifyStep = {
         question: entry.latest.question.trim(),
@@ -125,7 +137,7 @@ export function certifySteps(runs: ReadonlyArray<ListedRun>, limit: number): Cer
       };
       // A draft is worth opening only while the answer still has SQL to compare: not after a "Not in this data".
       if (entry.draftPath && (label === 'AI-generated' || label === 'From Metrics')) step.draftPath = entry.draftPath;
-      return step;
+      return [step];
     })
     .filter((step) => step.label !== 'Certified')
     .sort((left, right) => right.askedTimes - left.askedTimes || right.lastAskedAt.localeCompare(left.lastAskedAt))

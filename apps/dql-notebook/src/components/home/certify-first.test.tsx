@@ -68,7 +68,8 @@ describe('certify-first guide: the questions to certify come from what the perso
 
   it('never invents a question and leaves out follow-ups, questions back, other modes and certified ones', () => {
     const runs = [
-      run('What about 2009?', { routeDecision: { followsUp: true } }),
+      run('What about 2009?'),
+      run('And for the Lakers?'),
       run('Which of those had a winning record?', { conversationBinding: 'prior_result' }),
       run('Who is the best player?', { status: 'needs_clarification', route: 'clarify', trustState: 'not_applicable' }),
       run('Build me an App about sales', { requestedMode: 'app', route: 'app_build' }),
@@ -77,6 +78,31 @@ describe('certify-first guide: the questions to certify come from what the perso
       run('Hello', { route: 'conversation' }),
     ];
     expect(certifySteps(runs, 10)).toEqual([]);
+  });
+
+  it('does not read the route decision\'s followsUp as a follow-up: every Ask pipeline run carries it', () => {
+    expect(certifySteps([run('How many games are in our data?', { routeDecision: { followsUp: true } })], 10)).toHaveLength(1);
+  });
+
+  it('leaves out a question Ask last asked back about, and keeps one it answered after asking back', () => {
+    expect(certifySteps([
+      run('How are the Warriors doing lately?', { reviewDraft: { path: 'blocks/_drafts/warriors.dql', askedTimes: 2 } }),
+      run('How are the Warriors doing lately?', { status: 'needs_clarification', route: 'clarify', trustState: 'not_applicable' }),
+    ], 10)).toEqual([]);
+    const answered = certifySteps([
+      run('Who is the best scorer?', { status: 'needs_clarification', route: 'clarify', trustState: 'not_applicable' }),
+      run('Who is the best scorer?', { reviewDraft: { path: 'blocks/_drafts/best_scorer.dql', askedTimes: 1 } }),
+    ], 10);
+    expect(answered.map((step) => [step.label, step.askedTimes])).toEqual([['AI-generated', 2]]);
+  });
+
+  it('a stopped run is not the last answer', () => {
+    const [step] = certifySteps([
+      run('How many teams are there?', { reviewDraft: { path: 'blocks/_drafts/teams.dql', askedTimes: 1 } }),
+      run('How many teams are there?', { status: 'cancelled', route: 'cancelled', trustState: 'not_applicable' }),
+    ], 10);
+    expect(step!.label).toBe('AI-generated');
+    expect(step!.draftPath).toBe('blocks/_drafts/teams.dql');
   });
 
   it('two wordings that share one draft saved query are one step', () => {
@@ -147,14 +173,14 @@ describe('certify-first guide: the card', () => {
     <CertifyFirstCardView view={view} onOpenDraft={() => undefined} onAsk={() => undefined} onDismiss={() => undefined} {...extra} />,
   );
 
-  it('shows the title, the progress and the steps, five at first', () => {
+  it('shows the title, the progress and the steps, three at first', () => {
     const html = render();
     expect(html).toContain('Certify your 10 most-asked questions');
     expect(html).toContain('2 of 10 certified');
     expect(html).toContain('aria-valuenow="2"');
     expect(html).toContain('From your Ask history, most asked first');
-    expect(html.match(/data-testid="certify-step"/g)).toHaveLength(5);
-    expect(html).toContain('Show 2 more');
+    expect(html.match(/data-testid="certify-step"/g)).toHaveLength(3);
+    expect(html).toContain('Show 4 more');
     expect(render({ showAll: true }).match(/data-testid="certify-step"/g)).toHaveLength(7);
   });
 

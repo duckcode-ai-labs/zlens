@@ -19,7 +19,7 @@ export function CertifyGuideSetting({ t }: { t: Theme }) {
 /** The setting itself, without storage: what a test renders. */
 export function CertifyGuideSettingView({ t, dismissed, onChange }: { t: Theme; dismissed: boolean; onChange: (dismissed: boolean) => void }) {
   return (
-    <section aria-label="Certify guide" data-testid="certify-guide-setting" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <section aria-label="Certify guide" data-testid="certify-guide-setting" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, paddingTop: 16, borderTop: '1px solid var(--border-subtle)' }}>
       <div>
         <div style={{ fontSize: 14, fontWeight: 700, color: t.textPrimary }}>Certify guide</div>
         <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5 }}>

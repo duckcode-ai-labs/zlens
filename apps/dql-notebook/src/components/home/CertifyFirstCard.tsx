@@ -17,8 +17,8 @@ import {
   type CertifyStepLabel,
 } from './certify-first';
 
-/** How many steps show before "Show more". */
-const FIRST_STEPS = 5;
+/** How many steps show before "Show more": the card stays short above Ask. */
+export const FIRST_STEPS = 3;
 
 /**
  * The certify-first guide on Ask's home (see certify-first.ts): loads the
@@ -188,7 +188,7 @@ export function CertifyFirstCardView({ view, onOpenDraft, onAsk, onDismiss, show
           <>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-tertiary)' }}>From your Ask history, most asked first</div>
             <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {steps.map((step) => {
+              {steps.map((step, index) => {
                 const action = certifyStepAction(step);
                 return (
                   <li key={step.runId} data-testid="certify-step" style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
@@ -199,7 +199,8 @@ export function CertifyFirstCardView({ view, onOpenDraft, onAsk, onDismiss, show
                       </div>
                       <span style={{ ...muted, fontSize: 12 }}>{certifyStepNote(step)}</span>
                     </div>
-                    <button type="button" onClick={() => runStep(step)} style={action.kind === 'open_draft' ? primaryButton : smallButton}>{action.label}</button>
+                    {/* The first step leads; the rest stay quiet so the card does not shout over Ask. */}
+                    <button type="button" onClick={() => runStep(step)} style={index === 0 && action.kind === 'open_draft' ? primaryButton : smallButton}>{action.label}</button>
                   </li>
                 );
               })}
