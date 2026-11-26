@@ -31,7 +31,10 @@ export interface CortexToken {
 
 /** Strips a scheme and anything after the host, so `https://x.snowflakecomputing.com/` reads as the host. */
 function bareHost(value: string): string {
-  return value.trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  const host = value.trim().replace(/^https?:\/\//i, '');
+  // indexOf, not a regex: a regex over a value with many slashes is slow (CodeQL js/polynomial-redos).
+  const slash = host.indexOf('/');
+  return slash === -1 ? host : host.slice(0, slash);
 }
 
 /**

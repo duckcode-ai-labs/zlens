@@ -170,7 +170,10 @@ export async function postMessages(
 export function normalizeAnthropicBaseUrl(baseUrl?: string): string {
   const raw = (baseUrl ?? '').trim();
   if (!raw) return DEFAULT_ANTHROPIC_BASE_URL;
-  return raw.replace(/\/+$/, '').replace(/\/v1$/, '');
+  // Trailing slashes trimmed by hand: `/\/+$/` is slow on a value with many slashes (CodeQL js/polynomial-redos).
+  let end = raw.length;
+  while (end > 0 && raw[end - 1] === '/') end -= 1;
+  return raw.slice(0, end).replace(/\/v1$/, '');
 }
 
 /**

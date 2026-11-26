@@ -20726,8 +20726,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(serializeJSON({ askReadiness: view }));
       } catch (error) {
+        // The check itself never throws (a failure is a result); anything else goes to the log, not the page.
+        console.warn(`[zlens] Ask readiness could not be read: ${error instanceof Error ? error.message : String(error)}`);
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
+        res.end(serializeJSON({ error: 'ZLens could not check whether Ask is ready. Try again.' }));
       }
       return;
     }

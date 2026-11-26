@@ -80,7 +80,8 @@ const REQUIRED_TEST_FILES = [
 // 199 with the V14 Ask answer fixes (ask-pipeline/v14-answers.test.ts, +1 file, +19 tests).
 // 200 with a source's own words against a Describe with AI question (app-builder-source-match.test.ts, +1 file, +5 tests).
 // 201 with the V2 Ask answer fixes (ask-pipeline/v2-answers.test.ts, +1 file, +8 tests).
-const EXPECTED_TEST_FILES = 201;
+// 202 with the Ask readiness check (providers/cortex-ask-readiness.test.ts, +1 file, +7 tests).
+const EXPECTED_TEST_FILES = 202;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -233,10 +234,13 @@ const EXPECTED_TEST_FILES = 201;
 // that say columns in words and name no other table, "Not in this data" in plain words (ask-pipeline/v2-answers.test.ts
 // +8), one draft per name across drafts folders and its owner in the app for Snowflake (metadata/drafts.test.ts +3),
 // and the signed-in owner (metadata/identity.test.ts +2).
-const EXPECTED_TESTS = 2949;
+// 2964 with Ask readiness (fix plan risk 3): its check, ready through Cortex SQL when REST is off, the grant with the
+// app's name, region, a named model, other and a time limit, and Check again (providers/cortex-ask-readiness.test.ts
+// +7), and Cortex failures named apart, cancel on give-up and model fallback by region (providers/claude-cortex.test.ts +8).
+const EXPECTED_TESTS = 2964;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2853.
+// The ordinary lane's share is the difference: 2883.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
