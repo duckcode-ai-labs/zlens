@@ -13,6 +13,7 @@ import { DraftModelsCard, ExistingProjectSyncCard, ModelSourceChooser } from './
 import {
   draftErrorMessage,
   draftOutcome,
+  draftOutcomeFromChecks,
   draftsFromWarehouse,
   existingProjectFromStatus,
   initialModelSource,
@@ -78,6 +79,9 @@ export function SetupOnboarding({
   const appSetup = Boolean(launch?.snowflakeAppManaged) || isSnowflakeApp();
   const [step, setStep] = useState(appSetup ? 2 : 1);
   const [readStatus, setReadStatus] = useState<WarehouseSetupStatus | null>(null);
+  const [checkStarting, setCheckStarting] = useState(false);
+  // "Show staging tables" as just ticked, before the checks it starts say so.
+  const [stagingWanted, setStagingWanted] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(true);
   const [projectState, setProjectState] = useState<SetupState>('missing');
   const [databaseState, setDatabaseState] = useState<SetupState>('missing');
@@ -322,7 +326,47 @@ export function SetupOnboarding({
     }
   };
 
-  const drafted = Boolean(draft?.proposalId || waitingDrafts);
+  // Database only on a laptop (onboarding design D8): the same two stages as the app. Read these tables reads
+  // names; the background checks draft the models, and this card follows them instead of drafting itself.
+  const ossStaged = !appSetup && source === 'warehouse';
+  const setupConnection = readStatus?.setup?.connectionId ?? connectionId;
+  const checksRunning = ossStaged && readStatus?.stage === 'checking';
+  useEffect(() => {
+    if (!ossStaged || !setupConnection || readStatus?.stage !== 'checking') return;
+    let alive = true;
+    const timer = window.setInterval(() => {
+      void api.getWarehouseSetup(setupConnection).then((next) => {
+        if (!alive) return;
+        setReadStatus(next);
+      }).catch(() => undefined);
+    }, 1_500);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [ossStaged, setupConnection, readStatus?.stage]);
+  // New drafts from the checks: Modeling opens them for review, and the card counts what waits.
+  const checkedProposal = ossStaged ? readStatus?.setup?.checks?.proposalId : undefined;
+  useEffect(() => {
+    if (!checkedProposal) return;
+    let alive = true;
+    rememberProposalForModeling(checkedProposal);
+    void api.getWaitingWarehouseDrafts().then((waiting) => alive && setWaitingDrafts(waiting)).catch(() => undefined);
+    return () => { alive = false; };
+  }, [checkedProposal]);
+  const checkDraft = ossStaged ? draftOutcomeFromChecks(readStatus?.setup?.checks) : null;
+  const shownDraft = ossStaged ? checkDraft : draft;
+  const stagedIncludeStaging = stagingWanted ?? readStatus?.setup?.draft?.includeStaging === true;
+  /** Start the background checks again: Draft my models, Rename, Show staging tables (they resume from what is kept). */
+  const recheck = async (options: { domain?: string; includeStaging?: boolean } = {}) => {
+    if (!setupConnection) return;
+    setCheckStarting(true);
+    try {
+      setReadStatus(await api.startSetupCheck(setupConnection, options));
+    } catch (error) {
+      setDraft({ ok: false, message: draftErrorMessage(error) });
+    } finally {
+      setCheckStarting(false);
+    }
+  };
+  const drafted = Boolean(shownDraft?.proposalId || waitingDrafts) || checksRunning;
   const stepTwo = appSetup
     ? {
       title: 'Choose your data',
@@ -334,6 +378,12 @@ export function SetupOnboarding({
     setReadStatus(status);
     setDatabaseState('passed');
     setStep(4);
+  };
+  // On a laptop the wizard stays on this step: the drafts card follows the checks, and Continue moves on.
+  const onOssReadReady = (status: WarehouseSetupStatus) => {
+    setReadStatus(status);
+    setDatabaseState('passed');
+    setCatalogReady(true);
   };
   const hint = useMemo(() => {
     if (loading) return 'Loading existing project-local configuration…';
@@ -348,12 +398,13 @@ export function SetupOnboarding({
     }
     if (step === 2) {
       if (appSetup) return readStatus ? 'Ready to ask · the data checks run in the background.' : 'Read these tables to continue.';
-      if (draftsFromWarehouse(source) && draft?.ok && draft.proposalId) return 'Models drafted · review and certify them in Modeling.';
+      if (draftsFromWarehouse(source) && shownDraft?.ok && shownDraft.proposalId) return 'Models drafted · review and certify them in Modeling.';
+      if (checksRunning) return 'Ready to ask · the data checks draft your models in the background.';
       return databaseState === 'passed' ? `Test passed · ${databaseDetail}` : databaseState === 'configured' ? databaseDetail : 'A failed test rolls back to the previous connection.';
     }
     if (step === 3) return aiSkipped ? 'AI skipped · connect a provider later in Settings.' : aiState === 'missing' ? 'Optional · skip for now or configure a provider.' : `${aiState === 'passed' ? 'Test passed' : 'Configured'} · ${providerSummary(aiProvider)}`;
     return 'Setup complete';
-  }, [aiProvider, aiSkipped, aiState, appSetup, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, readStatus, requiresUpgradeReapply, source, step, stepOneBlocked, valueProfileOn]);
+  }, [aiProvider, aiSkipped, aiState, appSetup, checksRunning, databaseDetail, databaseState, shownDraft, existing, launch?.version, loading, projectDetail, projectState, readStatus, requiresUpgradeReapply, source, step, stepOneBlocked, valueProfileOn]);
 
   const supportingText = t.textSecondary;
   const primaryButton: React.CSSProperties = {
@@ -436,7 +487,7 @@ export function SetupOnboarding({
                 <div style={{ border: `1px solid ${t.headerBorder}`, background: t.cellBg, borderRadius: 10, padding: '12px 13px', fontSize: 11.5, color: supportingText, lineHeight: 1.55 }}>
                   {databaseOnlyUnavailable(existing)
                     ? databaseOnlyUnavailable(existing)
-                    : <><strong style={{ color: t.textPrimary }}>Next:</strong> connect your database, choose the schemas to model, Apply and synchronize, then Draft my models. You review and certify the drafts in Modeling before Ask relies on them.</>}
+                    : <><strong style={{ color: t.textPrimary }}>Next:</strong> connect your database, choose the schemas to model, then Read these tables. ZLens reads names first, then checks the data and drafts your models in the background. You review and certify the drafts in Modeling before Ask relies on them.</>}
                 </div>
               ) : null}
               {continueError ? <div role="alert" style={{ color: 'var(--status-error)', fontSize: 11.5, lineHeight: 1.5 }}>{continueError}</div> : null}
@@ -448,7 +499,7 @@ export function SetupOnboarding({
               <ConnectionPanel
                 variant="setup"
                 setupSource={source}
-                {...(appSetup ? { stagedSetup: { onReady: onReadReady, credits: true } } : {})}
+                {...(appSetup ? { stagedSetup: { onReady: onReadReady, credits: true } } : ossStaged ? { stagedSetup: { onReady: onOssReadReady, credits: false } } : {})}
                 setupPrimaryAction={source === 'existing' && existing
                   ? <ExistingProjectSyncCard project={existing} busy={syncing} steps={syncSteps} environment={environment} onSync={() => void synchronize()} t={t} />
                   : undefined}
@@ -460,7 +511,21 @@ export function SetupOnboarding({
                   if (result.warehouseCatalog?.relations && !result.warehouseCatalog.error) setCatalogReady(true);
                 }}
               />
-              {draftsFromWarehouse(source) && !appSetup ? (
+              {ossStaged ? (
+                <DraftModelsCard
+                  staged
+                  busy={checksRunning || checkStarting || readStatus?.stage === 'reading'}
+                  canDraft={Boolean(readStatus?.setup && readStatus.stage !== 'failed' && readStatus.stage !== 'stopped' && readStatus.stage !== 'reading')}
+                  outcome={shownDraft ?? (draft && !draft.ok ? draft : null)}
+                  progress={checksRunning ? readStatus?.operation?.message ?? 'Checking keys and joins on the data.' : null}
+                  onDraft={() => void recheck()}
+                  waiting={waitingDrafts}
+                  includeStaging={stagedIncludeStaging}
+                  onToggleStaging={(include) => { setStagingWanted(include); void recheck({ includeStaging: include }); }}
+                  onRename={(name) => void recheck({ domain: name })}
+                  t={t}
+                />
+              ) : draftsFromWarehouse(source) && !appSetup ? (
                 <DraftModelsCard
                   busy={drafting}
                   canDraft={catalogReady}
@@ -498,12 +563,17 @@ export function SetupOnboarding({
                       ? 'The data checks are off: start them from the strip at the top when you want drafts to review.'
                       : 'The data checks run in the background: follow them in the strip at the top or in Background tasks.'}
                   </div>
-                ) : aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not set up. You can run queries and build Apps without it; connect a provider in Settings when you want Ask.</div> : null}
+                ) : (
+                  <>
+                    {checksRunning ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7, lineHeight: 1.55 }}>The data checks are drafting your models in the background: follow them in Background tasks, then review the drafts in Modeling.</div> : null}
+                    {aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not set up. You can run queries and build Apps without it; connect a provider in Settings when you want Ask.</div> : null}
+                  </>
+                )}
               </div>
               {draftsFromWarehouse(source) && !appSetup && aiState !== 'missing' && !aiSkipped ? <DraftMeaningsCard t={t} quiet /> : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 11 }}>
                 {drafted ? (
-                  <StartCard icon={<Boxes size={17} />} title="Review drafted models" body="Check the drafted models and joins, certify the ones that are right, then Ask." action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary={finishTarget === 'domains'} />
+                  <StartCard icon={<Boxes size={17} />} title="Review drafted models" body={checksRunning && !shownDraft?.proposalId && !waitingDrafts ? 'The drafts land in Modeling when the checks finish: certify the ones that are right, then Ask.' : 'Check the drafted models and joins, certify the ones that are right, then Ask.'} action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary={finishTarget === 'domains'} />
                 ) : null}
                 <StartCard icon={<LayoutDashboard size={17} />} title="Build a dashboard" body="Pick a table from your database and publish a page with live, checked numbers." action="Build an App" onClick={() => finishTo('apps')} t={t} primary={finishTarget === 'apps'} />
                 {drafted ? null : (

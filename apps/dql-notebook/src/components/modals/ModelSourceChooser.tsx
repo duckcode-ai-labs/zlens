@@ -114,7 +114,10 @@ export function ModelSourceChooser({
   );
 }
 
-/** Database only and Both, after Apply and synchronize: draft entities and joins for review. */
+/**
+ * Database only and Both: draft entities and joins for review. Both drafts after Apply and synchronize; a
+ * database-only setup (`staged`, onboarding design D8) reads names first and its background checks draft.
+ */
 export function DraftModelsCard({
   busy,
   canDraft,
@@ -124,6 +127,8 @@ export function DraftModelsCard({
   includeStaging = false,
   onToggleStaging,
   onRename,
+  staged = false,
+  progress = null,
   t,
 }: {
   busy: boolean;
@@ -137,6 +142,10 @@ export function DraftModelsCard({
   onToggleStaging?: (include: boolean) => void;
   /** Draft again into a Domain with this name. */
   onRename?: (name: string) => void;
+  /** The drafts come from the background checks that follow Read these tables. */
+  staged?: boolean;
+  /** While those checks run: where they are, in words. */
+  progress?: string | null;
   t: Theme;
 }) {
   const [renaming, setRenaming] = useState(false);
@@ -153,7 +162,9 @@ export function DraftModelsCard({
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>Draft my models</div>
           <div style={{ fontSize: 11.5, color: t.textSecondary, lineHeight: 1.5, marginTop: 2 }}>
-            ZLens drafts models and joins from the synchronized tables&apos; keys, names and view SQL and checks each join on the data. You review and certify them in Modeling.
+            {staged
+              ? 'While it checks the data in the background, ZLens drafts models and joins from the tables\' keys, names and view SQL, each join checked on the data. You review and certify them in Modeling.'
+              : <>ZLens drafts models and joins from the synchronized tables&apos; keys, names and view SQL and checks each join on the data. You review and certify them in Modeling.</>}
           </div>
         </div>
         <button
@@ -166,7 +177,10 @@ export function DraftModelsCard({
         </button>
       </div>
       {!canDraft && !outcome && !waiting ? (
-        <div style={{ fontSize: 10.5, color: t.textMuted }}>Choose schemas and Apply and synchronize first.</div>
+        <div style={{ fontSize: 10.5, color: t.textMuted }}>{staged ? 'Choose schemas and Read these tables first.' : 'Choose schemas and Apply and synchronize first.'}</div>
+      ) : null}
+      {busy && progress ? (
+        <div role="status" aria-label="Checks" style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary }}>{progress}</div>
       ) : null}
       {outcome ? (
         <div role={outcome.ok ? 'status' : 'alert'} style={{ fontSize: 11.5, lineHeight: 1.5, color: outcome.ok ? (outcome.proposalId ? 'var(--status-success)' : t.textSecondary) : 'var(--status-error)' }}>

@@ -191,6 +191,31 @@ describe('setup in two stages, run as background operations (onboarding design P
     expect(await app.until((value) => value.state === 'done', 15_000)).toMatchObject({ stage: 'checked' });
   }, 30_000);
 
+  it('says what the drafts hold, and drafts into the Domain named; the name stays for the next run (onboarding D8)', async () => {
+    const warehouse = fakeWarehouse({ hang: false });
+    const app = await startApp(warehouse.executor);
+    expect((await app.call('/api/connections')).status).toBe(200);
+    expect((await read(app, { check: false })).status).toBe(202);
+    await app.until((value) => value.state === 'ready', 15_000);
+    type Status = { stage: string; setup: { draft?: { domain?: string; includeStaging?: boolean }; checks: { state: string; proposalId?: string; summary?: { models: number; relations: number; validated: boolean; domain?: string } } } };
+    const status = async () => await (await app.call('/api/connections/default/setup')).json() as Status;
+    expect((await app.call('/api/connections/default/setup/check', { method: 'POST', body: JSON.stringify({ domain: '  Sales team  ' }) })).status).toBe(202);
+    await app.until((value) => value.state === 'done', 15_000);
+    const named = await status();
+    expect(named.setup.draft).toEqual({ domain: 'Sales team' });
+    expect(named.setup.checks).toMatchObject({ state: 'done', summary: { relations: 1, validated: true } });
+    if (named.setup.checks.proposalId) expect(named.setup.checks.summary?.domain).toBe('Sales team');
+    // Show staging tables: the Domain name is kept beside it, and a check run again keeps both.
+    expect((await app.call('/api/connections/default/setup/check', { method: 'POST', body: JSON.stringify({ includeStaging: true }) })).status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await app.until((value) => value.state === 'done', 15_000);
+    expect((await status()).setup.draft).toEqual({ domain: 'Sales team', includeStaging: true });
+    // Read again on the same connection: the choices stay for its drafts.
+    expect((await read(app, { check: false })).status).toBe(202);
+    await app.until((value) => value.state === 'ready', 15_000);
+    expect((await status()).setup.draft).toEqual({ domain: 'Sales team', includeStaging: true });
+  }, 45_000);
+
   it('a project with work of its own (a saved query) opens no wizard, whatever it recorded', async () => {
     const warehouse = fakeWarehouse({ hang: false });
     const projectRoot = mkdtempSync(join(tmpdir(), 'zlens-setup-own-work-'));

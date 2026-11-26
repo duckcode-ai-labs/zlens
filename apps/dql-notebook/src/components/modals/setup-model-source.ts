@@ -5,6 +5,7 @@ import type {
   WarehouseCatalogSummary,
   WarehouseDiscoveryReport,
   WarehouseMetadataStatus,
+  WarehouseSetupStatus,
 } from '../../api/client';
 
 /**
@@ -263,7 +264,8 @@ export function stepTwoCopy(source: ModelSource | null, existing: ExistingProjec
   if (source === 'warehouse') {
     return {
       title: 'Connect your database',
-      description: `Connect and test the database, choose the schemas to model, then Apply and synchronize. Then Draft my models. ${rowsPrivacy(valueProfileOn)}`,
+      // Two stages (onboarding design D8): names first, so Ask works in minutes; the drafts follow in the background.
+      description: `Connect and test the database, choose the schemas to model, then Read these tables. ZLens reads names first, with no table scanned, then checks the data and drafts your models in the background. ${rowsPrivacy(valueProfileOn)}`,
     };
   }
   if (source === 'both') {
@@ -316,6 +318,40 @@ export function draftOutcome(result: { report: WarehouseDiscoveryReport; proposa
     ...(domain ? { domain } : {}),
     ...(report.stagingHidden?.length ? { stagingHidden: report.stagingHidden } : {}),
     ...(report.readNotes?.length ? { readNotes: report.readNotes.map((note) => note.text) } : {}),
+  };
+}
+
+/**
+ * The same words for the drafts the background checks wrote (onboarding design D8): a database-only setup
+ * reads names first, and the checks draft the models after. Null while nothing is drafted yet.
+ */
+export function draftOutcomeFromChecks(checks: NonNullable<WarehouseSetupStatus['setup']>['checks'] | undefined): DraftOutcome | null {
+  if (!checks) return null;
+  if (checks.state === 'failed') return { ok: false, message: `The data checks did not finish: ${checks.error ?? 'unknown error'}. Draft my models tries again from where they stopped.` };
+  if (checks.state === 'stopped') return { ok: true, message: 'The data checks were stopped. Draft my models carries on from where they stopped.' };
+  if (checks.state !== 'done') return null;
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  const summary = checks.summary;
+  if (!checks.proposalId) {
+    return {
+      ok: true,
+      message: summary
+        ? `Nothing new to draft: the ${plural(summary.relations, 'table')} read and their joins are already modeled.`
+        : 'Nothing new to draft: the tables read and their joins are already modeled.',
+    };
+  }
+  const sampled = summary?.sampled
+    ? ` (${summary.sampled} large table${summary.sampled === 1 ? '' : 's'} on a sample of ${summary.sampled === 1 ? 'its' : 'their'} rows)`
+    : '';
+  return {
+    ok: true,
+    proposalId: checks.proposalId,
+    message: summary
+      ? `Drafted ${plural(summary.models, 'model')} and ${plural(summary.joins, 'join')} from ${plural(summary.relations, 'table')}${summary.validated ? `, each join checked on the data${sampled}` : ''}.${summary.leftOut ? ` ${plural(summary.leftOut, 'table')} ${summary.leftOut === 1 ? 'was' : 'were'} not drafted this time: draft ${summary.leftOut === 1 ? 'it' : 'them'} from Modeling.` : ''} Not saved yet: review and save them in Modeling.`
+      : `Drafted ${plural(checks.drafted ?? 0, 'model')}, each join checked on the data. Not saved yet: review and save them in Modeling.`,
+    ...(summary?.domain ? { domain: summary.domain } : {}),
+    ...(summary?.stagingHidden?.length ? { stagingHidden: summary.stagingHidden } : {}),
+    ...(summary?.readNotes?.length ? { readNotes: summary.readNotes } : {}),
   };
 }
 

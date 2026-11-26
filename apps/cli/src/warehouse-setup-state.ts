@@ -52,6 +52,22 @@ export interface SetupCheckStage {
    * (and so must go back to X-Small), or why the resize was refused.
    */
   warehouse?: { size: string; resized: boolean; refused?: string };
+  /**
+   * What the drafts hold, in the words Guided Setup's "Draft my models" says (onboarding design D8): models
+   * and joins drafted from so many tables, the Domain they go in, the staging copies left out.
+   */
+  summary?: {
+    models: number;
+    joins: number;
+    relations: number;
+    validated: boolean;
+    sampled: number;
+    /** Tables read but over the draft budget, left for Modeling to draft. */
+    leftOut?: number;
+    domain?: string;
+    stagingHidden?: Array<{ relation: string; finalRelation: string }>;
+    readNotes?: string[];
+  };
 }
 
 export interface WarehouseSetupStateV1 {
@@ -62,6 +78,12 @@ export interface WarehouseSetupStateV1 {
   check: boolean;
   /** "Check faster": the size of the app's own warehouse for the checks (decision D6); X-Small when absent. */
   checkSize?: string;
+  /**
+   * How the checks draft (Guided Setup's Rename and "Show staging tables", onboarding design D8): the Domain
+   * the drafts go in, and staging copies drafted too. A check run again keeps them, and asks the warehouse
+   * only what its earlier runs did not.
+   */
+  draft?: { domain?: string; includeStaging?: boolean };
   read: SetupReadStage;
   checks?: SetupCheckStage;
 }
