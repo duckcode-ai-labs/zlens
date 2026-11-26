@@ -267,7 +267,7 @@ CALL ZLENS_APP.app_public.app_url();
 ```
 
 The launcher page (**Launch app**) uses three short calls instead, so it can show progress: the
-first reads ZLens's state, its address, the person it serves and whether Ask is ready, and starts nothing; the second
+first reads ZLens's state, its address, the person it serves, and setup's status with whether Ask is ready, and starts nothing; the second
 lists, by name only, the databases ZLens can read (at most 5), so the page can say when none is
 granted yet; the third starts a stopped ZLens and returns at once. Any user of the app may call them:
 

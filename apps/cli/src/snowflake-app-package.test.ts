@@ -166,22 +166,23 @@ describe('the app package for Snowflake', () => {
     }
   });
 
-  it('Ask readiness: ZLens keeps one row in core.ask_readiness, launcher_status() returns it, and the ready page shows it', () => {
-    expect(setup).toMatch(/CREATE TABLE IF NOT EXISTS core\.ask_readiness \(\s*id INTEGER,\s*readiness VARIANT,\s*checked_at TIMESTAMP_TZ\s*\);/);
-    // Read by the app's own procedure only: never granted to an app role, never writable by one.
-    expect(setup).not.toMatch(/ON (TABLE|VIEW) [a-z_.]*ask_readiness[a-z_]* TO APPLICATION ROLE/i);
+  it('Ask readiness rides in setup\'s status: one column in core.setup_status, returned in `setup`, shown on the ready page', () => {
+    // One table, one write, one read (no table of its own): a column added to P5's row, also on upgrade.
+    expect(setup).toContain('ALTER TABLE core.setup_status ADD COLUMN IF NOT EXISTS ask_readiness VARIANT;');
+    expect(setup).not.toMatch(/core\.ask_readiness/);
+    expect(setup).not.toMatch(/ON (TABLE|VIEW) [a-z_.]*setup_status[a-z_]* TO APPLICATION ROLE/i);
     const status = procedure('launcher_status');
-    expect(status).toMatch(/BEGIN\s+SELECT readiness INTO :ask_state FROM core\.ask_readiness WHERE id = 1 LIMIT 1;\s+EXCEPTION WHEN OTHER THEN\s+NULL;/);
-    expect(status).toContain("RETURN OBJECT_CONSTRUCT('status', :svc_status, 'url', :url, 'zlens_user', :zlens_user, 'ask_readiness', :ask_state);");
+    expect(status).toContain("SELECT OBJECT_CONSTRUCT('stage', stage, 'line', line, 'percent', percent, 'updated_at', updated_at, 'ask_readiness', ask_readiness)");
+    expect(status).toContain("RETURN OBJECT_CONSTRUCT('status', :svc_status, 'url', :url, 'zlens_user', :zlens_user, 'setup', :setup);");
     const page = read('launcher/launcher.py');
-    expect(page).toContain('"ask": ask_readiness(value.get("ask_readiness")),');
     const ready = branch(page, 'if name == "READY" and status["url"]:');
-    expect(ready).toMatch(/st\.success\(f"ZLens is ready\. Checked at \{checked\}\."\)[\s\S]*?show_ask\(status\["ask"\], moment\)[\s\S]*?st\.link_button/);
-    // The words, the fix line and who runs it are ZLens's (settings/ask-readiness.ts), shown as they are.
-    expect(page).toMatch(/def show_ask\(ask, moment\):[\s\S]*?st\.warning\(f"\*\*\{ask\['headline'\]\}\*\* \{ask\.get\('message', ''\)\}"\.strip\(\)\)[\s\S]*?st\.caption\(ask\["fixIntro"\]\)\n\s+st\.code\(ask\["fixSql"\], language="sql"\)/);
+    expect(ready).toMatch(/st\.info\(setup_line\)\n\s+show_ask\(ask_readiness\(status\.get\("setup"\)\), setup_line, moment\)[\s\S]*?st\.link_button/);
+    // The words, the fix line and who runs it are ZLens's (settings/ask-readiness.ts); setup's line already says the
+    // headline when Ask is not ready, so the warning gives the reason and the line without repeating it.
+    expect(page).toMatch(/def show_ask\(ask, setup_line, moment\):[\s\S]*?said = ask\["headline"\] in setup_line[\s\S]*?st\.warning\(reason if said and reason else f"\*\*\{ask\['headline'\]\}\*\* \{reason\}"\.strip\(\)\)[\s\S]*?st\.caption\(ask\["fixIntro"\]\)\n\s+st\.code\(ask\["fixSql"\], language="sql"\)/);
     expect(page).not.toMatch(/CORTEX_ENABLED_CROSS_REGION/);
     expect(readme).toContain('**Ask checks itself.**');
-    expect(readme).toContain('the person it serves and whether Ask is ready');
+    expect(readme).toContain("setup's status with whether Ask is ready");
   });
 
   it('V2: the launcher page calls only the app\'s own procedures, and pins a Streamlit with link_button', () => {

@@ -297,6 +297,11 @@ CREATE TABLE IF NOT EXISTS core.setup_status (
   line VARCHAR,
   percent NUMBER
 );
+-- Ask's readiness (fix plan risk 3) rides in the same row: whether Ask's Snowflake Cortex is set up, as ZLens last
+-- checked it with one tiny Cortex call, and the one line an ACCOUNTADMIN runs when it is not (the CORTEX_USER grant
+-- with this app's name, or the account's cross-region setting). Its words, the fix line, the model and the time:
+-- never SQL, questions, rows or the customer's data. Added to an existing table on upgrade.
+ALTER TABLE core.setup_status ADD COLUMN IF NOT EXISTS ask_readiness VARIANT;
 
 -- Launch app (V2): Snowsight's Launch app button opens this page (manifest default_streamlit). It
 -- starts ZLens when it has stopped, waits until Snowflake reports it READY, and only then offers
@@ -308,7 +313,7 @@ CREATE TABLE IF NOT EXISTS core.setup_status (
 -- suspend, and every state says when it was checked. app_url() stays for SQL.
 
 -- The state the launcher shows: the service status, its address, the configured ZLens user, and setup's
--- status when there is one (onboarding design P5). Starts nothing. READY means the service is RUNNING and its container reports READY (a service
+-- status when there is one (onboarding design P5), with Ask's readiness in it. Starts nothing. READY means the service is RUNNING and its container reports READY (a service
 -- reports RUNNING; READY is its container's state); RUNNING with a container not ready yet is PENDING.
 CREATE OR REPLACE PROCEDURE app_public.launcher_status()
 RETURNS VARIANT
@@ -368,7 +373,7 @@ BEGIN
     NULL;
   END;
   BEGIN
-    SELECT OBJECT_CONSTRUCT('stage', stage, 'line', line, 'percent', percent, 'updated_at', updated_at)
+    SELECT OBJECT_CONSTRUCT('stage', stage, 'line', line, 'percent', percent, 'updated_at', updated_at, 'ask_readiness', ask_readiness)
       INTO :setup
       FROM core.setup_status
       ORDER BY updated_at DESC

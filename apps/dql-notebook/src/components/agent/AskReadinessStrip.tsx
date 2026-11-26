@@ -27,6 +27,19 @@ export function askReadinessStrip(readiness: AskReadiness | null): {
   };
 }
 
+/** While Ask's Cortex is not set up: its headline, said where a setup line would say "Ready to ask." Else null. */
+export function askNotReadyHeadline(readiness: AskReadiness | null | undefined): string | null {
+  return askReadinessStrip(readiness ?? null)?.headline ?? null;
+}
+
+/** The Setup page's Ask line: ready (with the model), or not ready with the one line an admin runs. Null before a check. */
+export function askReadinessSetupLine(readiness: AskReadiness | null | undefined): { key: 'ask'; tone: 'done' | 'caution'; text: string } | null {
+  if (!readiness || readiness.state === 'not_applicable' || readiness.state === 'checking') return null;
+  if (readiness.state === 'ready') return { key: 'ask', tone: 'done', text: readiness.headline };
+  const fix = readiness.fixSql ? ` ${readiness.fixIntro ?? ''} ${readiness.fixSql}`.replace(/\s+/g, ' ').trimEnd() : '';
+  return { key: 'ask', tone: 'caution', text: `${readiness.headline}${readiness.message ? ` ${readiness.message}` : ''}${fix}` };
+}
+
 /** "Checked at 14:05": the check's time on this computer's clock. */
 export function checkedAtLabel(iso: string): string {
   const when = new Date(iso);

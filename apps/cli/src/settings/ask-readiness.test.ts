@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CortexClaudeProvider, type CortexAskReadiness } from '@zlens/agent';
 import { AskReadinessCheck } from './ask-readiness.js';
-import { askReadinessStatement, askReadinessWriter, launcherAskReadiness } from '../snowflake-app-ask-readiness.js';
 
-/** Ask readiness as the server keeps it, and as the app for Snowflake keeps it for the launcher. No Snowflake. */
+/** Ask readiness as the server keeps it (the launcher's copy rides in core.setup_status: setup-status-sql.test.ts). No Snowflake. */
 const token = async () => ({ token: 't', type: 'OAUTH' as const });
 const provider = (model?: string) => new CortexClaudeProvider({ host: 'acct.snowflakecomputing.com', token, ...(model ? { model } : {}) });
 
@@ -39,8 +38,10 @@ describe('the server\'s Ask readiness', () => {
     // A second read while the check runs does not start another.
     expect(await readiness.read()).toMatchObject({ state: 'checking' });
     expect(check).toHaveBeenCalledTimes(1);
+    expect(readiness.latest()).toBeNull();
     answer(ready);
     await vi.waitFor(async () => expect(await readiness.read()).toEqual(ready));
+    expect(readiness.latest()).toEqual(ready);
     expect(check).toHaveBeenCalledTimes(1);
     // Stale: answered at once with the last result, while a new check runs.
     clock = 2_000;
@@ -103,46 +104,5 @@ describe('the server\'s Ask readiness', () => {
     }
     // At 0, 20, 40 and 60 minutes; none after the hour.
     expect(check).toHaveBeenCalledTimes(4);
-  });
-});
-
-describe('Ask readiness for the launcher (the app\'s core.ask_readiness)', () => {
-  it('keeps the launcher\'s fields only, as one row, quoted safely', () => {
-    expect(launcherAskReadiness(notReady)).toEqual({
-      state: 'missing_grant',
-      headline: notReady.headline,
-      message: notReady.message,
-      fixSql: notReady.fixSql,
-      fixIntro: notReady.fixIntro,
-      model: 'claude-sonnet-5-5',
-      checkedAt: '2026-11-25T18:00:00.000Z',
-    });
-    const statement = askReadinessStatement('ZLENS_APP', { ...notReady, fixSql: "ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION';" })!;
-    expect(statement).toContain('MERGE INTO ZLENS_APP.CORE.ASK_READINESS t');
-    expect(statement).toContain("TO_TIMESTAMP_TZ('2026-11-25T18:00:00.000Z')");
-    // Quotes are doubled, so the JSON survives the string literal.
-    expect(statement).toContain("''ANY_REGION''");
-    expect(statement).toContain("It''s the CORTEX_USER grant");
-    expect(statement).not.toMatch(/[^']'ANY_REGION'[^']/);
-    expect(askReadinessStatement('my app', ready)).toContain('MERGE INTO "my app".CORE.ASK_READINESS');
-    expect(askReadinessStatement('bad"name', ready)).toBeNull();
-  });
-
-  it('writes the first result and then only changes; a failed write is told once and then skipped', async () => {
-    const statements: string[] = [];
-    const write = askReadinessWriter({ appName: 'ZLENS_APP', query: async (sql) => { statements.push(sql); } });
-    await write(notReady, true);
-    await write(notReady, false);
-    await write(ready, true);
-    expect(statements).toHaveLength(2);
-
-    const warn = vi.fn();
-    let tries = 0;
-    const failing = askReadinessWriter({ appName: 'ZLENS_APP', query: async () => { tries += 1; throw new Error('Insufficient privileges to operate on table ASK_READINESS'); }, warn });
-    await failing(notReady, true);
-    await failing(ready, true);
-    expect(tries).toBe(1);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0]![0]).toContain("ZLens's own pages still show it");
   });
 });

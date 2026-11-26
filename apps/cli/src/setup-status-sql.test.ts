@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SetupStatusWriter, setupStatusStatement, setupStatusTable } from './setup-status-sql.js';
+import { SetupStatusWriter, launcherAskReadiness, setupStatusStatement, setupStatusTable } from './setup-status-sql.js';
 import { setupStatusLine, type WarehouseSetupStateV1 } from './warehouse-setup-state.js';
 
 /** Onboarding design P5: setup's one line, kept in the app's core.setup_status for the launcher page. */
@@ -55,5 +55,49 @@ describe('setup status for the launcher page', () => {
     await writer.write({ stage: 'checking', line: 'e', percent: 5 }, { force: true });
     expect(warnings).toHaveLength(1);
     expect(statements).toHaveLength(2);
+  });
+
+  // Ask readiness (fix plan risk 3) rides in the same row: one write path, one launcher read.
+  const notReady = {
+    state: 'missing_grant',
+    headline: 'Ask is not ready: ZLens may not use Snowflake Cortex yet.',
+    message: "The Snowflake role ZLens signs in with cannot use Cortex. It's the CORTEX_USER grant (HTTP 403).",
+    fixSql: 'GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;',
+    fixIntro: 'An ACCOUNTADMIN runs this one line in Snowsight:',
+    model: 'claude-sonnet-5-5',
+    route: 'sql' as const,
+    checkedAt: '2026-11-25T18:00:00.000Z',
+  };
+  const ready = { state: 'ready', headline: 'Ask is ready: it uses claude-sonnet-5-5 through Cortex SQL (AI_COMPLETE).', model: 'claude-sonnet-5-5', route: 'sql' as const, checkedAt: '2026-11-25T18:05:00.000Z' };
+
+  it('carries Ask readiness, and says Ask is not ready where the line would say it is ready to ask', () => {
+    expect(launcherAskReadiness(notReady)).toEqual({
+      state: 'missing_grant', headline: notReady.headline, message: notReady.message, fixSql: notReady.fixSql, fixIntro: notReady.fixIntro,
+      model: 'claude-sonnet-5-5', checkedAt: '2026-11-25T18:00:00.000Z',
+    });
+    expect(launcherAskReadiness({ state: 'checking', headline: 'Checking…' })).toBeUndefined();
+    expect(launcherAskReadiness({ state: 'not_applicable' })).toBeUndefined();
+    expect(launcherAskReadiness(null)).toBeUndefined();
+
+    const checking = setupStatusLine(state({ state: 'done' }, { state: 'running' }), { status: 'running', progress: 62, type: 'warehouse-check', message: '' }, notReady);
+    expect(checking).toEqual({ stage: 'checking', line: 'Ask is not ready: ZLens may not use Snowflake Cortex yet. Background checks: 24%.', percent: 24, askReadiness: launcherAskReadiness(notReady) });
+    // A line that does not say "ready to ask" stays as it is; the readiness still rides in the row.
+    expect(setupStatusLine(null, null, notReady)).toMatchObject({ line: 'Open ZLens and choose the data it reads.', askReadiness: { state: 'missing_grant' } });
+    // Ready: the line is setup's own, and the row says which model Ask uses.
+    expect(setupStatusLine(state({ state: 'done' }, { state: 'stopped' }), null, ready))
+      .toEqual({ stage: 'ready', line: 'ZLens is ready to ask. The background checks were stopped.', percent: null, askReadiness: launcherAskReadiness(ready) });
+    // Not checked yet: setup's row as it was.
+    expect(setupStatusLine(null, null, null)).toEqual({ stage: 'choose', line: 'Open ZLens and choose the data it reads.', percent: null });
+  });
+
+  it('writes Ask readiness as JSON in ask_readiness, quoted safely, and NULL before a check', () => {
+    const sql = setupStatusStatement('ZLENS_APP.CORE.SETUP_STATUS', setupStatusLine(null, null, { ...notReady, state: 'region', fixSql: "ALTER ACCOUNT SET CORTEX_ENABLED_CROSS_REGION = 'ANY_REGION';" }));
+    expect(sql).toContain('PARSE_JSON(');
+    expect(sql).toContain('AS ask_readiness) s');
+    expect(sql).toContain("''ANY_REGION''");
+    expect(sql).toContain("It''s the CORTEX_USER grant");
+    expect(sql).toContain('ask_readiness = s.ask_readiness');
+    expect(sql).toContain('INSERT (id, updated_at, stage, line, percent, ask_readiness)');
+    expect(setupStatusStatement('ZLENS_APP.CORE.SETUP_STATUS', { stage: 'ready', line: 'x', percent: null })).toContain('NULL AS ask_readiness');
   });
 });

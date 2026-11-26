@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { themes } from '../../themes/notebook-theme';
 import type { AskReadiness } from '../../api/client';
-import { AskReadinessStrip, askReadinessStrip, checkedAtLabel } from './AskReadinessStrip';
+import { AskReadinessStrip, askNotReadyHeadline, askReadinessStrip, checkedAtLabel } from './AskReadinessStrip';
 
 vi.mock('../../api/client', () => ({ api: {} }));
 
@@ -46,5 +46,12 @@ describe('the Ask is not ready strip', () => {
   it('tells the time of the check, and nothing for a time it cannot read', () => {
     expect(checkedAtLabel('2026-11-25T18:00:00.000Z')).toMatch(/^Checked at .+\.$/);
     expect(checkedAtLabel('not a time')).toBe('');
+  });
+
+  it('gives the headline that replaces "Ready to ask." only while Ask is not ready', () => {
+    expect(askNotReadyHeadline(missingGrant)).toBe('Ask is not ready: ZLens may not use Snowflake Cortex yet.');
+    expect(askNotReadyHeadline({ state: 'ready', headline: 'Ask is ready: it uses claude-sonnet-5-5 through Snowflake Cortex.', checkedAt: '' })).toBeNull();
+    expect(askNotReadyHeadline(null)).toBeNull();
+    expect(askNotReadyHeadline(undefined)).toBeNull();
   });
 });

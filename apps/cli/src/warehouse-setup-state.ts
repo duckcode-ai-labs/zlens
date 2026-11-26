@@ -15,6 +15,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { launcherAskReadiness, type LauncherAskReadiness, type SetupStatusRow } from './setup-status-sql.js';
 
 export type SetupStageState = 'running' | 'done' | 'failed' | 'stopped';
 
@@ -147,9 +148,26 @@ export function warehouseSetupStage(state: WarehouseSetupStateV1 | null): Wareho
 
 /**
  * Setup in one line, with numbers where there are any: what the launcher page
- * shows before ZLens opens (onboarding design P5, `core.setup_status`).
+ * shows before ZLens opens (onboarding design P5, `core.setup_status`). With
+ * Ask's readiness (fix plan risk 3), the row carries it for the launcher, and
+ * a line that says "ZLens is ready to ask." says Ask's own headline instead
+ * while Ask's Snowflake Cortex is not set up.
  */
 export function setupStatusLine(
+  state: WarehouseSetupStateV1 | null,
+  operation: { status: string; progress: number; message: string; type: string } | null,
+  askReadiness?: Parameters<typeof launcherAskReadiness>[0],
+): SetupStatusRow & { stage: WarehouseSetupStage } {
+  return withAskReadiness(setupStageLine(state, operation), launcherAskReadiness(askReadiness));
+}
+
+function withAskReadiness<T extends SetupStatusRow>(row: T, ask: LauncherAskReadiness | undefined): T {
+  if (!ask) return row;
+  const notReady = ask.state !== 'ready' && ask.headline;
+  return { ...row, ...(notReady ? { line: row.line.replace('ZLens is ready to ask.', ask.headline!) } : {}), askReadiness: ask };
+}
+
+function setupStageLine(
   state: WarehouseSetupStateV1 | null,
   operation: { status: string; progress: number; message: string; type: string } | null,
 ): { stage: WarehouseSetupStage; line: string; percent: number | null } {

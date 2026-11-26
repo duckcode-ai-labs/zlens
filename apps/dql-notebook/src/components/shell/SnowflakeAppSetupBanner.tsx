@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, CONTEXT_PROPOSALS_CHANGED_EVENT, type SnowflakeAppBackups, type SnowflakeAppSetupStatus } from '../../api/client';
 import { useDispatch } from '../../store/NotebookStore';
+import { askNotReadyHeadline } from '../agent/AskReadinessStrip';
 
 const POLL_MS = 3000;
 const DISMISSED_KEY = 'zlens.snowflakeAppSetup.dismissed';
@@ -27,14 +28,17 @@ export function snowflakeAppSetupMessage(status: SnowflakeAppSetupStatus | null)
   }
   // Names are read, so Ask works; the data checks run, or ran, in the background (onboarding design P3).
   if (status.state === 'ready') {
+    // Ask's Snowflake Cortex not set up (fix plan risk 3): its headline in place of "Ready to ask.", as a caution.
+    const askNotReady = askNotReadyHeadline(status.askReadiness);
+    const ready = askNotReady ?? 'Ready to ask.';
     const checking = status.operation && (status.operation.status === 'running' || status.operation.status === 'queued') ? status.operation : null;
     if (checking) {
       const live = checking.message && checking.phase !== 'queued' && checking.phase !== 'starting' ? ` ${checking.message}.` : ' Checking keys and joins on the data.';
-      return { tone: 'info', text: `Ready to ask.${live} Answers get better as the checks land.`, ...(checking.cancellable ? { action: 'stop' as const } : {}) };
+      return { tone: askNotReady ? 'caution' : 'info', text: `${ready}${live} Answers get better as the checks land.`, ...(checking.cancellable ? { action: 'stop' as const } : {}) };
     }
-    if (status.error) return { tone: 'caution', text: `Ready to ask. The data checks did not finish: ${status.error}`, action: 'check' };
+    if (status.error) return { tone: 'caution', text: `${ready} The data checks did not finish: ${status.error}`, action: 'check' };
     const why = status.checks === 'stopped' ? 'The data checks were stopped' : status.checks === 'off' ? 'The data checks are off' : 'The data checks are not running';
-    return { tone: 'info', text: `Ready to ask. ${why}: answers stay labeled AI-generated until they run and you review the drafts.`, action: 'check' };
+    return { tone: askNotReady ? 'caution' : 'info', text: `${ready} ${why}: answers stay labeled AI-generated until they run and you review the drafts.`, action: 'check' };
   }
   if (status.state === 'idle' || status.state === 'running') {
     // The setup's own operation says where it is, with numbers and the time so far (onboarding design P2).

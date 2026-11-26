@@ -79,4 +79,17 @@ describe('the Snowflake app setup strip', () => {
     expect(snowflakeAppSetupMessage({ managed: true, state: 'failed', database: 'NBA', error: 'the app can see no schemas there. Grant it USAGE on the schemas to read.' }))
       .toEqual({ tone: 'caution', text: 'ZLens could not read the tables in NBA: the app can see no schemas there. Grant it USAGE on the schemas to read.', action: 'retry' });
   });
+
+  it('says Ask is not ready in place of "Ready to ask." while Ask\'s Snowflake Cortex is not set up (fix plan risk 3)', () => {
+    const askReadiness = { state: 'region' as const, headline: 'Ask is not ready: Snowflake Cortex offers no Claude model to your account in its region.', checkedAt: '2026-11-26T18:00:00.000Z' };
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'NBA', checks: 'off', askReadiness })).toEqual({
+      tone: 'caution',
+      text: 'Ask is not ready: Snowflake Cortex offers no Claude model to your account in its region. The data checks are off: answers stay labeled AI-generated until they run and you review the drafts.',
+      action: 'check',
+    });
+    // Ready, or not checked yet: as before.
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'NBA', checks: 'off', askReadiness: { state: 'ready', headline: 'Ask is ready: it uses claude-sonnet-5-5 through Snowflake Cortex.', checkedAt: '' } })?.text)
+      .toMatch(/^Ready to ask\. The data checks are off/);
+    expect(snowflakeAppSetupMessage({ managed: true, state: 'ready', database: 'NBA', checks: 'off', askReadiness: null })).toMatchObject({ tone: 'info' });
+  });
 });

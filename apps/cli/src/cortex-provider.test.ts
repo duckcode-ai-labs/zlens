@@ -264,6 +264,10 @@ describe('Ask readiness (GET and POST /api/ask/readiness)', () => {
     granted = true;
     const again = await call('POST', '/api/ask/readiness');
     expect(again.json.askReadiness).toMatchObject({ state: 'ready', headline: 'Ask is ready: it uses claude-sonnet-5-5 through Snowflake Cortex.' });
+    // The Setup page reads the same result in setup's status (onboarding P5), without a check of its own.
+    const calls2 = sent.length;
+    expect((await call('GET', '/api/connections/snowflake/setup')).json.askReadiness).toMatchObject({ state: 'ready' });
+    expect(sent).toHaveLength(calls2);
     expect(sent.every((request) => request.url === 'https://myorg-test-acct.snowflakecomputing.com/api/v2/cortex/v1/messages')).toBe(true);
   });
 

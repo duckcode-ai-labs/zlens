@@ -89,6 +89,11 @@ export class AskReadinessCheck {
     return this.run(provider, options.fresh === true);
   }
 
+  /** The last result, whatever setup it was for, without checking: null before the first check has answered. */
+  latest(): CortexAskReadiness | null {
+    return this.last?.readiness ?? null;
+  }
+
   /** At start: one check in the background. */
   start(): void {
     void this.check();

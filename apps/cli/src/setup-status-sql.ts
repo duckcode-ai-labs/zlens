@@ -9,13 +9,39 @@
  * `minIntervalMs`. If writing fails (the container's session may not be
  * allowed to write the app's own schema), it is skipped for the rest of the
  * run with one warning; setup is unaffected.
+ *
+ * The row also carries Ask's readiness (fix plan risk 3) in `ask_readiness`:
+ * whether Ask's Snowflake Cortex is set up, and the one line an ACCOUNTADMIN
+ * runs when it is not, so the launcher can say so before anyone asks. One row,
+ * one write path, one launcher read.
  */
 import { sqlString } from './history/history-sql-log.js';
+
+/** Ask's readiness as the launcher shows it: the server's words, never anything from the person's data. */
+export type LauncherAskReadiness = Record<string, string>;
 
 export interface SetupStatusRow {
   stage: string;
   line: string;
   percent: number | null;
+  /** Ask's readiness (settings/ask-readiness.ts), in the launcher's fields; absent before ZLens has checked. */
+  askReadiness?: LauncherAskReadiness;
+}
+
+/** The Ask readiness fields the launcher shows (and nothing else); undefined before a check has answered. */
+export function launcherAskReadiness(readiness: { state: string; headline?: string; message?: string; fixSql?: string; fixIntro?: string; model?: string; fellBackFrom?: string; checkedAt?: string } | null | undefined): LauncherAskReadiness | undefined {
+  if (!readiness?.headline || readiness.state === 'checking' || readiness.state === 'not_applicable') return undefined;
+  const fields: Record<string, string | undefined> = {
+    state: readiness.state,
+    headline: readiness.headline,
+    message: readiness.message,
+    fixSql: readiness.fixSql,
+    fixIntro: readiness.fixIntro,
+    model: readiness.model,
+    fellBackFrom: readiness.fellBackFrom,
+    checkedAt: readiness.checkedAt,
+  };
+  return Object.fromEntries(Object.entries(fields).filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length > 0));
 }
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
@@ -30,12 +56,14 @@ export function setupStatusTable(appName: string): string | null {
 /** One row, kept as the only one (id 1). */
 export function setupStatusStatement(table: string, row: SetupStatusRow): string {
   const percent = row.percent === null || !Number.isFinite(row.percent) ? 'NULL' : String(Math.max(0, Math.min(100, Math.round(row.percent))));
+  // Quotes doubled by sqlString, so the JSON survives the string literal.
+  const ask = row.askReadiness ? `PARSE_JSON(${sqlString(JSON.stringify(row.askReadiness), 8000)})` : 'NULL';
   return [
     `MERGE INTO ${table} t`,
-    `USING (SELECT 1 AS id, CURRENT_TIMESTAMP() AS updated_at, ${sqlString(row.stage, 40)} AS stage, ${sqlString(row.line, 500)} AS line, ${percent} AS percent) s`,
+    `USING (SELECT 1 AS id, CURRENT_TIMESTAMP() AS updated_at, ${sqlString(row.stage, 40)} AS stage, ${sqlString(row.line, 500)} AS line, ${percent} AS percent, ${ask} AS ask_readiness) s`,
     'ON t.id = s.id',
-    'WHEN MATCHED THEN UPDATE SET updated_at = s.updated_at, stage = s.stage, line = s.line, percent = s.percent',
-    'WHEN NOT MATCHED THEN INSERT (id, updated_at, stage, line, percent) VALUES (s.id, s.updated_at, s.stage, s.line, s.percent)',
+    'WHEN MATCHED THEN UPDATE SET updated_at = s.updated_at, stage = s.stage, line = s.line, percent = s.percent, ask_readiness = s.ask_readiness',
+    'WHEN NOT MATCHED THEN INSERT (id, updated_at, stage, line, percent, ask_readiness) VALUES (s.id, s.updated_at, s.stage, s.line, s.percent, s.ask_readiness)',
   ].join('\n');
 }
 

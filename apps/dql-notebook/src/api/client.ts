@@ -813,6 +813,8 @@ export interface WarehouseSetupStatus {
   } | null;
   /** The stage running, with its phase and counts. */
   operation: LocalOperation | null;
+  /** Whether Ask's Snowflake Cortex is set up, as last checked (null before a check): the Setup page's Ask line. */
+  askReadiness?: AskReadiness | null;
 }
 
 /** The ZLens app for Snowflake setting itself up: reading the granted database's tables, drafting the models. */
@@ -836,6 +838,8 @@ export interface SnowflakeAppSetupStatus {
   operationId?: string;
   /** The setup's background operation: its phase, counts and time so far. */
   operation?: LocalOperation | null;
+  /** Whether Ask's Snowflake Cortex is set up, as last checked (null before a check): the strip says when it is not. */
+  askReadiness?: AskReadiness | null;
 }
 
 export type DbtOnboardingErrorCode =

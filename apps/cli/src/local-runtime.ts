@@ -785,7 +785,6 @@ import {
 } from './settings/provider-settings.js';
 import { cortexInProjectAccount, cortexSignIn, createCortexProvider, setProjectConnectionLookup, useCortexSqlExecutor } from './settings/cortex-sign-in.js';
 import { AskReadinessCheck } from './settings/ask-readiness.js';
-import { askReadinessWriter } from './snowflake-app-ask-readiness.js';
 import { ClaudeCodeCliProvider, CodexCliProvider } from './providers/subscription-cli.js';
 import { createFailoverProvider } from './providers/failover-provider.js';
 import {
@@ -5619,20 +5618,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return (await executor.executeQuery(sql, [], {}, connection)).rows as Array<Record<string, unknown>>;
   });
   const snowflakeApp = snowflakeAppOptions ? new SnowflakeAppSettings(snowflakeAppOptions, snowflakeAppQuery) : undefined;
-  // Ask readiness (fix plan risk 3): is Ask's Snowflake Cortex set up? Checked with one tiny Cortex call at start in
-  // Snowflake, kept for a few minutes, checked again on demand; in the app, kept where the launcher reads it.
-  const askReadiness = new AskReadinessCheck({
-    provider: async () => {
-      const selected = await selectAssistProvider(projectRoot, undefined, { availability: 'defer' }).catch(() => null);
-      return selected && isCortexClaudeProvider(selected.provider) ? selected.provider : null;
-    },
-    ...(snowflakeAppOptions?.appName ? { onResult: askReadinessWriter({ appName: snowflakeAppOptions.appName, query: snowflakeAppQuery }) } : {}),
-  });
-  if (opts.askReadinessAtStart ?? Boolean(snowflakeIngress)) {
-    // A few seconds in, so the check does not slow the start itself.
-    const askReadinessStart = setTimeout(() => askReadiness.start(), 5_000);
-    askReadinessStart.unref?.();
-  }
   // Point the project's connection at the database the app was granted (written to dql.config.json, as Settings does).
   let snowflakeAppDatabase: string | undefined;
   const useSnowflakeAppDatabase = async (database: string): Promise<void> => {
@@ -15574,24 +15559,46 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return settled;
   })();
   // The launcher page's setup status (onboarding design P5): a row in the app's own core.setup_status, written
-  // only while setup works (a change of stage at once, progress at most every 30 s), so it never wakes the warehouse.
+  // only while setup works (a change of stage at once, progress at most every 30 s), so it never wakes the warehouse,
+  // and when Ask's readiness changes (at start, and when an admin's grant lands), which is rare.
   const setupStatusWriter = snowflakeApp && snowflakeAppOptions?.appName
     ? new SetupStatusWriter({ appName: snowflakeAppOptions.appName, query: (sql) => snowflakeAppQuery(sql) })
     : undefined;
+  // Ask readiness (fix plan risk 3): is Ask's Snowflake Cortex set up? Checked with one tiny Cortex call at start in
+  // Snowflake, kept for a few minutes, checked again on demand. In the app it rides in the setup status row, so the
+  // launcher shows it through the same write and the same read.
+  const askReadiness = new AskReadinessCheck({
+    provider: async () => {
+      const selected = await selectAssistProvider(projectRoot, undefined, { availability: 'defer' }).catch(() => null);
+      return selected && isCortexClaudeProvider(selected.provider) ? selected.provider : null;
+    },
+    ...(setupStatusWriter ? {
+      onResult: async (readiness) => {
+        const row = setupStatusLine(warehouseSetup, currentSetupOperation(), readiness);
+        // Before setup has started (or after a one-go setup from an earlier version), only Ask's part: no setup line.
+        await setupStatusWriter.write(warehouseSetup ? row : { ...row, line: '' }, { force: true });
+      },
+    } : {}),
+  });
+  if (opts.askReadinessAtStart ?? Boolean(snowflakeIngress)) {
+    // A few seconds in, so the check does not slow the start itself.
+    const askReadinessStart = setTimeout(() => askReadiness.start(), 5_000);
+    askReadinessStart.unref?.();
+  }
   // "Check faster" (onboarding design P7, decision D6): only the app's own <app>_WH is ever resized.
   const appWarehouse = snowflakeApp ? appOwnWarehouse(snowflakeAppOptions?.appName, typeof connection?.warehouse === 'string' ? connection.warehouse : process.env.ZLENS_SNOWFLAKE_WAREHOUSE) : null;
   const warehouseSizer = appWarehouse ? new AppWarehouseSizer({ warehouse: appWarehouse, query: (sql) => snowflakeAppQuery(sql) }) : undefined;
   const saveWarehouseSetup = (next: WarehouseSetupStateV1): WarehouseSetupStateV1 => {
     warehouseSetup = next;
     writeWarehouseSetupState(projectRoot, next);
-    void setupStatusWriter?.write(setupStatusLine(next, currentSetupOperation()), { force: true });
+    void setupStatusWriter?.write(setupStatusLine(next, currentSetupOperation(), askReadiness.latest()), { force: true });
     return next;
   };
   if (setupStatusWriter) {
     operationCoordinator.subscribe((operation) => {
       if (operation.type !== 'warehouse-read' && operation.type !== 'warehouse-check') return;
       if (operation.status !== 'running') return;
-      void setupStatusWriter.write(setupStatusLine(warehouseSetup, operation));
+      void setupStatusWriter.write(setupStatusLine(warehouseSetup, operation, askReadiness.latest()));
     });
   }
   const setupOperationRunning = () => warehouseSetup?.read.state === 'running' || warehouseSetup?.checks?.state === 'running';
@@ -15880,6 +15887,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     stage: warehouseSetupStage(warehouseSetup),
     setup: warehouseSetup,
     operation: currentSetupOperation(),
+    // Ask's readiness as last checked (fix plan risk 3), for the Setup page's Ask line; null before a check.
+    askReadiness: askReadiness.latest(),
   });
   /** The app's setup, for its strip: a finished one-go setup, else the two stages in the strip's words. */
   const snowflakeAppSetupView = (): SnowflakeAppSetup & { stage?: WarehouseSetupStage; checks?: string } => {
@@ -16260,7 +16269,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const operation = operationVisible(currentSetupOperation() ?? (view.operationId ? operationCoordinator.get(view.operationId) : null), operationReader());
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       // The app's name fills in the grant SQL for a database or schema not listed yet (onboarding design P6).
-      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...(snowflakeAppOptions?.appName ? { appName: snowflakeAppOptions.appName } : {}), ...view, waitingDraft: waiting ?? null, operation }));
+      res.end(serializeJSON({ managed: Boolean(snowflakeApp), ...(snowflakeAppOptions?.appName ? { appName: snowflakeAppOptions.appName } : {}), ...view, waitingDraft: waiting ?? null, operation, askReadiness: askReadiness.latest() }));
       return;
     }
     // Try again, Start again after a Stop, or Check the data (the strip's buttons): a read that failed or was stopped
