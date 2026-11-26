@@ -11,7 +11,7 @@
 import type { LocalOperationProgress } from './local-operation-coordinator.js';
 import type { WarehouseReadProgress } from './warehouse-metadata.js';
 
-export type SetupPhase = 'find' | 'names' | 'catalog' | 'check' | 'index';
+export type SetupPhase = 'find' | 'names' | 'catalog' | 'check' | 'draft' | 'index';
 
 export interface SetupDetail {
   [key: string]: unknown;
@@ -39,6 +39,8 @@ export interface SetupDetail {
     /** Statements answered from an earlier run. */
     resumed: number;
   };
+  /** Writing the drafts for review: changes written, of all. */
+  drafts?: { done: number; total: number };
   startedAt: string;
   phaseStartedAt: string;
   elapsedMs: number;
@@ -50,7 +52,8 @@ const SPAN: Record<SetupPhase, [number, number]> = {
   names: [5, 30],
   catalog: [30, 50],
   check: [50, 92],
-  index: [92, 99],
+  draft: [92, 95],
+  index: [95, 99],
 };
 
 export class SetupOperationProgress {
@@ -129,9 +132,11 @@ export function setupPercent(detail: SetupDetail): number {
   const checks = detail.phase === 'check' ? detail.checks : undefined;
   const part = checks && checks.tables > 0
     ? Math.min(1, (checks.tablesChecked / checks.tables) * 0.6 + (checks.joins.total > 0 ? (checks.joins.done / checks.joins.total) * 0.4 : 0))
-    : detail.statements && detail.statements > 0
-      ? Math.min(1, (detail.statementsDone ?? 0) / detail.statements)
-      : 0;
+    : detail.phase === 'draft' && detail.drafts && detail.drafts.total > 0
+      ? Math.min(1, detail.drafts.done / detail.drafts.total)
+      : detail.statements && detail.statements > 0
+        ? Math.min(1, (detail.statementsDone ?? 0) / detail.statements)
+        : 0;
   return Math.round(from + (to - from) * part);
 }
 
@@ -171,6 +176,12 @@ export function setupMessage(detail: SetupDetail): string {
       if (checks.resumed > 0) parts.push('resumed');
       if (detail.warehouseSize && detail.warehouseSize !== 'XSMALL') parts.push(`on a ${detail.warehouseSize === 'MEDIUM' ? 'Medium' : 'Small'} warehouse`);
       return `Checking keys and joins${where}: ${parts.join(' · ')} · ${time}`;
+    }
+    case 'draft': {
+      const drafts = detail.drafts;
+      return drafts && drafts.total > 0
+        ? `Writing the drafts for review: ${drafts.done.toLocaleString('en-US')} of ${count(drafts.total, 'change', 'changes')} · ${time}`
+        : `Writing the drafts for review · ${time}`;
     }
     case 'index':
       return `Building the search index · ${time}`;

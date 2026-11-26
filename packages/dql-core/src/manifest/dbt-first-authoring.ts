@@ -396,6 +396,16 @@ export function previewModelingChange(projectRoot: string, change: ModelingAutho
 }
 
 /**
+ * The warehouse catalog of a batch's shadow, parsed once for the whole batch. A batch never writes the catalog,
+ * and re-parsing it for each change (twice: preview, then apply) kept ZLens busy for seconds on a 1,000-table
+ * catalog (the onboarding large test, 26 Nov 2026).
+ */
+const batchCatalogs = new Map<string, ReturnType<typeof readWarehouseCatalog>>();
+function warehouseCatalogOf(projectRoot: string): ReturnType<typeof readWarehouseCatalog> {
+  return batchCatalogs.get(resolve(projectRoot)) ?? readWarehouseCatalog(projectRoot);
+}
+
+/**
  * Compose an ordered batch against a disposable Domain Package shadow. This is
  * intentionally write-free for the real project and avoids the lost-update bug
  * caused by independently previewing two changes that target the same YAML file.
@@ -404,8 +414,64 @@ export function previewModelingChanges(
   projectRoot: string,
   changes: ModelingAuthoringChange[],
 ): ModelingChangesPreview {
+  const batch = composeModelingBatch(projectRoot, changes);
+  for (;;) {
+    const step = batch.next();
+    if (step.done) return step.value.preview;
+  }
+}
+
+/**
+ * The same batch, composed in turns: it gives the event loop back at least every `yieldEveryMs` (200 ms), so a
+ * server stays answering while a large batch is written (the background setup drafts up to 150 tables, hundreds
+ * of changes), and says how many changes are done. A project file the batch touches that changed meanwhile makes
+ * it stale: the preview would otherwise undo that change.
+ */
+export async function previewModelingChangesAsync(
+  projectRoot: string,
+  changes: ModelingAuthoringChange[],
+  options: { onProgress?: (done: number, total: number) => void; yieldEveryMs?: number; signal?: AbortSignal } = {},
+): Promise<ModelingChangesPreview> {
+  const every = Math.max(0, options.yieldEveryMs ?? 200);
+  const batch = composeModelingBatch(projectRoot, changes);
+  options.onProgress?.(0, changes.length);
+  let since = Date.now();
+  try {
+    for (;;) {
+      const step = batch.next();
+      if (step.done) {
+        const { preview, firstBefore } = step.value;
+        const moved = preview.patches.filter((patch) => firstBefore.has(patch.path) && firstBefore.get(patch.path) !== patch.before);
+        if (moved.length > 0) {
+          throw Object.assign(new Error(`Project sources changed while the batch was composed: ${moved.map((patch) => patch.path).join(', ')}. Preview it again.`), { code: 'PROPOSAL_STALE' });
+        }
+        options.onProgress?.(changes.length, changes.length);
+        return preview;
+      }
+      if (Date.now() - since >= every) {
+        options.onProgress?.(step.value, changes.length);
+        await new Promise<void>((done) => setImmediate(done));
+        options.signal?.throwIfAborted();
+        since = Date.now();
+      }
+    }
+  } finally {
+    // Stopped or failed half way: the shadow goes all the same.
+    batch.return(undefined as never);
+  }
+}
+
+/**
+ * The batch, one change a step (it yields how many are done). It returns the preview, and each touched file as the
+ * shadow first had it: the project's file when the batch began.
+ */
+function* composeModelingBatch(
+  projectRoot: string,
+  changes: ModelingAuthoringChange[],
+): Generator<number, { preview: ModelingChangesPreview; firstBefore: Map<string, string> }, undefined> {
   const root = resolve(projectRoot);
   const shadow = mkdtempSync(join(tmpdir(), 'dql-modeling-preview-'));
+  const shadowRoot = resolve(shadow);
   try {
     for (const configName of ['dql.config.json', 'dql.config.yaml', 'dql.config.yml']) {
       const source = join(root, configName);
@@ -420,13 +486,20 @@ export function previewModelingChanges(
       mkdirSync(dirname(join(shadow, WAREHOUSE_CATALOG_PATH)), { recursive: true });
       cpSync(warehouseCatalog, join(shadow, WAREHOUSE_CATALOG_PATH));
     }
+    batchCatalogs.set(shadowRoot, readWarehouseCatalog(shadow));
     const touched = new Set<string>();
+    const firstBefore = new Map<string, string>();
     const patchPathsByChange: string[][] = [];
-    for (const change of changes) {
+    for (const [index, change] of changes.entries()) {
       const preview = previewModelingChange(shadow, change);
-      for (const patch of preview.patches) touched.add(patch.path);
+      for (const patch of preview.patches) {
+        touched.add(patch.path);
+        if (!firstBefore.has(patch.path)) firstBefore.set(patch.path, patch.before);
+      }
       patchPathsByChange.push(preview.patches.map((patch) => patch.path));
-      applyModelingChange(shadow, change, preview.fingerprint);
+      // The preview just made is the change: written as it is, not previewed a second time.
+      writeModelingPreview(shadow, preview);
+      yield index + 1;
     }
     const patches = [...touched].sort().map((path): ModelingSourcePatch => {
       const beforePath = safeProjectPath(root, path);
@@ -436,13 +509,17 @@ export function previewModelingChanges(
       return { path, before, after, changed: before !== after };
     });
     return {
-      operation: 'batch',
-      changes,
-      patches,
-      fingerprint: hash(patches.map(({ path, before, after }) => ({ path, before, after }))),
-      patchPathsByChange,
+      preview: {
+        operation: 'batch',
+        changes,
+        patches,
+        fingerprint: hash(patches.map(({ path, before, after }) => ({ path, before, after }))),
+        patchPathsByChange,
+      },
+      firstBefore,
     };
   } finally {
+    batchCatalogs.delete(shadowRoot);
     rmSync(shadow, { recursive: true, force: true });
   }
 }
@@ -493,6 +570,12 @@ export function applyModelingChange(
   if (expectedFingerprint && preview.fingerprint !== expectedFingerprint) {
     throw new Error('Modeling source changed after the preview. Refresh the preview before applying.');
   }
+  writeModelingPreview(projectRoot, preview);
+  return preview;
+}
+
+/** Write one change's previewed patches. */
+function writeModelingPreview(projectRoot: string, preview: ModelingChangePreview): void {
   for (const patch of preview.patches) {
     if (!patch.changed) continue;
     const absolute = safeProjectPath(projectRoot, patch.path);
@@ -507,7 +590,6 @@ export function applyModelingChange(
     safeProjectPath(projectRoot, patch.path);
     writeFileSync(absolute, patch.after, 'utf8');
   }
-  return preview;
 }
 
 /** Whether a provenance id names a warehouse relation rather than a dbt node. */
@@ -517,7 +599,7 @@ export function isWarehouseNodeId(uniqueId: string): boolean {
 
 /** A warehouse relation's authoring detail, from the project's catalog snapshot. */
 export function loadWarehouseNodeAuthoringDetail(projectRoot: string, uniqueId: string): DbtNodeAuthoringDetail | undefined {
-  const relation = readWarehouseCatalog(projectRoot).snapshot?.relations.find((item) => item.id === uniqueId);
+  const relation = warehouseCatalogOf(projectRoot).snapshot?.relations.find((item) => item.id === uniqueId);
   if (!relation) return undefined;
   return {
     uniqueId,
@@ -636,7 +718,7 @@ function previewEntity(projectRoot: string, value: EntityBindingAuthoringInput):
   // A warehouse relation (warehouse-first or hybrid modeling) is bound with
   // `relation:` as the warehouse spells it; a dbt node keeps `dbt_model:`.
   const binding: UnknownRecord = isWarehouseNodeId(dbtModel)
-    ? { relation: readWarehouseCatalog(projectRoot).snapshot?.relations.find((relation) => relation.id === dbtModel)?.relation ?? dbtModel }
+    ? { relation: warehouseCatalogOf(projectRoot).snapshot?.relations.find((relation) => relation.id === dbtModel)?.relation ?? dbtModel }
     : { dbt_model: dbtModel };
   const entity: UnknownRecord = {
     id,

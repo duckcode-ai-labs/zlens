@@ -145,6 +145,46 @@ describe('SnowflakeConnector bounded streaming', () => {
     expect(cancelled).toBe(1);
   });
 
+  it('says a statement cancelled while it runs ran over its deadline, or was cancelled, not "SQL execution canceled" (live, 26 Nov 2026)', async () => {
+    const running = (connector: SnowflakeConnector) => {
+      (connector as any).connection = {
+        execute: (options: Record<string, any>) => {
+          const statement = {
+            getStatementId: () => '01running',
+            // Snowflake ends a cancelled statement with its own error, before any row.
+            cancel: (complete: () => void) => {
+              complete();
+              queueMicrotask(() => options.complete(Object.assign(new Error('SQL execution canceled'), { code: '000604' }), statement));
+            },
+          };
+          return statement;
+        },
+      };
+      return connector;
+    };
+    const late = await running(new SnowflakeConnector()).execute('SELECT COUNT(*) FROM BIG_VIEW', [], { deadlineMs: 20 }).catch((caught) => caught);
+    expect(late).toMatchObject({ vendorCode: 'TIMEOUT', retryable: true });
+    expect(late.message).toBe('Snowflake query exceeded the 20ms deadline.');
+    const controller = new AbortController();
+    const stopping = running(new SnowflakeConnector()).execute('SELECT COUNT(*) FROM BIG_VIEW', [], { signal: controller.signal }).catch((caught) => caught);
+    await new Promise((done) => setTimeout(done, 5));
+    controller.abort();
+    expect(await stopping).toMatchObject({ vendorCode: 'EXECUTION_CANCELLED', message: 'Snowflake query was cancelled.' });
+  });
+
+  it('keeps Snowflake\'s own error when nothing cancelled the statement', async () => {
+    const connector = new SnowflakeConnector();
+    (connector as any).connection = {
+      execute: (options: Record<string, any>) => {
+        const statement = { getStatementId: () => '01failed' };
+        queueMicrotask(() => options.complete(Object.assign(new Error('SQL execution canceled'), { code: '000604' }), statement));
+        return statement;
+      },
+    };
+    const failed = await connector.execute('SELECT 1', [], { deadlineMs: 60_000 }).catch((caught) => caught);
+    expect(failed.message).toBe('Snowflake query failed: SQL execution canceled');
+  });
+
   it('preserves Snowflake SQLSTATE, vendor code, query id, line, and position', async () => {
     const connector = new SnowflakeConnector();
     const statement = {

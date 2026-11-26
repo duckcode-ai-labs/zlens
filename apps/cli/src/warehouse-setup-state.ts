@@ -89,6 +89,53 @@ export interface WarehouseSetupStateV1 {
   checks?: SetupCheckStage;
 }
 
+/** Words a driver uses when a statement ran into its time limit (Snowflake's own cancel, any driver's deadline). */
+const TIME_LIMIT = /\bSQL execution canceled\b|exceeded the \d+ ?ms deadline|statement reached its statement or warehouse timeout|statement timed out/i;
+
+/**
+ * A setup error in plain words, for the Setup page, the strip, the banner and the launcher alike (they all read it
+ * from here): a statement that ran into its time limit says so, never "SQL execution canceled" or "exceeded the
+ * 60000ms deadline" (the Snowflake large test, 26 Nov 2026). Other errors keep their own words.
+ */
+export function plainSetupError(message: string): string {
+  if (!TIME_LIMIT.test(message)) return message;
+  const deadline = /exceeded the (\d+) ?ms deadline/i.exec(message);
+  const seconds = deadline ? Math.round(Number(deadline[1]) / 1000) : undefined;
+  return `a statement took longer than ${seconds ? `${seconds} seconds` : 'its time limit'}, so ZLens stopped it`;
+}
+
+/** Whether a check failure is a statement that ran into its time limit. */
+export function isTimeLimitError(message: string): boolean {
+  return TIME_LIMIT.test(message);
+}
+
+/** What the Setup page says of tables a background check skipped at its time limit, and that Ask still uses them. */
+export function timeLimitProblemText(names: string, tables: number, seconds: number): string {
+  const one = tables <= 1;
+  return `${names}: not checked. A check took longer than the ${seconds}-second limit for background checks, so ZLens skipped it, and the drafts do not rely on it. Ask can still use ${one ? 'it' : 'them'}: ${one ? 'its' : 'their'} columns were read.`;
+}
+
+/**
+ * A setup state saved by an earlier build says its errors the same plain way: a time-out kept as a failed check
+ * ("a check failed: Snowflake query failed: SQL execution canceled") reads as one.
+ */
+function withPlainErrors(state: WarehouseSetupStateV1, statementSeconds = 60): WarehouseSetupStateV1 {
+  const read = state.read.error && isTimeLimitError(state.read.error) ? { ...state.read, error: plainSetupError(state.read.error) } : state.read;
+  let checks = state.checks;
+  if (checks?.error && isTimeLimitError(checks.error)) checks = { ...checks, error: plainSetupError(checks.error) };
+  if (checks?.problems?.some((problem) => problem.kind === 'failed' && isTimeLimitError(problem.text))) {
+    checks = {
+      ...checks,
+      problems: checks.problems.map((problem) => {
+        if (problem.kind !== 'failed' || !isTimeLimitError(problem.text)) return problem;
+        const names = problem.text.split(': a check failed:')[0] ?? problem.text;
+        return { ...problem, kind: 'too_big', text: timeLimitProblemText(names, problem.relations.length, statementSeconds) };
+      }),
+    };
+  }
+  return read === state.read && checks === state.checks ? state : { ...state, read, ...(checks ? { checks } : {}) };
+}
+
 export function warehouseSetupStatePath(projectRoot: string): string {
   return join(projectRoot, '.dql', 'local', 'warehouse-setup.json');
 }
@@ -98,7 +145,7 @@ export function readWarehouseSetupState(projectRoot: string): WarehouseSetupStat
   if (!existsSync(path)) return null;
   try {
     const value = JSON.parse(readFileSync(path, 'utf-8')) as WarehouseSetupStateV1;
-    return value?.version === 1 && value.read && Array.isArray(value.scopes) ? value : null;
+    return value?.version === 1 && value.read && Array.isArray(value.scopes) ? withPlainErrors(value) : null;
   } catch {
     return null;
   }

@@ -51,19 +51,27 @@ const status = () => call(`/api/connections/${encodeURIComponent(connectionId)}/
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const seconds = (ms) => Math.round(ms / 100) / 10;
 
-/** Polls every 250 ms until `done`, and records the longest gap between two updates of the running operation. */
+/**
+ * Polls every 250 ms until `done`, and records the longest gap between two updates of the running operation, and
+ * the longest wait for an answer: a server busy at the very end of a stage (writing the drafts, 26 Nov 2026) is
+ * seen only there, since the operation has finished by the time it answers again.
+ */
 async function follow(done, limitMs) {
   const started = Date.now();
   let lastUpdate;
   let lastChange = Date.now();
   let maxGapMs = 0;
+  let maxWaitMs = 0;
   let last;
   let failedPolls = 0;
   for (;;) {
     // A poll that fails (ZLens busy for a moment) is counted and tried again, never fatal.
+    const asked = Date.now();
     try {
       last = await status();
+      maxWaitMs = Math.max(maxWaitMs, Date.now() - asked);
     } catch {
+      maxWaitMs = Math.max(maxWaitMs, Date.now() - asked);
       failedPolls += 1;
       if (failedPolls > 40) throw new Error('ZLens stopped answering');
       await sleep(500);
@@ -77,7 +85,7 @@ async function follow(done, limitMs) {
         lastChange = Date.now();
       }
     }
-    if (done(last)) return { status: last, ms: Date.now() - started, maxGapMs, failedPolls };
+    if (done(last)) return { status: last, ms: Date.now() - started, maxGapMs, maxWaitMs, failedPolls };
     if (Date.now() - started > limitMs) throw new Error(`still ${last.stage} after ${seconds(limitMs)} s`);
     await sleep(250);
   }
@@ -114,9 +122,10 @@ await call(`/api/connections/${encodeURIComponent(connectionId)}/setup/read`, { 
 const ready = await follow((value) => value.stage !== 'reading', 30 * 60_000);
 result.readyMs = Date.now() - readStarted;
 result.readMaxGapMs = ready.maxGapMs;
+result.readMaxWaitMs = ready.maxWaitMs;
 result.relationsRead = ready.status.setup?.read?.relations;
 if (ready.status.stage === 'failed') throw new Error(`the read failed: ${ready.status.setup?.read?.error}`);
-console.log(`Ready to ask: ${seconds(result.readyMs)} s for ${result.relationsRead} tables (longest gap between updates ${seconds(ready.maxGapMs)} s).`);
+console.log(`Ready to ask: ${seconds(result.readyMs)} s for ${result.relationsRead} tables (longest gap between updates ${seconds(ready.maxGapMs)} s; longest wait for an answer ${seconds(ready.maxWaitMs)} s).`);
 
 // Stage 2: the checks start by themselves; stop them part way.
 await follow((value) => value.stage === 'checking' && value.operation?.type === 'warehouse-check', 60_000);
@@ -145,11 +154,12 @@ await call(`/api/connections/${encodeURIComponent(connectionId)}/setup/check`, {
 const checked = await follow((value) => value.stage === 'checked' || value.stage === 'ready' && value.setup?.checks?.state !== 'running', 6 * 60 * 60_000);
 result.resumeToDoneMs = Date.now() - resumeStarted;
 result.checkMaxGapMs = checked.maxGapMs;
+result.checkMaxWaitMs = checked.maxWaitMs;
 result.checkFailedPolls = checked.failedPolls;
 const checks = checked.status.setup?.checks ?? {};
 result.checks = { state: checks.state, resumed: checks.resumed, sampled: checks.sampled, drafted: checks.drafted, problems: (checks.problems ?? []).length, problemKinds: Object.fromEntries(Object.entries((checks.problems ?? []).reduce((counts, problem) => ({ ...counts, [problem.kind]: (counts[problem.kind] ?? 0) + 1 }), {}))) };
 result.keptAfterResume = keptAnswers();
-console.log(`Resume to done: ${seconds(result.resumeToDoneMs)} s; ${checks.resumed ?? 0} statements answered before were not asked again; repeated statements: ${result.keptAfterResume?.repeated ?? '?'}; ${checks.sampled ?? 0} tables on samples; ${result.checks.problems} not checked; ${checks.drafted ?? 0} models drafted (longest gap ${seconds(checked.maxGapMs)} s).`);
+console.log(`Resume to done: ${seconds(result.resumeToDoneMs)} s; ${checks.resumed ?? 0} statements answered before were not asked again; repeated statements: ${result.keptAfterResume?.repeated ?? '?'}; ${checks.sampled ?? 0} tables on samples; ${result.checks.problems} not checked; ${checks.drafted ?? 0} models drafted (longest gap ${seconds(checked.maxGapMs)} s; longest wait for an answer ${seconds(checked.maxWaitMs)} s).`);
 result.finishedAt = new Date().toISOString();
 if (out) writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
 console.log(JSON.stringify(result, null, 2));
