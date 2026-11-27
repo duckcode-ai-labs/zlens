@@ -3635,15 +3635,16 @@ export function BlockDetailView({
             </details>
           ) : null
         ) : (
+        // Folded; opening it in the editor stays one click, beside the fold.
+        <div style={{ position: 'relative' }}>
+          <button type="button" onClick={onOpenSource} style={{ position: 'absolute', top: 0, right: 0, display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'none', color: t.accent, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: t.font, padding: 0 }}>
+            {sourceEditorWords(snowflakeApp).open} <ChevronRight size={11} strokeWidth={2} />
+          </button>
         <details>
           <summary style={{ ...sectionLabel, cursor: 'pointer' }}>{sourceEditorWords(snowflakeApp).section}</summary>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginBottom: 8 }}>
-            <button type="button" onClick={onOpenSource} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'none', color: t.accent, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: t.font, padding: 0 }}>
-              {sourceEditorWords(snowflakeApp).open} <ChevronRight size={11} strokeWidth={2} />
-            </button>
-          </div>
           <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{source.trim() || 'Open the builder to author this saved query.'}</pre>
         </details>
+        </div>
         )}
 
         {/* checks + lineage */}
