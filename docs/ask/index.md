@@ -50,7 +50,7 @@ Other trust lines:
 |---|---|
 | **Certified answer** | Ran a certified saved query exactly as reviewed. |
 | **Answer from Metrics** | Built from semantic metrics and dimensions. Not certified. |
-| **AI-generated answer** | AI wrote the SQL from your tables. Check it before relying on it. ZLens saves it as a draft saved query for review; see [Answers that need review](needs-review.md). |
+| **AI-generated answer** | AI wrote the SQL from your tables. Check it before relying on it. **Save as saved query** keeps it as a draft for review; see [Answers that need review](needs-review.md). |
 | **Needs clarification** | Ask needs one more detail. Answer the question it asks. |
 | **Not in this data**, **No matching data** or **Couldn't run this query** | The data does not hold it, nothing matched, or the query could not run. Ask says why. See [When Ask refuses](refusals.md). |
 
@@ -77,8 +77,9 @@ See [How Ask answered](how-it-answered.md) for the full trace.
 
 In the answer's panel:
 
-- **Save as saved query** saves the query as a draft saved query. See
-  [Save and certify](../blocks/certify.md).
+- **Save as saved query** shows the name and owner in a small dialog, then
+  saves the query as a draft saved query and says **Saved as a draft. Review
+  it**. Ask saves nothing on its own. See [Save and certify](../blocks/certify.md).
 - **Add to app** opens **Save to an editable App**. Pick an App or
   **New app…**. A certified answer is saved as a certified tile (**Saved as a
   certified tile**). Other answers say **Saved — review required**. Click

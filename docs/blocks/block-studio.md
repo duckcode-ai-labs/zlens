@@ -5,22 +5,23 @@ queries. On disk each one is a saved query (a `.dql` block file).
 
 ## Open it
 
-In the left rail, click **Saved queries**.
+In the left rail, click **Saved queries**. It opens on the list:
 
-- With a saved query selected in the sidebar, the editor opens it.
-- With nothing selected, it shows **Create saved queries** with three ways to
-  start:
+- two tabs, **Drafts** (waiting for review) and **Certified**;
+- a **Queries** / **Metrics** filter, with the most asked first;
+- **Import**, to turn SQL you already have into drafts. See
+  [Import SQL](import-sql.md);
+- **New saved query**, with two ways to start:
 
-| Card | Button | Use it to |
+| Choice | Button | Use it to |
 |---|---|---|
 | **Ask AI** | **Describe the query** | Describe what you need; AI drafts it from your saved queries, models and metrics. |
-| **Import SQL** | **Start import** | Turn existing SQL into drafts. See [Import SQL](import-sql.md). |
 | **Build manually** | **Open builder** | Build a saved query from metrics, dimensions, time grain and filters. |
 
 Under **Manual options** you also find **Blank SQL query** (**Create**)
 and **Query from metrics** (**Build**).
 
-**New saved query** in the editor toolbar brings you back to this start page.
+Click a saved query in the list to open it.
 
 The **New saved query** dialog opens from **Query from metrics** → **Build**,
 from **New saved query** on the Notebooks start screen, and from the command
@@ -49,20 +50,25 @@ When you open a saved query, you see its overview:
   edited after it was certified, the badge reads **RECERTIFY** and a warning
   says the source no longer matches its certification receipt;
 - **Last run**, **Rows**, **Used in** and **Tests**;
+- **How it's worked out**: one line in plain words, above the SQL, which stays
+  folded until you open it;
+- its checks, as a list;
 - **Outputs**, **Parameters**, the **DQL source**, tests and lineage.
 
-Buttons on the overview: **Open in builder**, **Run**, and **Delete** (trash
-icon) for a saved query you may edit.
+Buttons on the overview: **Run**, and **Delete** (trash icon) for a saved
+query you may edit. The **⋯** menu holds **Compare with an old report**
+(optional; see [Prove the numbers match](../guides/migrate.md#prove-the-numbers-match)),
+**Modify with AI**, **Open in builder** and **History and details**.
 
 The toolbar at the top has:
 
 | Button | Does |
 |---|---|
-| **New saved query** | Goes back to the **Create saved queries** start page. |
-| **Ask AI** / **Modify with AI** | Has AI draft a new saved query, or change this one. |
+| **New saved query** | Starts a new one: **Ask AI** or **Build manually**. |
+| **Ask AI** | Has AI draft a new saved query. To have AI change this one, use **⋯ › Modify with AI**. |
 | **Run** | Runs the saved query and shows the rows in **Results**. Shown while you edit; the overview has its own **Run**. |
 | **Save draft** | Saves your changes as a draft. Never certifies. |
-| **Certify** / **Re-certify** | Runs the certification checks. See [Save and certify](certify.md). |
+| **Certify** / **Re-certify** | Runs the certification checks. For a saved query AI wrote, it asks you to confirm: **I reviewed it — certify**. See [Save and certify](certify.md). |
 | **Delete** | Deletes the saved query. Shown while you edit; the overview has its own delete button. |
 
 Switch between **Visual Builder** and **DQL Source** to edit the saved query in
@@ -95,7 +101,7 @@ The tabs at the bottom are **Results**, **Run inputs**, **Lineage**,
 
 ## Edit and save
 
-1. Click **Open in builder** (or switch to **DQL Source**).
+1. Click **⋯ › Open in builder** (or switch to **DQL Source**).
 2. Change the query, the chart or the details. In the visual builder, the
    **Details** box holds **Saved query name**, **Domain**, **Owner**,
    **Tags**, **Folder (optional)** and **Description**. **Owner** reads

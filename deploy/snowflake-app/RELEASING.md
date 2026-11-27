@@ -81,8 +81,9 @@ repository (`/<db>/<schema>/<repo>`).
 - A version of `ZLENS` with review `APPROVED`, in the `DEFAULT` channel with a release directive.
 - A cross-account install through a private listing to a second account works end to end.
 - The listing states what the app needs: a paid (non-trial) Snowflake account (trials cannot run
-  containers or Cortex without a card); for Ask, Snowflake Cortex with the `SNOWFLAKE.CORTEX_USER`
-  grant to the app, and cross-region inference where Claude is not in the account's region.
+  containers or Cortex without a card); for Ask, Snowflake Cortex (Snowflake usually gives apps
+  `SNOWFLAKE.CORTEX_USER` through `SNOWFLAKE.APP_PUBLIC`, so the customer usually grants nothing), and
+  cross-region inference where Claude is not in the account's region.
 - Listing fields: title, subtitle, description, categories, business needs, documentation link
   (this folder), the provider's privacy and support links, and usage examples. The app's own
   [README](app/README.md) is what the customer reads after installing.

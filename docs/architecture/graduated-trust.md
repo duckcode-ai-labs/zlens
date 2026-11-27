@@ -61,17 +61,18 @@ questions, and they also attach to block answers as evidence. For executable
 answers, the result is safe to ship to dashboards because every output column
 traces back through the contract → dbt model → source column.
 
-## Tier 2 — review-required answers leave a draft
+## Tier 2 — review-required answers become drafts
 
 Use when Tier 1 returns no match. ZLens (or, on the BYOSQL path, the agent)
 writes SQL from the manifest + dbt schema and the runtime executes it. The
 answer is labelled **review required** (`uncertified: true` on MCP) and the
-proposal is **auto-saved as a draft block** so a person can review and certify
-it. This is the same on every surface:
+proposal becomes a **draft block** so a person can review and certify it. In
+the notebook UI the person saves it; the terminal and MCP surfaces save it
+for them:
 
 | Surface | What leaves the draft |
 | --- | --- |
-| Notebook UI Ask | `POST /api/agent-runs`; the answer shows *Saved for review as a draft block* with an **Open draft to review** action |
+| Notebook UI Ask | Nothing on its own. **Save as saved query** on the answer shows the name and owner in a small dialog, saves the draft and says *Saved as a draft. Review it* |
 | `zlens agent ask` | `POST /api/agent-runs`; prints `Review draft saved: <path>` and the `zlens certify --from-draft` command |
 | MCP `answer_question` | `POST /api/agent-runs`; returns `reviewDraft` / `draftBlockPath` |
 | MCP `query_via_metadata` | writes the draft itself (`saveDraft: false` opts out) |

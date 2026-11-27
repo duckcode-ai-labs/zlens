@@ -400,11 +400,12 @@ describe('the app package for Snowflake', () => {
     const lines = /def grant_lines\(app\):[\s\S]*?return \(([\s\S]*?)\n    \)/.exec(page)?.[1] ?? '';
     expect(lines).toContain('GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};');
     expect(lines).not.toContain('CORTEX_USER');
-    // The set-up screen still offers Cortex, as the README's optional step 4, on its own line.
+    // No Cortex step on the set-up screen: every app may use Cortex through SNOWFLAKE.APP_PUBLIC (V18 test,
+    // 27 Nov 2026). The fix line shows only when ZLens's own Cortex check fails (show_ask, ZLens's fixSql).
     const setUp = branch(page, 'if not status["zlens_user"]:');
     expect(setUp).toContain("If you have not yet granted it a database (the README's step 2), run these too, ");
-    expect(setUp).toContain('"To let ZLens ask Claude (optional), also run this if the app\'s **Permissions** tab does not show "');
-    expect(setUp).toContain('st.code(cortex_line(app), language="sql")');
+    expect(setUp).not.toContain('CORTEX_USER');
+    expect(setUp).not.toContain('cortex_line');
     expect(page).toContain('return f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};"');
     // The user's name in capitals when unquoted, as Snowflake shows it (tester: "ZLens serves Test_admin").
     expect(page).toContain('return name.upper() if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name) else name');
