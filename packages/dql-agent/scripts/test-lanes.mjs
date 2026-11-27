@@ -239,10 +239,12 @@ const EXPECTED_TEST_FILES = 202;
 // +7), and Cortex failures named apart, cancel on give-up and model fallback by region (providers/claude-cortex.test.ts +8).
 // 2970 with the statement read past the words a drafter writes before it, refused as before when it is not one
 // read-only query, and read at once however long the reply (ask-pipeline/prepare/sql-checks.test.ts +6; V18 gate).
-const EXPECTED_TESTS = 2970;
+// 2971 with "Not in this data" keeping the drafter's reason after what is missing (ask-pipeline/v2-answers.test.ts +1;
+// V18 test).
+const EXPECTED_TESTS = 2971;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2889.
+// The ordinary lane's share is the difference: 2890.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
