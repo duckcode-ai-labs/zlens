@@ -3,10 +3,11 @@ import { certifiedByLabel, certifierDisplayName, plainCertificationChecks } from
 import { useShallow } from 'zustand/react/shallow';
 import { useQuery } from '@tanstack/react-query';
 import { certificationFieldGaps, certificationFieldLabel, renderSemanticBlockSource } from '@zlens/core/blocks';
-import { AlertTriangle, Blocks, Bot, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Circle, Code2, Database, FileInput, GitCompare, History, Loader2, MoreHorizontal, PanelBottomOpen, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, Blocks, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Circle, Code2, Database, FileInput, GitCompare, History, Loader2, MoreHorizontal, PanelBottomOpen, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
 import { hostProposesCertification, hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
 import { api, DqlApiError, type BlockCertificationOperationResult } from '../../api/client';
 import { importRunError, isHostRefusal, type ImportRunError } from './import-run-error';
+import { SavedQueriesHome } from './SavedQueriesHome';
 import { howItsWorkedOut, howSemanticIsWorkedOut, savedQueryChecks } from './saved-query-review';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { useOperations } from '../../operations/OperationsProvider';
@@ -75,7 +76,7 @@ import type { Theme, ThemeMode } from '../../themes/notebook-theme';
 import { ReportComparePanel, verdictTone } from './ReportComparePanel';
 import { CertificationReportLines, certificationReportView, DiffersSinceCertifiedBadge, reportMatchReceipt, SavedQueryReportCheck, useQueryReportMatch } from './SavedQueryReportCheck';
 import { isSnowflakeApp, useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { builderQueryWords, editedSavedQueryTags, importAddSqlStep, importContextHint, importDraftWords, importEmptyMessage, importHelpLine, importSourceModes, importStartDetail, noDomainLabel, savedQueryDomainWords, savedQueryFolderWords, savedQueryTagsShown, semanticLayerName, sourceEditorWords, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
+import { builderQueryWords, editedSavedQueryTags, importAddSqlStep, importContextHint, importDraftWords, importEmptyMessage, importHelpLine, importSourceModes, noDomainLabel, savedQueryDomainWords, savedQueryFolderWords, savedQueryTagsShown, sourceEditorWords, sqlConvertHint, sqlPlaceholder } from '../../snowflake-app/snowflake-app-words';
 import { SQLCellEditor } from '../cells/SQLCellEditor';
 import { ChartOutput, CHART_TYPE_OPTIONS, resolveChartType } from '../output/ChartOutput';
 import { MiniLineageGraph } from '../lineage/MiniLineageGraph';
@@ -333,13 +334,6 @@ export function BlockStudio() {
   const dbtStatusQuery = useQuery({
     queryKey: ['block-studio', 'dbt-status'],
     queryFn: () => api.getBlockStudioDbtStatus(),
-    staleTime: 30_000,
-  });
-  // The tables ZLens indexed (Settings » Database). The Database tree here lists a dbt project's
-  // relations only, so without dbt the home said "0 tables" while 18 were indexed (V14).
-  const indexedTablesQuery = useQuery({
-    queryKey: ['block-studio', 'indexed-tables'],
-    queryFn: async () => (await api.getConnections()).metadataStatus?.relationCount ?? 0,
     staleTime: 30_000,
   });
   const semanticLayerQuery = useQuery({
@@ -1846,16 +1840,18 @@ export function BlockStudio() {
               inline
             />
           ) : !hasActiveDraft ? (
-            <BlockStudioStartPage
-              dbtStatus={state.blockStudioDbtStatus}
-              semanticStats={semanticStats}
-              semanticObjectCount={semanticObjectCount}
-              databaseStats={{ ...databaseStats, tables: homeTableCount(databaseStats.tables, state.schemaTables.length, indexedTablesQuery.data) }}
-              onCreateSql={readOnlyBlocks ? undefined : () => beginManualDraft('custom')}
-              onCreateSemantic={readOnlyBlocks ? undefined : () => beginManualDraft('semantic')}
-              readOnlyReason={readOnlyBlocksReason}
+            // Saved queries opens on the list (the trust flow approved 2026-11-27).
+            <SavedQueriesHome
               onImport={readOnlyBlocks ? undefined : () => setWorkspaceMode('import')}
-              onBuildDql={() => openAskAi({ kind: 'build', initialInput: 'Draft a reusable saved query that ' })}
+              onAskAi={() => openAskAi({ kind: 'build', initialInput: 'Draft a reusable saved query that ' })}
+              onBuildManually={readOnlyBlocks ? undefined : () => beginManualDraft('semantic')}
+              onBlankSql={readOnlyBlocks ? undefined : () => beginManualDraft('custom')}
+              onReviewMetricDraft={(importId) => {
+                // A metric draft is reviewed and approved in the import it came from.
+                setWorkspaceMode('import');
+                void api.getBlockStudioImport(importId).then(setImportSession).catch(() => undefined);
+              }}
+              readOnlyReason={readOnlyBlocksReason}
               t={t}
             />
           ) : editorMode === 'detail' ? (
@@ -2731,286 +2727,6 @@ function DeleteBlockDialog({
           </button>
         </div>
       </div>
-    </div>
-  );
-}
-
-export function BlockStudioStartPage({
-  dbtStatus,
-  semanticStats,
-  semanticObjectCount,
-  databaseStats,
-  onCreateSql,
-  onCreateSemantic,
-  readOnlyReason,
-  onImport,
-  onBuildDql,
-  t,
-}: {
-  dbtStatus: BlockStudioDbtStatus | null;
-  semanticStats: {
-    metrics: number;
-    measures: number;
-    dimensions: number;
-    timeDimensions: number;
-    entities: number;
-    hierarchies: number;
-    semanticModels: number;
-    savedQueries: number;
-  };
-  semanticObjectCount: number;
-  databaseStats: { schemas: number; tables: number; columns: number };
-  onCreateSql?: () => void;
-  onCreateSemantic?: () => void;
-  readOnlyReason?: string;
-  onImport?: () => void;
-  onBuildDql: () => void;
-  t: Theme;
-}) {
-  const manualActions = [
-    onCreateSql && {
-      title: 'Blank SQL query',
-      detail: 'Start with an empty custom query.',
-      action: onCreateSql,
-      label: 'Create',
-      Icon: Code2,
-    },
-    onCreateSemantic && {
-      title: 'Query from metrics',
-      detail: 'Build directly from governed metrics.',
-      action: onCreateSemantic,
-      label: 'Build',
-      Icon: Blocks,
-    },
-  ].filter((card): card is NonNullable<typeof card> => Boolean(card));
-  const snowflakeApp = useSnowflakeApp();
-  const dbtReady = Boolean(dbtStatus?.artifacts.manifest.exists);
-  const semanticMetricCount = dbtStatus?.counts.metrics ?? semanticStats.metrics;
-  const sourceSummary = dbtStatus
-    ? `${dbtStatus.counts.models} dbt models · ${semanticMetricCount} MetricFlow metrics`
-    : 'Waiting for dbt artifacts';
-  const projectLabel = dbtStatus?.projectName || dbtStatus?.projectPath?.split('/').filter(Boolean).pop() || 'dbt project';
-
-  return (
-    <div style={{ height: '100%', overflow: 'auto', padding: 22, display: 'grid', gap: 14, alignContent: 'start', background: t.appBg }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>Create saved queries</div>
-          <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.45, marginTop: 5, maxWidth: 560, fontFamily: t.font }}>
-            Start from SQL you already have, or describe the business asset you want ZLens to build from project context.
-          </div>
-        </div>
-        {/* The app for Snowflake has no dbt project: no dbt chip there (V14). */}
-        {snowflakeApp ? null : (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 10px', border: `1px solid ${dbtReady ? '#2ea04340' : t.headerBorder}`, borderRadius: 8, background: dbtReady ? '#2ea0430d' : t.cellBg }}>
-          <CheckCircle2 size={15} strokeWidth={2} color={dbtReady ? '#2ea043' : t.textMuted} aria-hidden="true" />
-          <span style={{ fontSize: 11, color: dbtReady ? '#2ea043' : t.textMuted, fontWeight: 700, fontFamily: t.font }}>
-            {dbtReady ? 'dbt ready' : 'dbt pending'}
-          </span>
-        </div>
-        )}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
-        <PrimaryStartAction
-          title="Ask AI"
-          detail="Describe the business asset you need. ZLens uses this domain's saved queries, models, and semantic metrics to draft it."
-          label="Describe the query"
-          Icon={Bot}
-          onClick={onBuildDql}
-          t={t}
-        />
-        {onImport && (
-          <PrimaryStartAction
-            title="Import SQL"
-            detail={importStartDetail(snowflakeApp)}
-            label="Start import"
-            Icon={FileInput}
-            onClick={onImport}
-            t={t}
-          />
-        )}
-        {onCreateSemantic && (
-          <PrimaryStartAction
-            title="Build manually"
-            detail="Use the visual semantic builder for multiple metrics, compatible dimensions, time grain, filters, and chart intent."
-            label="Open builder"
-            Icon={Blocks}
-            onClick={onCreateSemantic}
-            t={t}
-          />
-        )}
-      </div>
-      {readOnlyReason && !onCreateSemantic && (
-        <div style={{ fontSize: 12, color: t.textMuted, fontFamily: t.font }}>{readOnlyReason}</div>
-      )}
-
-      <details style={importDisclosureStyle(t)}>
-        <summary style={importSummaryStyle(t)}>Manual options</summary>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
-          {manualActions.map((card) => (
-            <CompactStartTile
-              key={card.title}
-              title={card.title}
-              detail={card.detail}
-              label={card.label}
-              Icon={card.Icon}
-              onClick={card.action}
-              t={t}
-            />
-          ))}
-        </div>
-      </details>
-
-      <section style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8 }}>
-        {snowflakeApp ? null : <ReadinessChip Icon={Database} label={projectLabel ? `${projectLabel} dbt` : 'dbt context'} value={sourceSummary} tone={dbtReady ? 'success' : 'neutral'} t={t} />}
-        <ReadinessChip Icon={Database} label="Database" value={`${databaseStats.tables.toLocaleString()} ${databaseStats.tables === 1 ? 'table' : 'tables'}`} tone={databaseStats.tables > 0 ? 'success' : 'neutral'} t={t} />
-        <ReadinessChip Icon={Blocks} label={semanticLayerName(snowflakeApp)} value={`${semanticObjectCount} objects`} tone={semanticObjectCount > 0 ? 'success' : 'neutral'} t={t} />
-      </section>
-    </div>
-  );
-}
-
-function PrimaryStartAction({
-  title,
-  detail,
-  label,
-  Icon,
-  onClick,
-  t,
-}: {
-  title: string;
-  detail: string;
-  label: string;
-  Icon: LucideIcon;
-  onClick: () => void;
-  t: Theme;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        border: `1px solid ${t.accent}`,
-        borderRadius: 8,
-        background: t.cellBg,
-        color: t.textPrimary,
-        cursor: 'pointer',
-        display: 'grid',
-        gridTemplateColumns: '42px minmax(0, 1fr) auto',
-        gap: 12,
-        alignItems: 'center',
-        padding: 16,
-        minHeight: 104,
-        textAlign: 'left',
-        fontFamily: t.font,
-        boxShadow: `inset 0 0 0 1px ${t.accent}22`,
-      }}
-    >
-      <span style={{ width: 42, height: 42, borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: `${t.accent}18`, color: t.accent }}>
-        <Icon size={20} strokeWidth={2} aria-hidden="true" />
-      </span>
-      <span style={{ display: 'grid', gap: 5, minWidth: 0 }}>
-        <span style={{ fontSize: 15, fontWeight: 850, color: t.textPrimary }}>{title}</span>
-        <span style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.4 }}>{detail}</span>
-      </span>
-      <span style={{ color: '#ffffff', background: t.accent, borderRadius: 6, padding: '7px 10px', fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>
-        {label}
-      </span>
-    </button>
-  );
-}
-
-function CompactStartTile({
-  title,
-  detail,
-  label,
-  Icon,
-  onClick,
-  t,
-}: {
-  title: string;
-  detail: string;
-  label: string;
-  Icon: LucideIcon;
-  onClick: () => void;
-  t: Theme;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        textAlign: 'left',
-        background: t.cellBg,
-        border: `1px solid ${t.headerBorder}`,
-        borderRadius: 8,
-        padding: 12,
-        cursor: 'pointer',
-        color: t.textPrimary,
-        display: 'grid',
-        gridTemplateColumns: '30px minmax(0, 1fr)',
-        gap: 10,
-        minHeight: 94,
-        fontFamily: t.font,
-        alignItems: 'start',
-      }}
-    >
-      <span style={{ width: 30, height: 30, borderRadius: 7, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: `${t.accent}14`, color: t.accent }}>
-        <Icon size={16} strokeWidth={2} aria-hidden="true" />
-      </span>
-      <span style={{ display: 'grid', gap: 5, minWidth: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 800, color: t.textPrimary }}>{title}</span>
-        <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>{detail}</span>
-        <span style={{ color: t.accent, fontSize: 11, fontWeight: 800 }}>{label}</span>
-      </span>
-    </button>
-  );
-}
-
-function StartPill({ label, t }: { label: string; t: Theme }) {
-  return (
-    <span style={{
-      border: `1px solid ${t.headerBorder}`,
-      borderRadius: 999,
-      color: t.textSecondary,
-      background: t.btnBg,
-      fontSize: 10,
-      fontWeight: 750,
-      padding: '3px 7px',
-      lineHeight: 1.2,
-      whiteSpace: 'nowrap',
-    }}>
-      {label}
-    </span>
-  );
-}
-
-function ReadinessChip({
-  Icon,
-  label,
-  value,
-  tone,
-  t,
-}: {
-  Icon: LucideIcon;
-  label: string;
-  value: string;
-  tone: 'success' | 'neutral';
-  t: Theme;
-}) {
-  const color = tone === 'success' ? '#2ea043' : t.textMuted;
-  return (
-    <div style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, background: t.cellBg, padding: '9px 10px', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-      <span style={{ color, display: 'inline-flex', flexShrink: 0 }}>
-        <Icon size={15} strokeWidth={2} aria-hidden="true" />
-      </span>
-      <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-        <span style={{ fontSize: 10, color: t.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {label}
-        </span>
-        <span style={{ fontSize: 12, color: t.textPrimary, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {value}
-        </span>
-      </span>
     </div>
   );
 }
@@ -5296,6 +5012,16 @@ export function BlockStudioImportWorkspace({
               </div>
             ) : (
               <>
+                <ImportResult
+                  queryDrafts={session.candidates.length}
+                  metricDrafts={metricDrafts && metricDrafts.importId === session.id ? metricDrafts.items.length : 0}
+                  leftOut={session.skippedStatements?.length ?? 0}
+                  onReview={() => {
+                    const first = visibleCandidates[0] ?? session.candidates[0];
+                    if (first) setSelectedId(first.id);
+                  }}
+                  t={t}
+                />
                 <div style={{ display: 'grid', gap: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 12, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>Drafts</span>
@@ -5364,7 +5090,8 @@ export function BlockStudioImportWorkspace({
                   </button>
                 )}
                 {(session.skippedStatements?.length ?? 0) > 0 && (
-                  <details style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '8px 10px' }}>
+                  // Open: what was left out, and why, is part of the result (a newcomer looks for their sheets here).
+                  <details open style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '8px 10px' }}>
                     <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 800, color: t.textSecondary, fontFamily: t.font }}>
                       Left out ({session.skippedStatements!.length})
                     </summary>
@@ -6140,6 +5867,41 @@ function ImportStep({ index, active, complete, title, detail, t }: { index: numb
   );
 }
 
+/** The files Import reads, said before anything is added (the trust flow approved 2026-11-27). */
+export const IMPORT_READS: ReadonlyArray<{ what: string; files: string }> = [
+  { what: 'SQL', files: '.sql files' },
+  { what: 'Tableau', files: 'workbooks, .twb or .twbx' },
+  { what: 'Power BI', files: 'a template (.pbit), model.bim, or TMDL files' },
+];
+export const IMPORT_PBIX_NOTE = '.pbix can\'t be read: in Power BI, use File › Export › Power BI template, then import the .pbit.';
+
+/**
+ * What an import made, at the top of its list: query drafts, metric drafts, and what was left out (each with its
+ * reason, below). Each draft waits for review; none answers until it is certified.
+ */
+export function ImportResult({ queryDrafts, metricDrafts, leftOut, onReview, t }: { queryDrafts: number; metricDrafts: number; leftOut: number; onReview: () => void; t: Theme }) {
+  const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  const parts = [
+    plural(queryDrafts, 'query draft', 'query drafts'),
+    ...(metricDrafts > 0 ? [plural(metricDrafts, 'metric draft', 'metric drafts')] : []),
+    ...(leftOut > 0 ? [`Left out ${leftOut}`] : []),
+  ];
+  const drafts = queryDrafts + metricDrafts;
+  return (
+    <div data-testid="import-result" style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, background: t.appBg, padding: '10px 12px', display: 'grid', gap: 8 }}>
+      <span style={{ fontSize: 12.5, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>{parts.join(' · ')}</span>
+      <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, lineHeight: 1.4 }}>
+        Each draft waits for your review; none answers questions until you certify it.{leftOut > 0 ? ' What was left out, and why, is listed below.' : ''}
+      </span>
+      {queryDrafts > 0 ? (
+        <button type="button" onClick={onReview} style={{ ...primaryImportButtonStyle(t), justifySelf: 'start' }}>
+          {drafts === 1 ? 'Review the draft' : `Review the ${drafts} drafts`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function ImportGuide({ t }: { t: Theme }) {
   const snowflakeApp = useSnowflakeApp();
   const items = [
@@ -6150,6 +5912,15 @@ function ImportGuide({ t }: { t: Theme }) {
   return (
     <div style={{ display: 'grid', gap: 12 }}>
       <EmptyPanel message={importEmptyMessage(snowflakeApp)} />
+      <div data-testid="import-reads" style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, background: t.appBg, padding: 12, display: 'grid', gap: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Bring in the SQL behind your existing reports. Each query becomes a draft for you to review. It reads:</span>
+        <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 3 }}>
+          {IMPORT_READS.map((item) => (
+            <li key={item.what} style={{ fontSize: 11.5, color: t.textSecondary, fontFamily: t.font }}><strong>{item.what}</strong>: {item.files}</li>
+          ))}
+        </ul>
+        <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, lineHeight: 1.4 }}>{IMPORT_PBIX_NOTE}</span>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
         {items.map(([index, title, detail]) => (
           <div key={title} style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, background: t.appBg, padding: 12, display: 'grid', gap: 6 }}>
@@ -7725,18 +7496,13 @@ function filterDatabaseTree(tree: DatabaseSchemaNode[], query: string): Database
 
 /**
  * The crumb after "Saved queries" in its toolbar. With nothing open the open-source page says "sql"
- * (or "semantic"); the app for Snowflake says nothing there, "Import SQL" while importing, and
+ * (or "semantic"); the app for Snowflake says nothing there, "Import" while importing, and
  * "New saved query" for an unnamed draft (V14).
  */
 export function savedQueriesCrumb(input: { name?: string | null; hasActiveDraft: boolean; importing: boolean; semantic: boolean; snowflakeApp: boolean }): string | null {
   if (input.name) return input.name;
-  if (input.snowflakeApp) return input.hasActiveDraft ? 'New saved query' : input.importing ? 'Import SQL' : null;
+  if (input.snowflakeApp) return input.hasActiveDraft ? 'New saved query' : input.importing ? 'Import' : null;
   return input.hasActiveDraft ? 'new_block' : input.semantic ? 'semantic' : 'sql';
-}
-
-/** The tables the Saved queries home counts: the most any source knows of (the tree, the schema list, the index). */
-export function homeTableCount(treeTables: number, schemaTables: number, indexedTables: number | null | undefined): number {
-  return Math.max(treeTables, schemaTables, typeof indexedTables === 'number' && Number.isFinite(indexedTables) ? indexedTables : 0);
 }
 
 function summarizeDatabaseTree(tree: DatabaseSchemaNode[]): { schemas: number; tables: number; columns: number } {

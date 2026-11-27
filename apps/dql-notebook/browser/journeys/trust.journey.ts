@@ -19,7 +19,8 @@ test.beforeEach(async ({ page }) => {
 
 test('Import SQL: Save draft writes a draft; only Certify certifies, with a receipt (F1)', async ({ page, request }) => {
   await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
-  await page.getByRole('button', { name: 'Start import' }).click();
+  // Saved queries opens on the list; Import is its button (the trust flow approved 2026-11-27).
+  await page.getByTestId('saved-queries-home').getByRole('button', { name: 'Import', exact: true }).click();
   await page.getByPlaceholder(/select \.\.\./).fill('select count(*) as customer_count from dev.dim_customers');
   await page.getByPlaceholder('auto').fill('orders');
   await page.getByPlaceholder('analytics').fill('e2e');

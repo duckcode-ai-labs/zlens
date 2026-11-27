@@ -28797,6 +28797,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           certificationProposed?: boolean;
           /** An automatic Ask draft nobody changed: kept out of pickers, and removed by "Clear drafts". */
           automaticDraft?: boolean;
+          /** The question Ask answered when it was saved from Ask (`source_question`). */
+          sourceQuestion?: string;
+          /** How often Ask counted it asked, on a draft Ask kept on its own before 2026-11-27 (`asked_times`). */
+          askedTimes?: number;
+          /** The file an import read it from, as its companion records (`import.sourceKind`, `import.sourcePath`). */
+          importedFrom?: { kind: string; path?: string };
         }> = [];
         const seen = new Set<string>();
         const servedBranch = hostHooks ? currentGitBranch(projectRoot) : undefined;
@@ -28844,6 +28850,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 const companionPath = servedBranch && status === 'certified' ? coreBlockCompanionRelativePath(projectRoot, relPath, companionRegistry) : null;
                 const certificationProposed = Boolean(companionPath && existsSync(join(projectRoot, companionPath))
                   && readCompanionCertification(readFileSync(join(projectRoot, companionPath), 'utf-8'))?.branch === servedBranch);
+                // Where it came from, for Saved queries' list (the trust flow approved 2026-11-27): the question
+                // an Ask answer was saved from, or the file an import read it from.
+                const questionMatch = /^\s*source_question\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(source);
+                const askedMatch = /^\s*asked_times\s*=\s*(\d+)/m.exec(source);
+                const importedFrom = blockImportOrigin(projectRoot, relPath);
                 blocks.push({
                   name: nameMatch?.[1] ?? entry.name.replace('.dql', ''),
                   domain: (domainMatch?.[1] ?? inferBlockStudioPathDomain(projectRoot, relPath)) || 'uncategorized',
@@ -28859,6 +28870,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   ...(deprecatedOnMatch ? { deprecatedOn: deprecatedOnMatch[1] } : {}),
                   ...(certificationProposed ? { certificationProposed } : {}),
                   ...(/(^|\/)_drafts\//.test(relPath) && automaticAskDraftState(source, stat.mtimeMs) === 'untouched' ? { automaticDraft: true } : {}),
+                  ...(questionMatch?.[1]?.trim() ? { sourceQuestion: questionMatch[1].replace(/\\(.)/g, '$1').trim() } : {}),
+                  ...(askedMatch ? { askedTimes: Number(askedMatch[1]) } : {}),
+                  ...(importedFrom ? { importedFrom } : {}),
                 });
               } catch { /* skip unreadable files */ }
             }
@@ -46931,6 +46945,36 @@ function inferBlockStudioFolderPath(projectRoot: string, blockPath: string): str
 
 function blockCompanionRelativePath(projectRoot: string, blockPath: string): string | null {
   return coreBlockCompanionRelativePath(projectRoot, blockPath);
+}
+
+/** The file an import read a saved query from, as its companion YAML records it; none when it was not imported. */
+export function blockImportOrigin(projectRoot: string, blockPath: string): { kind: string; path?: string } | undefined {
+  const companion = blockCompanionRelativePath(projectRoot, blockPath);
+  if (!companion) return undefined;
+  let yaml: string;
+  try {
+    yaml = readFileSync(join(projectRoot, companion), 'utf-8');
+  } catch {
+    return undefined;
+  }
+  // Read line by line: the indented lines under a top-level `import:` key.
+  const fields = new Map<string, string>();
+  let inImport = false;
+  for (const line of yaml.split('\n')) {
+    if (!inImport) {
+      inImport = /^import:\s*$/.test(line);
+      continue;
+    }
+    if (!/^[ \t]/.test(line)) break;
+    const colon = line.indexOf(':');
+    if (colon < 0) continue;
+    const value = line.slice(colon + 1).trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (value) fields.set(line.slice(0, colon).trim(), value);
+  }
+  const kind = fields.get('sourceKind');
+  const path = fields.get('sourcePath');
+  if (!kind && !path) return undefined;
+  return { kind: kind ?? 'sql', ...(path ? { path } : {}) };
 }
 
 function domainBlockPathParts(
