@@ -34,7 +34,14 @@ const TABLES = String.raw`(?:relations?|tables?|schemas?|columns?|fields?|data ?
 /** "No column in the listed relations holds payroll/employee expense data". */
 const NO_COLUMN_HOLDS = new RegExp(String.raw`^(?:there (?:is|are) )?no (?:${TABLES})(?: or (?:${TABLES}))? (?:in|among|across|of|from) (?:the |any of the |any )?(?:${LISTED} )?${TABLES}(?: (?:listed|provided|given|above))? ${HOLDS} (?:any )?(.+)$`, 'i');
 /** "None of the listed tables contain payroll data", "The provided relations do not include payroll", "None of the listed tables or columns hold payroll". */
-const NONE_HOLDS = new RegExp(String.raw`^(?:none of the|the) (?:${LISTED} )?${TABLES}(?: or (?:${TABLES}))?(?: (?:listed|provided|given|above))? (?:(?:do|does) not |don't |doesn't )?${HOLDS} (?:any )?(.+)$`, 'i');
+const NONE_HOLDS = new RegExp(String.raw`^none of the (?:${LISTED} )?${TABLES}(?: or (?:${TABLES}))?(?: (?:listed|provided|given|above))? (?:(?:do|does) not |don't |doesn't )?${HOLDS} (?:any )?(.+)$`, 'i');
+/**
+ * "The provided relations do not include payroll": a sentence that starts with "The" says what is missing only
+ * with its own "not". "The listed tables have only customers, orders, nations and regions, with no payroll …" says
+ * what the tables do hold, and is said as it is (V18 fresh install on TPC-H: it once read "None of the tables Ask
+ * searched has only customers …").
+ */
+const THE_DO_NOT_HOLD = new RegExp(String.raw`^the (?:${LISTED} )?${TABLES}(?: or (?:${TABLES}))?(?: (?:listed|provided|given|above))? (?:(?:do|does) not |don't |doesn't )${HOLDS} (?:any )?(.+)$`, 'i');
 /**
  * "No listed table or column holds advertising spend" (V18 test, the advertising answer). Only with the drafter's
  * word for what it was shown ("listed", "provided" …): "no column holds the discount rate" keeps its words, and how
@@ -84,7 +91,7 @@ export function plainDeclineReason(message: string): string {
   // Only a sentence in the drafter's terms is said again: one that already reads plainly keeps its words.
   const technical = /\b(?:relations?|columns?|fields?|listed|provided|schemas?|inspected)\b/i.test(core);
   const matched = !technical ? undefined
-    : NO_COLUMN_HOLDS.exec(core)?.[1] ?? NO_TABLE_HOLDS.exec(core)?.[1] ?? (/^(?:none of the|the) /i.test(core) ? NONE_HOLDS.exec(core)?.[1] : undefined);
+    : NO_COLUMN_HOLDS.exec(core)?.[1] ?? NO_TABLE_HOLDS.exec(core)?.[1] ?? NONE_HOLDS.exec(core)?.[1] ?? THE_DO_NOT_HOLD.exec(core)?.[1];
   // What is missing, then the drafter's own reason for it, kept in its words: ", since the data covers only …".
   const clause = matched ? CLAUSE.exec(matched) : null;
   const missing = clause ? matched!.slice(0, clause.index).trim() : matched;
@@ -94,7 +101,9 @@ export function plainDeclineReason(message: string): string {
     // "Every table it can read" is what the sentence already says.
     return looked && !everyTable ? thenLooked(sentence, looked[1]!) : sentence;
   }
-  const plain = plainWords(core);
+  // Said in plain words, it starts with a capital when the drafter's sentence did ("The listed tables …").
+  const reworded = plainWords(core);
+  const plain = /^[A-Z]/.test(core) ? reworded.replace(/^[a-z]/, (letter) => letter.toUpperCase()) : reworded;
   return looked ? thenLooked(plain, looked[1]!) : plain;
 }
 

@@ -127,7 +127,14 @@ describe('"Not in this data" says what is missing in plain words (V2, listing re
     // "as of" is not a reason: it stays with what is missing.
     expect(plainDeclineReason('No listed table holds standings as of 2019')).toBe('None of the tables Ask can read has standings as of 2019');
     // A sentence these patterns do not know never leaves "or columns" behind.
-    expect(plainDeclineReason('The listed tables or columns say nothing about ticket prices')).toBe('the tables Ask can read say nothing about ticket prices');
+    expect(plainDeclineReason('The listed tables or columns say nothing about ticket prices')).toBe('The tables Ask can read say nothing about ticket prices');
+    // A sentence that starts with "The" says what is missing only with its own "not" (V18 fresh install, TPC-H): a
+    // sentence about what the tables do hold is said as it is, never "None of the tables … has only customers …".
+    expect(plainDeclineReason('The listed tables have only customers, orders, nations and regions, with no payroll, salary or employee compensation column to measure payroll (Ask looked through the tables it chose, and no other table has a column for it)'))
+      .toBe('The tables Ask searched have only customers, orders, nations and regions, with no payroll, salary or employee compensation column to measure payroll. Ask looked through the tables it chose, and no other table has a column for it');
+    expect(plainDeclineReason('The provided relations do not include payroll')).toBe('None of the tables Ask can read has payroll');
+    expect(plainDeclineReason('The provided relations do not include payroll (Ask looked through the tables it chose, and no other table has a column for it)'))
+      .toBe('None of the tables Ask searched has payroll. Ask looked through the tables it chose, and no other table has a column for it');
     // Without the drafter's "listed", a short decline keeps its words, and how far Ask looked follows it.
     expect(plainDeclineReason('no column holds the discount rate (Ask looked through every table it can read, and no other table has a column for it)'))
       .toBe('no column holds the discount rate. Ask looked through every table it can read, and no other table has a column for it');
