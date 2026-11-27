@@ -277,7 +277,8 @@ describe("the statement in a drafter's reply", () => {
     for (const reply of hostile) {
       const started = performance.now();
       draftedStatement(reply);
-      expect(performance.now() - started).toBeLessThan(50);
+      // 250 ms: a shared CI runner took 65 ms once against an earlier 50; backtracking takes 0.8 s and more.
+      expect(performance.now() - started).toBeLessThan(250);
     }
     expect(draftedStatement(`Words.\n${'with x\n'.repeat(20_000)}SELECT 1 FROM t`)).toBe('SELECT 1 FROM t');
   });
