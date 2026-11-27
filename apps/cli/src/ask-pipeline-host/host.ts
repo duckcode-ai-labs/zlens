@@ -619,12 +619,36 @@ export const MOSTLY_EMPTY_KEY_SHARE = 0.5;
  */
 export const KEY_PROBE_DEADLINE_MS = 5_000;
 /**
- * A key count's limit: the default, or what is left of a run's budget when that is less. Null when too little is
- * left to count anything (a deadline of 0 would read as none at all to a driver): the join is then not judged.
+ * How long one repeat check may take: what each had before the checks ran together (8 s), because a repeat missed
+ * lets a total counted more than once through, which is worse than a slower answer. An answer's checks run together,
+ * so it waits for the slowest, never their sum.
  */
-export function keyProbeDeadlineMs(remainingMs?: number): number | null {
-  const deadline = Math.min(KEY_PROBE_DEADLINE_MS, remainingMs ?? KEY_PROBE_DEADLINE_MS);
+export const KEY_REPEAT_PROBE_DEADLINE_MS = 8_000;
+/**
+ * A key probe's limit: its cap (a key count's 5 s by default), or what is left of a run's budget when that is less.
+ * Null when too little is left to probe anything (a deadline of 0 would read as none at all to a driver): the join
+ * is then not judged.
+ */
+export function keyProbeDeadlineMs(remainingMs?: number, cap = KEY_PROBE_DEADLINE_MS): number | null {
+  const deadline = Math.min(cap, remainingMs ?? cap);
   return deadline >= 250 ? deadline : null;
+}
+/**
+ * The statement that says whether a join key repeats in a relation (keys quoted already), and whether it counts
+ * (one row: key_rows against key_groups) or lists the keys that repeat. Rows without the key are left out: an
+ * equality join never matches them, so they cannot repeat a row (a key unique apart from several empty rows has no
+ * repeats; how many rows are empty is the empty-key check's). Snowflake counts a one-column key's values against
+ * its distinct values faster than it lists the keys that repeat (views over TPC-H SF100, X-Small, 27 Nov 2026:
+ * ORDERS.O_CUSTKEY 3.1 s against 4.8 s, CUSTOMER.C_CUSTKEY 0.7 s against 1.2 s, LINEITEM.L_ORDERKEY 5.9 s against
+ * 14.7 s). A key of several columns, and every other warehouse, keep GROUP BY ... HAVING COUNT(*) > 1.
+ */
+export function repeatedKeyProbe(relation: string, keys: string[], driver?: string): { sql: string; counts: boolean } {
+  if (keys.length === 1 && driver === 'snowflake') {
+    const key = keys[0]!;
+    return { sql: `SELECT COUNT(${key}) AS key_rows, COUNT(DISTINCT ${key}) AS key_groups FROM ${relation}`, counts: true };
+  }
+  const key = keys.join(', ');
+  return { sql: `SELECT ${key} FROM ${relation} WHERE ${keys.map((column) => `${column} IS NOT NULL`).join(' AND ')} GROUP BY ${key} HAVING COUNT(*) > 1`, counts: false };
 }
 const kindNamesKey = (connection: ConnectionConfig, kinds: CodeKinds, scope: string) => `${scopedKey(connectionKey(connection), scope)}|${kinds.code.toLowerCase()}|${kinds.values.map((value) => value.first).join('')}`;
 /**
@@ -3605,6 +3629,43 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const share = (item: EmptyKeyJoin) => `${Math.round((item.empty / item.rows) * 100)}%`;
       const emptyKeyProblem = (item: EmptyKeyJoin) => `its join of ${item.table} and ${item.other} on ${item.columns.join(', ')} matches few rows: ${item.columns.join(', ')} is empty in ${item.empty.toLocaleString('en-US')} of ${item.rows.toLocaleString('en-US')} ${item.table} rows (${share(item)}); take ${item.columns.join(', ')} from a table where it is filled, or reach ${item.other} another way, and keep this join only if the question is about just the ${item.table} rows that have it`;
       const emptyKeyCaveat = (item: EmptyKeyJoin) => `caveat: ${item.columns.join(', ')} is empty in ${share(item)} of ${item.table} rows (${item.empty.toLocaleString('en-US')} of ${item.rows.toLocaleString('en-US')}), so the join to ${item.other} leaves most of them unmatched; no better way to link them was found`;
+      // A JOIN KEY THAT REPEATS is probed like an empty one. The ORDERS x CUSTOMER answer on Snowflake (26 Nov 2026)
+      // spent 6.6 s and then 1.3 s on its two repeat checks, one after the other, with no limit when the run had no
+      // budget. A statement's repeat checks now start at once, beside its empty-key counts, each within 8 s or what is
+      // left of the run (KEY_REPEAT_PROBE_DEADLINE_MS); a table and key is probed once per request. A probe that runs
+      // out of time or cannot be read is unknown (null): its join is not judged, and it never counts as a key without
+      // repeats.
+      const repeatProbes = new Map<string, Promise<boolean | null>>();
+      const keyRepeats = (relation: string, keys: string[]): Promise<boolean | null> => {
+        if (!connection || keys.length === 0) return Promise.resolve(null);
+        const id = `${physicalRelationIdentity(relation)}|${keys.map((key) => key.toLowerCase()).join(',')}`;
+        const started = repeatProbes.get(id);
+        if (started) return started;
+        const deadlineMs = keyProbeDeadlineMs(request.runBudget?.remainingMs(), KEY_REPEAT_PROBE_DEADLINE_MS);
+        if (deadlineMs === null) return Promise.resolve(null);
+        const probing = measureKeyRepeats(relation, keys, deadlineMs);
+        repeatProbes.set(id, probing);
+        return probing;
+      };
+      const measureKeyRepeats = async (relation: string, keys: string[], deadlineMs: number): Promise<boolean | null> => {
+        try {
+          if (!connection) return null;
+          const probe = repeatedKeyProbe(relation, keys.map(quoteKey), connection.driver);
+          const options = { maxRows: 1, deadlineMs, ...(request.signal ? { signal: request.signal } : {}) };
+          const result = deps.executor.executePositional
+            ? await deps.executor.executePositional(probe.sql, [], connection, options)
+            : await deps.executor.executeQuery(probe.sql, [], {}, connection, options);
+          if (!probe.counts) return (result.rows?.length ?? 0) > 0;
+          const row = result.rows?.[0] as Record<string, unknown> | undefined;
+          const value = (name: string) => Number(row ? Object.entries(row).find(([key]) => key.toLowerCase() === name)?.[1] : undefined);
+          const rows = value('key_rows');
+          const groups = value('key_groups');
+          return Number.isFinite(rows) && Number.isFinite(groups) ? rows > groups : null;
+        } catch {
+          return null;
+        }
+      };
+      const keyName = (relation: string, keys: string[]) => `${tableName(relation)?.replace(/"/g, '') ?? relation}.${keys.join(', ')}`;
       const failedChecks = async (sql: string): Promise<string[]> => {
         const failures: string[] = [];
         const shifted = new Set(shiftedYears(sql).map((item) => item.year));
@@ -3669,43 +3730,55 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         // when it matches one row per row; when its key repeats, every total
         // of the other tables is counted once per match.
         const totals = /\b(sum|avg|count)\s*\(\s*(?!distinct\b)/i.test(sql);
-        for (const join of unusedJoins(sql, completeColumnsOf)) {
+        const unused = unusedJoins(sql, completeColumnsOf);
+        // A join repeats rows when its WHOLE key repeats: the tuple of
+        // columns it matches on together, probed as one GROUP BY. A column
+        // of a composite key repeats on its own by design (a ball number
+        // recurs in every over), so probing it alone condemned correct
+        // joins on the full key.
+        const fanoutGroups = aggregatesRows(sql) ? joinKeyGroups(sql).slice(0, 3) : [];
+        // EVERY KEY PROBE OF THE STATEMENT STARTS AT ONCE: the repeat checks
+        // below, and the empty-key counts emptyKeyJoins reads after these
+        // checks. The checks wait for the slowest probe, never for their sum.
+        for (const join of unused) if (!join.left && totals && join.keys.length > 0) void keyRepeats(join.relation, join.keys);
+        for (const group of fanoutGroups) for (const side of [group.left, group.right]) void keyRepeats(side.relation, side.columns);
+        for (const group of joinKeyGroups(sql).slice(0, 3)) for (const side of [group.left, group.right]) void emptyKeyRows(side).catch(() => null);
+        // Keys a probe could not settle (too slow, or not readable): their
+        // joins are not judged, and the check says which.
+        const unchecked = new Set<string>();
+        for (const join of unused) {
           const name = tableName(join.relation)!.replace(/"/g, '');
           if (join.left) {
             failures.push(`it LEFT JOINs ${name} but uses none of its columns, so the join restricts nothing (a LEFT JOIN keeps every row) and can only repeat rows; if ${name} marks which rows count, join it with an inner join, otherwise leave it out`);
             continue;
           }
           if (!totals || join.keys.length === 0) continue;
-          const key = join.keys.map(quoteKey).join(', ');
-          let repeats = false;
-          try { repeats = await probeOne(`SELECT ${key} FROM ${join.relation} GROUP BY ${key} HAVING COUNT(*) > 1`); } catch { repeats = false; }
-          if (repeats) failures.push(`it joins ${name} but uses none of its columns, and ${name} has several rows per ${join.keys.join(', ')}, so every total is counted once per matching ${name} row; leave the join out, or aggregate ${name} at its own grain first if it restricts which rows count`);
+          const repeats = await keyRepeats(join.relation, join.keys);
+          if (repeats === null) unchecked.add(keyName(join.relation, join.keys));
+          if (repeats === true) failures.push(`it joins ${name} but uses none of its columns, and ${name} has several rows per ${join.keys.join(', ')}, so every total is counted once per matching ${name} row; leave the join out, or aggregate ${name} at its own grain first if it restricts which rows count`);
         }
         state.hostJoins = ledgerJoins(joinUses);
         const certifiedUses = joinUses.filter((use) => use.relationship?.level === 'certified');
-        if (aggregatesRows(sql)) {
-          // A join repeats rows when its WHOLE key repeats: the tuple of
-          // columns it matches on together, probed as one GROUP BY. A column
-          // of a composite key repeats on its own by design (a ball number
-          // recurs in every over), so probing it alone condemned correct
-          // joins on the full key.
-          for (const group of joinKeyGroups(sql).slice(0, 3)) {
-            const repeats = async (side: JoinKeyGroup['left']) => {
-              const key = side.columns.map(quoteKey).join(', ');
-              try { return await probeOne(`SELECT ${key} FROM ${side.relation} GROUP BY ${key} HAVING COUNT(*) > 1`); } catch { return false; }
-            };
-            const leftRepeats = await repeats(group.left);
-            const rightRepeats = await repeats(group.right);
-            const on = group.left.columns.map((column, index) => `${column} = ${group.right.columns[index]}`).join(' and ');
-            if (leftRepeats && rightRepeats) failures.push(`its join of ${group.left.relation} and ${group.right.relation} on ${on} repeats the key on both sides, so totals would count rows more than once`);
-            else if (leftRepeats !== rightRepeats) {
-              // ONE ROW PER KEY ON ONE SIDE, SEVERAL ON THE OTHER: a total of the
-              // one side's columns (an order's cost) is counted once per matching
-              // row of the other (each order item). It is aggregated at its own
-              // grain before the join, or the number is wrong.
-              const one = leftRepeats ? group.right : group.left;
-              const many = leftRepeats ? group.left : group.right;
-              if (one.qualifier && aggregatesColumnOf(sql, one.qualifier)) failures.push(`it aggregates columns of ${one.relation} (one row per ${one.columns.join(', ')}) across its join to ${many.relation}, which has several rows per ${many.columns.join(', ')}, so those totals count each ${one.relation} row once per ${many.relation} row; aggregate ${one.relation} at its own grain (a subquery or CTE) before joining`);
+        for (const group of fanoutGroups) {
+          const [leftRepeats, rightRepeats] = await Promise.all([keyRepeats(group.left.relation, group.left.columns), keyRepeats(group.right.relation, group.right.columns)]);
+          if (leftRepeats === null) unchecked.add(keyName(group.left.relation, group.left.columns));
+          if (rightRepeats === null) unchecked.add(keyName(group.right.relation, group.right.columns));
+          const on = group.left.columns.map((column, index) => `${column} = ${group.right.columns[index]}`).join(' and ');
+          if (leftRepeats === true && rightRepeats === true) failures.push(`its join of ${group.left.relation} and ${group.right.relation} on ${on} repeats the key on both sides, so totals would count rows more than once`);
+          else if (leftRepeats === true || rightRepeats === true) {
+            // ONE ROW PER KEY ON ONE SIDE, SEVERAL ON THE OTHER: a total of the
+            // one side's columns (an order's cost) is counted once per matching
+            // row of the other (each order item). It is aggregated at its own
+            // grain before the join, or the number is wrong. When the one
+            // side's probe did not settle, that holds whatever its grain, but
+            // "one row per key" is not said.
+            const one = leftRepeats === true ? group.right : group.left;
+            const many = leftRepeats === true ? group.left : group.right;
+            const oneSettled = (leftRepeats === true ? rightRepeats : leftRepeats) === false;
+            if (one.qualifier && aggregatesColumnOf(sql, one.qualifier)) {
+              failures.push(oneSettled
+                ? `it aggregates columns of ${one.relation} (one row per ${one.columns.join(', ')}) across its join to ${many.relation}, which has several rows per ${many.columns.join(', ')}, so those totals count each ${one.relation} row once per ${many.relation} row; aggregate ${one.relation} at its own grain (a subquery or CTE) before joining`
+                : `it aggregates columns of ${one.relation} across its join to ${many.relation}, which has several rows per ${many.columns.join(', ')}, so those totals can count each ${one.relation} row more than once; aggregate ${one.relation} at its own grain (a subquery or CTE) before joining`);
             }
           }
         }
@@ -3717,7 +3790,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           { id: 'catalog_columns', label: 'Uses only tables and columns the project lists', passed: true, message: 'every table and column it reads was inspected', attempt },
           { id: 'stated_values', label: 'Applies every value the question states', passed: !statedFailure, message: statedFailure ?? (stated.length ? `applies ${stated.map((item) => item.value).join(', ')}` : 'the question states no specific values'), attempt },
           ...(required.length ? [{ id: 'required_filters' as const, label: 'Applies the required filters', passed: missingRequired.length === 0, message: missingRequired.length ? `does not apply ${missingRequired.map((item) => item.text).join(', ')}` : `applies ${required.map((item) => item.text).join(', ')}`, attempt }] : []),
-          { id: 'join_fanout', label: 'Joins do not count rows more than once', passed: !joinFailure, message: joinFailure ?? 'no join multiplies the rows it totals', attempt },
+          { id: 'join_fanout', label: 'Joins do not count rows more than once', passed: !joinFailure, message: joinFailure ?? (unchecked.size ? `no join it could check multiplies the rows it totals; ${[...unchecked].join(', ')} could not be checked for repeats (too slow, or not readable)` : 'no join multiplies the rows it totals'), attempt },
           // Only a statement that joins certified tables carries this check.
           ...(certifiedUses.length ? [{ id: 'certified_joins' as const, label: 'Joins certified tables on their certified keys', passed: certifiedFailures.length === 0, message: certifiedFailures[0] ?? `joins on the keys of ${certifiedUses.map((use) => use.relationship!.name).join(', ')}`, attempt }] : []),
         );
