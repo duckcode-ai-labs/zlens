@@ -259,6 +259,26 @@ describe("the statement in a drafter's reply", () => {
     expect(draftedStatement(sentenceCase)).toBe(sentenceCase);
     expect(draftedStatement(`${words}\n\n\`\`\`sql\n${select}\n\`\`\`\nThat is the query.`)).toBe(select);
     expect(draftedStatement('```\nSELECT 1 FROM t\n```')).toBe('SELECT 1 FROM t');
+    expect(draftedStatement('```SQL\n  SELECT 1 FROM t\n```')).toBe('SELECT 1 FROM t');
+    // A fence that never closes is not a fence: the reply is read past its words, as any other.
+    expect(draftedStatement('```sql\nSELECT 1 FROM t')).toBe('SELECT 1 FROM t');
     expect(draftedStatement('')).toBe('');
+  });
+
+  it('a long hostile reply is read at once (CodeQL js/polynomial-redos)', () => {
+    // Each of these took from 0.9 s to several seconds with a fence pattern and a WITH test over the rest of the reply.
+    const hostile = [
+      '```' + ' '.repeat(100_000) + 'x',
+      `Words.\nwith ${' '.repeat(100_000)}a`,
+      `Words.\nwith ${'a'.repeat(100_000)}`,
+      `Words.\nWITH "${'a'.repeat(100_000)}`,
+      `Words.\n${'with x\n'.repeat(20_000)}SELECT 1 FROM t`,
+    ];
+    for (const reply of hostile) {
+      const started = performance.now();
+      draftedStatement(reply);
+      expect(performance.now() - started).toBeLessThan(50);
+    }
+    expect(draftedStatement(`Words.\n${'with x\n'.repeat(20_000)}SELECT 1 FROM t`)).toBe('SELECT 1 FROM t');
   });
 });

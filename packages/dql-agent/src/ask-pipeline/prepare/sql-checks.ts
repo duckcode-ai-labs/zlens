@@ -585,8 +585,32 @@ export function aggregatesRows(sql: string): boolean {
 
 /** A line that starts a statement other than a query, in any case: words before a query must not hold one. */
 const OTHER_STATEMENT = /^[ \t]*(?:insert|update|delete|drop|alter|create|merge|grant|revoke|truncate|call|copy|put|remove|use|set|begin|commit|rollback|execute|exec|show|describe|explain|pragma|attach|detach|vacuum|load|install|unload|replace|upsert)\b/i;
-/** WITH that opens a named subquery: `WITH totals AS (`, `WITH RECURSIVE t (n) AS (`, the name and AS on any line. "With every game counted once, …" is a sentence. */
-const NAMED_SUBQUERY = /^[ \t]*with\s+(?:recursive\s+)?(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)\s*(?:\([^)]*\)\s*)?as\s*(?:(?:not\s+)?materialized\s*)?\(/i;
+/**
+ * WITH that opens a named subquery: `WITH totals AS (`, `WITH RECURSIVE t (n) AS (`, the name and AS on any of the
+ * next lines. "With every game counted once, …" is a sentence. Every run is bounded, and it is only ever tested on a
+ * short window of the reply (opensNamedSubquery), so a long reply cannot make it slow.
+ */
+const NAMED_SUBQUERY = /^[ \t]*with\s+(?:recursive\s+)?(?:"[^"\n]{1,128}"|`[^`\n]{1,128}`|\[[^\]\n]{1,128}\]|[A-Za-z_][\w$]{0,127})\s*(?:\([^()]{0,200}\)\s*)?as\s*(?:not\s+)?(?:materialized\s*)?\(/i;
+/** How much of a reply a WITH line is read with: that line and the next two, at most this many characters. */
+const NAMED_SUBQUERY_WINDOW = 300;
+
+function opensNamedSubquery(lines: string[], index: number): boolean {
+  if (!/^[ \t]*with\b/i.test(lines[index]!)) return false;
+  return NAMED_SUBQUERY.test(lines.slice(index, index + 3).join('\n').slice(0, NAMED_SUBQUERY_WINDOW));
+}
+
+/**
+ * A fenced statement: what is between the first ``` and the next one, without a leading "sql". Read by position: a
+ * pattern for it (```(?:sql)?\s*([\s\S]*?)```) backtracks on a fence followed by a long run of spaces.
+ */
+function fencedStatement(reply: string): string | undefined {
+  const open = reply.indexOf('```');
+  if (open < 0) return undefined;
+  const close = reply.indexOf('```', open + 3);
+  if (close < 0) return undefined;
+  const body = reply.slice(open + 3, close);
+  return (/^sql/i.test(body) ? body.slice(3) : body).trim();
+}
 
 /**
  * THE STATEMENT IN A DRAFTER'S REPLY. The drafter is told to reply with the SQL only. Now and then the model writes a
@@ -599,11 +623,11 @@ const NAMED_SUBQUERY = /^[ \t]*with\s+(?:recursive\s+)?(?:"[^"]+"|`[^`]+`|\[[^\]
  * taken out: a second statement after it is still refused as one.
  */
 export function draftedStatement(reply: string): string {
-  const fenced = /```(?:sql)?\s*([\s\S]*?)```/i.exec(reply);
-  if (fenced) return fenced[1]!.trim();
+  const fenced = fencedStatement(reply);
+  if (fenced !== undefined) return fenced;
   const text = reply.trim();
   const lines = text.split('\n');
-  const start = lines.findIndex((line, index) => /^[ \t]*select\b/i.test(line) || NAMED_SUBQUERY.test(lines.slice(index).join('\n')));
+  const start = lines.findIndex((line, index) => /^[ \t]*select\b/i.test(line) || opensNamedSubquery(lines, index));
   if (start <= 0 || lines.slice(0, start).some((line) => OTHER_STATEMENT.test(line))) return text;
   return lines.slice(start).join('\n').trim();
 }

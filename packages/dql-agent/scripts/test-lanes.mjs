@@ -237,12 +237,12 @@ const EXPECTED_TEST_FILES = 202;
 // 2964 with Ask readiness (fix plan risk 3): its check, ready through Cortex SQL when REST is off, the grant with the
 // app's name, region, a named model, other and a time limit, and Check again (providers/cortex-ask-readiness.test.ts
 // +7), and Cortex failures named apart, cancel on give-up and model fallback by region (providers/claude-cortex.test.ts +8).
-// 2969 with the statement read past the words a drafter writes before it, and refused as before when it is not one
-// read-only query (ask-pipeline/prepare/sql-checks.test.ts +5; V18 gate).
-const EXPECTED_TESTS = 2969;
+// 2970 with the statement read past the words a drafter writes before it, refused as before when it is not one
+// read-only query, and read at once however long the reply (ask-pipeline/prepare/sql-checks.test.ts +6; V18 gate).
+const EXPECTED_TESTS = 2970;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2888.
+// The ordinary lane's share is the difference: 2889.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
