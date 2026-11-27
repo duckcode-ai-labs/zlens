@@ -619,28 +619,36 @@ export const MOSTLY_EMPTY_KEY_SHARE = 0.5;
  */
 export const KEY_PROBE_DEADLINE_MS = 5_000;
 /**
- * A key count's limit: the default, or what is left of a run's budget when that is less. Null when too little is
- * left to count anything (a deadline of 0 would read as none at all to a driver): the join is then not judged.
+ * How long one repeat check may take: what each had before the checks ran together (8 s), because a repeat missed
+ * lets a total counted more than once through, which is worse than a slower answer. An answer's checks run together,
+ * so it waits for the slowest, never their sum.
  */
-export function keyProbeDeadlineMs(remainingMs?: number): number | null {
-  const deadline = Math.min(KEY_PROBE_DEADLINE_MS, remainingMs ?? KEY_PROBE_DEADLINE_MS);
+export const KEY_REPEAT_PROBE_DEADLINE_MS = 8_000;
+/**
+ * A key probe's limit: its cap (a key count's 5 s by default), or what is left of a run's budget when that is less.
+ * Null when too little is left to probe anything (a deadline of 0 would read as none at all to a driver): the join
+ * is then not judged.
+ */
+export function keyProbeDeadlineMs(remainingMs?: number, cap = KEY_PROBE_DEADLINE_MS): number | null {
+  const deadline = Math.min(cap, remainingMs ?? cap);
   return deadline >= 250 ? deadline : null;
 }
 /**
  * The statement that says whether a join key repeats in a relation (keys quoted already), and whether it counts
- * (one row: key_rows against key_groups) or lists the keys that repeat. Snowflake counts a one-column key's groups
- * faster than it lists the keys that repeat (views over TPC-H SF100, X-Small, 27 Nov 2026: ORDERS.O_CUSTKEY 3.1 s
- * against 4.8 s, CUSTOMER.C_CUSTKEY 0.7 s against 1.2 s, LINEITEM.L_ORDERKEY 5.9 s against 14.7 s). Rows without the
- * key make one group, as GROUP BY makes them, so both forms give the same verdict. A key of several columns, and
- * every other warehouse, keep GROUP BY ... HAVING COUNT(*) > 1.
+ * (one row: key_rows against key_groups) or lists the keys that repeat. Rows without the key are left out: an
+ * equality join never matches them, so they cannot repeat a row (a key unique apart from several empty rows has no
+ * repeats; how many rows are empty is the empty-key check's). Snowflake counts a one-column key's values against
+ * its distinct values faster than it lists the keys that repeat (views over TPC-H SF100, X-Small, 27 Nov 2026:
+ * ORDERS.O_CUSTKEY 3.1 s against 4.8 s, CUSTOMER.C_CUSTKEY 0.7 s against 1.2 s, LINEITEM.L_ORDERKEY 5.9 s against
+ * 14.7 s). A key of several columns, and every other warehouse, keep GROUP BY ... HAVING COUNT(*) > 1.
  */
 export function repeatedKeyProbe(relation: string, keys: string[], driver?: string): { sql: string; counts: boolean } {
   if (keys.length === 1 && driver === 'snowflake') {
     const key = keys[0]!;
-    return { sql: `SELECT COUNT(*) AS key_rows, COUNT(DISTINCT ${key}) + CASE WHEN COUNT(*) > COUNT(${key}) THEN 1 ELSE 0 END AS key_groups FROM ${relation}`, counts: true };
+    return { sql: `SELECT COUNT(${key}) AS key_rows, COUNT(DISTINCT ${key}) AS key_groups FROM ${relation}`, counts: true };
   }
   const key = keys.join(', ');
-  return { sql: `SELECT ${key} FROM ${relation} GROUP BY ${key} HAVING COUNT(*) > 1`, counts: false };
+  return { sql: `SELECT ${key} FROM ${relation} WHERE ${keys.map((column) => `${column} IS NOT NULL`).join(' AND ')} GROUP BY ${key} HAVING COUNT(*) > 1`, counts: false };
 }
 const kindNamesKey = (connection: ConnectionConfig, kinds: CodeKinds, scope: string) => `${scopedKey(connectionKey(connection), scope)}|${kinds.code.toLowerCase()}|${kinds.values.map((value) => value.first).join('')}`;
 /**
@@ -3623,16 +3631,17 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const emptyKeyCaveat = (item: EmptyKeyJoin) => `caveat: ${item.columns.join(', ')} is empty in ${share(item)} of ${item.table} rows (${item.empty.toLocaleString('en-US')} of ${item.rows.toLocaleString('en-US')}), so the join to ${item.other} leaves most of them unmatched; no better way to link them was found`;
       // A JOIN KEY THAT REPEATS is probed like an empty one. The ORDERS x CUSTOMER answer on Snowflake (26 Nov 2026)
       // spent 6.6 s and then 1.3 s on its two repeat checks, one after the other, with no limit when the run had no
-      // budget. A statement's repeat checks now start at once, beside its empty-key counts, each within the same limit
-      // (keyProbeDeadlineMs); a table and key is probed once per request. A probe that runs out of time or cannot be
-      // read is unknown (null): its join is not judged, and it never counts as a key without repeats.
+      // budget. A statement's repeat checks now start at once, beside its empty-key counts, each within 8 s or what is
+      // left of the run (KEY_REPEAT_PROBE_DEADLINE_MS); a table and key is probed once per request. A probe that runs
+      // out of time or cannot be read is unknown (null): its join is not judged, and it never counts as a key without
+      // repeats.
       const repeatProbes = new Map<string, Promise<boolean | null>>();
       const keyRepeats = (relation: string, keys: string[]): Promise<boolean | null> => {
         if (!connection || keys.length === 0) return Promise.resolve(null);
         const id = `${physicalRelationIdentity(relation)}|${keys.map((key) => key.toLowerCase()).join(',')}`;
         const started = repeatProbes.get(id);
         if (started) return started;
-        const deadlineMs = keyProbeDeadlineMs(request.runBudget?.remainingMs());
+        const deadlineMs = keyProbeDeadlineMs(request.runBudget?.remainingMs(), KEY_REPEAT_PROBE_DEADLINE_MS);
         if (deadlineMs === null) return Promise.resolve(null);
         const probing = measureKeyRepeats(relation, keys, deadlineMs);
         repeatProbes.set(id, probing);

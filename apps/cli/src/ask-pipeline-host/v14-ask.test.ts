@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentMessage, AgentProvider, AgentRunRequest } from '@zlens/agent';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { createAskPipelineRouteExecutor, keyProbeDeadlineMs, repeatedKeyProbe } from './host.js';
+import { createAskPipelineRouteExecutor, KEY_REPEAT_PROBE_DEADLINE_MS, keyProbeDeadlineMs, repeatedKeyProbe } from './host.js';
 import { askedThings, keyLabels, unlistedAskedThings, unlistedThingFailure, unnamedGroupingKeys, type KeyReference } from './key-labels.js';
+
+/** Node's own SQLite, a real engine for the repeat checks' SQL where the Node running the tests has it (22 and later). */
+const sqliteModule = 'node:sqlite';
+const sqlite = await import(sqliteModule).catch(() => undefined) as { DatabaseSync: new (path: string) => { exec(sql: string): void; prepare(sql: string): { all(): Array<Record<string, unknown>> }; close(): void } } | undefined;
 
 /**
  * The V14 Ask fixes on the host, over a small NBA-shaped project (new-user test V13 of the ZLens app for Snowflake):
@@ -69,16 +73,53 @@ describe('a join key count always has a limit (fast on big tables)', () => {
     expect(keyProbeDeadlineMs(-5)).toBeNull();
   });
 
-  it('a repeat check on Snowflake counts a one-column key against its groups; a key of several columns, or another warehouse, lists the keys that repeat', () => {
+  it('a repeat check keeps the 8 s each had before, or what is left of a run that has less', () => {
+    expect(KEY_REPEAT_PROBE_DEADLINE_MS).toBe(8_000);
+    expect(keyProbeDeadlineMs(undefined, KEY_REPEAT_PROBE_DEADLINE_MS)).toBe(8_000);
+    expect(keyProbeDeadlineMs(60_000, KEY_REPEAT_PROBE_DEADLINE_MS)).toBe(8_000);
+    expect(keyProbeDeadlineMs(6_500, KEY_REPEAT_PROBE_DEADLINE_MS)).toBe(6_500);
+    expect(keyProbeDeadlineMs(100, KEY_REPEAT_PROBE_DEADLINE_MS)).toBeNull();
+  });
+
+  it('a repeat check on Snowflake counts a one-column key against its distinct values; a key of several columns, or another warehouse, lists the keys that repeat', () => {
     expect(repeatedKeyProbe('DB.S.ORDERS', ['"O_CUSTKEY"'], 'snowflake')).toEqual({
-      sql: 'SELECT COUNT(*) AS key_rows, COUNT(DISTINCT "O_CUSTKEY") + CASE WHEN COUNT(*) > COUNT("O_CUSTKEY") THEN 1 ELSE 0 END AS key_groups FROM DB.S.ORDERS',
+      sql: 'SELECT COUNT("O_CUSTKEY") AS key_rows, COUNT(DISTINCT "O_CUSTKEY") AS key_groups FROM DB.S.ORDERS',
       counts: true,
     });
     expect(repeatedKeyProbe('DB.S.LINEITEM', ['"L_ORDERKEY"', '"L_LINENUMBER"'], 'snowflake')).toEqual({
-      sql: 'SELECT "L_ORDERKEY", "L_LINENUMBER" FROM DB.S.LINEITEM GROUP BY "L_ORDERKEY", "L_LINENUMBER" HAVING COUNT(*) > 1',
+      sql: 'SELECT "L_ORDERKEY", "L_LINENUMBER" FROM DB.S.LINEITEM WHERE "L_ORDERKEY" IS NOT NULL AND "L_LINENUMBER" IS NOT NULL GROUP BY "L_ORDERKEY", "L_LINENUMBER" HAVING COUNT(*) > 1',
       counts: false,
     });
-    expect(repeatedKeyProbe('dev.teams', ['"team_id"'], 'duckdb')).toEqual({ sql: 'SELECT "team_id" FROM dev.teams GROUP BY "team_id" HAVING COUNT(*) > 1', counts: false });
+    expect(repeatedKeyProbe('dev.teams', ['"team_id"'], 'duckdb')).toEqual({ sql: 'SELECT "team_id" FROM dev.teams WHERE "team_id" IS NOT NULL GROUP BY "team_id" HAVING COUNT(*) > 1', counts: false });
+  });
+
+  // On a real engine: Node's own SQLite, where the Node running the tests has it (22 and later; skipped on 20).
+  (sqlite ? it : it.skip)('rows without the key are never repeats: an equality join cannot match them (both forms, one column and two)', () => {
+    const db = new sqlite!.DatabaseSync(':memory:');
+    try {
+      db.exec(`
+        CREATE TABLE unique_but_empty (k INTEGER, n INTEGER);
+        INSERT INTO unique_but_empty VALUES (1, 1), (2, 1), (NULL, 1), (NULL, 1), (NULL, 2);
+        CREATE TABLE repeats (k INTEGER, n INTEGER);
+        INSERT INTO repeats VALUES (1, 1), (1, 1), (2, 1), (NULL, 1);
+        CREATE TABLE all_empty (k INTEGER, n INTEGER);
+        INSERT INTO all_empty VALUES (NULL, 1), (NULL, 1);`);
+      const repeatsIn = (relation: string, keys: string[], driver: string) => {
+        const probe = repeatedKeyProbe(relation, keys, driver);
+        const rows = db.prepare(probe.sql).all();
+        return probe.counts ? Number(rows[0]!.key_rows) > Number(rows[0]!.key_groups) : rows.length > 0;
+      };
+      for (const driver of ['snowflake', 'duckdb']) {
+        expect(repeatsIn('unique_but_empty', ['"k"'], driver)).toBe(false);
+        expect(repeatsIn('all_empty', ['"k"'], driver)).toBe(false);
+        expect(repeatsIn('repeats', ['"k"'], driver)).toBe(true);
+        // Two columns: (NULL, 1) twice is no repeated pair; (1, 1) twice is.
+        expect(repeatsIn('unique_but_empty', ['"k"', '"n"'], driver)).toBe(false);
+        expect(repeatsIn('repeats', ['"k"', '"n"'], driver)).toBe(true);
+      }
+    } finally {
+      db.close();
+    }
   });
 });
 
@@ -240,7 +281,7 @@ describe('on the host: the Durant answer lists team names by season', () => {
   // The same tables seen through another role: their empty-key counts are not remembered from the tests above.
   const freshRole = (role: string) => ({ ...connection, role }) as ConnectionConfig;
 
-  it('checks every join key for repeats at once, beside the empty-key counts, within 5 s each and once per key', async () => {
+  it('checks every join key for repeats at once, beside the empty-key counts, within 8 s each and once per key', async () => {
     const prompts: string[] = [];
     repeatProbes.length = 0;
     mostRepeatsAtOnce = 0;
@@ -250,18 +291,18 @@ describe('on the host: the Durant answer lists team names by season', () => {
     expect(result.status).toBe('completed');
     // Six sides: two one-column joins and one on two columns, each side probed once although the checks ran twice.
     expect(repeatProbes.map((probe) => probe.sql).sort()).toEqual([
-      `SELECT "player_id" FROM ${JOURNEY} GROUP BY "player_id" HAVING COUNT(*) > 1`,
-      `SELECT "player_id" FROM ${PLAYER_GAMES} GROUP BY "player_id" HAVING COUNT(*) > 1`,
-      `SELECT "player_id", "season" FROM ${PLAYER_GAMES} GROUP BY "player_id", "season" HAVING COUNT(*) > 1`,
-      `SELECT "player_id", "season" FROM ${PLAYER_SEASONS} GROUP BY "player_id", "season" HAVING COUNT(*) > 1`,
-      `SELECT "team_id" FROM ${PLAYER_GAMES} GROUP BY "team_id" HAVING COUNT(*) > 1`,
-      `SELECT "team_id" FROM ${TEAMS} GROUP BY "team_id" HAVING COUNT(*) > 1`,
+      `SELECT "player_id" FROM ${JOURNEY} WHERE "player_id" IS NOT NULL GROUP BY "player_id" HAVING COUNT(*) > 1`,
+      `SELECT "player_id" FROM ${PLAYER_GAMES} WHERE "player_id" IS NOT NULL GROUP BY "player_id" HAVING COUNT(*) > 1`,
+      `SELECT "player_id", "season" FROM ${PLAYER_GAMES} WHERE "player_id" IS NOT NULL AND "season" IS NOT NULL GROUP BY "player_id", "season" HAVING COUNT(*) > 1`,
+      `SELECT "player_id", "season" FROM ${PLAYER_SEASONS} WHERE "player_id" IS NOT NULL AND "season" IS NOT NULL GROUP BY "player_id", "season" HAVING COUNT(*) > 1`,
+      `SELECT "team_id" FROM ${PLAYER_GAMES} WHERE "team_id" IS NOT NULL GROUP BY "team_id" HAVING COUNT(*) > 1`,
+      `SELECT "team_id" FROM ${TEAMS} WHERE "team_id" IS NOT NULL GROUP BY "team_id" HAVING COUNT(*) > 1`,
     ].sort());
     // Together, not one after another, and while the empty-key counts run.
     expect(mostRepeatsAtOnce).toBe(6);
     expect(repeatBesideCount).toBe(true);
-    // Every one has a limit; with no run budget it is the default 5 s.
-    expect(repeatProbes.every((probe) => probe.deadlineMs === 5_000)).toBe(true);
+    // Every one has a limit; with no run budget it is the 8 s each had before (the empty-key counts keep 5 s).
+    expect(repeatProbes.every((probe) => probe.deadlineMs === 8_000)).toBe(true);
     const fanout = (result.askPipelineReceipt?.checks ?? []).filter((check) => check.id === 'join_fanout');
     expect(fanout.at(-1)).toMatchObject({ passed: true, message: 'no join multiplies the rows it totals' });
   });
@@ -270,7 +311,7 @@ describe('on the host: the Durant answer lists team names by season', () => {
     const prompts: string[] = [];
     // The games repeat team_id; the teams' check runs out of time.
     repeatRows = (sql) => {
-      if (sql.includes(TEAMS)) throw new Error('statement reached its 5 s limit');
+      if (sql.includes(TEAMS)) throw new Error('statement reached its 8 s limit');
       return sql.includes(PLAYER_GAMES) ? [{ team_id: 1610612760 }] : [];
     };
     try {
@@ -294,7 +335,7 @@ describe('on the host: the Durant answer lists team names by season', () => {
   });
 
   it('a repeat check that fails on both sides passes nothing and condemns nothing: the join is not judged', async () => {
-    repeatRows = () => { throw new Error('statement reached its 5 s limit'); };
+    repeatRows = () => { throw new Error('statement reached its 8 s limit'); };
     try {
       const prompts: string[] = [];
       const result = await ask(routeFor(reading, [NAMES], prompts, freshRole('repeats-unknown')), question);
