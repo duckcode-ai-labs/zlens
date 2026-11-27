@@ -18,7 +18,8 @@ GRANT USAGE ON SCHEMA app_public TO APPLICATION ROLE app_user;
 -- ZLENS_BACKUP_STAGE above ZLENS_USER, as SHOW CONFIGURATIONS does (by name, it seems; Snowflake documents no
 -- order and no way to set one). In the V18 test a first-time admin typed the user into the backup stage.
 -- Renaming either would lose the values installed apps hold, so each description says first whether it is
--- required, and the README and the launcher name the user's row.
+-- required, and the README and the launcher name the user's row. The stage's description stays no longer than the
+-- 224 characters V18 installed with (Snowflake documents no limit for it; privilege descriptions stop at 200).
 ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_user
   TYPE = STRING
   LABEL = 'Snowflake user who uses ZLens'
@@ -32,7 +33,7 @@ ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_user
 ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_backup_stage
   TYPE = STRING
   LABEL = 'Stage for ZLens backups (optional)'
-  DESCRIPTION = 'Optional: leave it empty unless you made a backup stage. A stage name, not a user: MY_DB.MY_SCHEMA.ZLENS_BACKUPS. First grant this app USAGE on its database, USAGE on its schema, and READ, WRITE on the stage. ZLens copies its projects there daily.'
+  DESCRIPTION = 'Optional: leave it empty unless you made a backup stage. A stage name, not a user: MY_DB.MY_SCHEMA.ZLENS_BACKUPS. Grant this app USAGE on its database, USAGE on its schema, and READ, WRITE on the stage.'
   APPLICATION_ROLES = (app_admin)
   SENSITIVE = FALSE;
 
