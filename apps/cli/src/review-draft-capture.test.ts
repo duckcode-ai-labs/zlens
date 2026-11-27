@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentRun } from '@zlens/agent';
+import { collectInputFiles } from '@zlens/core';
 import { askedQuestionOf, captureReviewRequiredDraft, reviewRequiredAnswerOf, standaloneQuestionOf } from './review-draft-capture.js';
 
 const roots: string[] = [];
@@ -127,5 +128,23 @@ describe('every Tier-2 (review-required) Ask answer leaves a durable draft', () 
     expect(again).toMatchObject({ path: first!.path, created: false, askedTimes: 2 });
     // After another question, the same words are another question.
     expect(captureReviewRequiredDraft(root, followUp('run-7', 'Of the 3 teams with the most rebounds, which had a winning record?'), { priorQuestion: 'Which 3 teams had the most rebounds?' })!.created).toBe(true);
+  });
+});
+
+describe('the app asks for no draft of its own (the trust flow approved 2026-11-27)', () => {
+  it('a draft is a project source: one written on its own made a model review opened before it go stale', () => {
+    // V18 test: three Ask answers each kept a draft, then "Accept all that passed" on the model review failed with
+    // "Project sources changed before the authoring proposal was previewed". The review checks the project
+    // snapshot, read from these input files, so an Ask answer must not add one unless the person presses Save.
+    // The browser sends reviewDraftCapture: "off" (client.test.ts); the server writes nothing then.
+    const root = project();
+    const before = collectInputFiles({ projectRoot: root });
+    const saved = captureReviewRequiredDraft(root, run());
+    expect(saved?.path).toMatch(/^blocks\/_drafts\//);
+    const after = collectInputFiles({ projectRoot: root });
+    expect(after).toHaveLength(before.length + 1);
+    const added = after.filter((file) => !before.includes(file)).map((file) => file.replace(/\\/g, '/'));
+    expect(added).toHaveLength(1);
+    expect(added[0]!.endsWith(`/${saved!.path}`)).toBe(true);
   });
 });

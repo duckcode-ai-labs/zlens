@@ -1,7 +1,7 @@
 import { askQuestion, waitForAnswer } from './support/ask';
 import { clip, expect, openAndRecord } from './support/clip-test';
 
-/** Ask: no certified block fits, so the answer is AI-generated, needs review, and is saved as a draft block. */
+/** Ask: no certified block fits, so the answer is AI-generated; Save keeps it as a draft to review and certify. */
 clip('ask-review', async ({ page, sample, director }) => {
   const server = await sample.serve(sample.freshProject());
   await openAndRecord(page, director, server.baseUrl);
@@ -20,10 +20,16 @@ clip('ask-review', async ({ page, sample, director }) => {
   await director.point(label);
   await director.beat(1400);
   director.poster();
-  const saved = page.getByText(/Saved as a draft saved query for review/).first();
+  // Ask saves nothing on its own: Save as saved query asks for the name and owner, then keeps a draft.
+  await director.click(page.getByRole('button', { name: 'Save as saved query' }).last(), { after: 900 });
+  const dialog = page.getByRole('dialog', { name: 'Save as a draft' });
+  await expect(dialog).toBeVisible();
+  await director.beat(1200);
+  await director.click(dialog.getByRole('button', { name: 'Save draft' }), { after: 900 });
+  const saved = page.getByText('Saved as a draft.', { exact: true }).last();
   await expect(saved).toBeVisible();
-  await director.point(saved, { x: 120, y: 8 });
+  await director.point(saved, { x: 60, y: 8 });
   await director.beat(1600);
 
-  await director.click(page.getByRole('button', { name: 'Open draft to review' }).last(), { after: 2800 });
+  await director.click(page.getByRole('button', { name: 'Review it' }).last(), { after: 2800 });
 });

@@ -81,9 +81,9 @@ import { AppBuildProposalPanel, OPEN_IN_APP_STUDIO_LABEL, defaultProposalSelecti
 import { openAppProposalInStudio } from '../apps/app-studio-handoff';
 import { ResultView } from '../output/ResultView';
 import { DraftReviewCard } from '../blocks/DraftReviewCard';
-import { draftNameFromPath, savedQueryNameFromQuestion } from '../blocks/block-types';
+import { savedQueryNameFromQuestion } from '../blocks/block-types';
 import { useSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
-import { clarificationChoiceWords, draftNameTooltip } from '../../snowflake-app/snowflake-app-words';
+import { clarificationChoiceWords } from '../../snowflake-app/snowflake-app-words';
 import { SaveAsBlockModal } from '../modals/SaveAsBlockModal';
 import { BlockParameterControls, isRuntimeEditableParameter } from '../parameters/BlockParameterControls';
 export { deriveResultChartConfig } from '../output/ResultView';
@@ -447,6 +447,8 @@ export function UnifiedAgentRunPanel({
   const [running, setRunning] = useState(false);
   const [backgroundRun, setBackgroundRun] = useState<PendingAgentRun | null>(null);
   const [blockToSave, setBlockToSave] = useState<AgentBlockSave | null>(null);
+  // The answers saved from this thread, by run: each says "Saved as a draft. Review it" (Ask saves only on Save).
+  const [savedDrafts, setSavedDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   // The composer "thinking" selection, sticky across refreshes. `auto` defers to
   // the engine's shape-adaptive routing; the user can change it mid-conversation.
@@ -1277,8 +1279,13 @@ export function UnifiedAgentRunPanel({
             initialContent={blockToSave.source}
             initialName={blockToSave.name}
             aiQuestion={blockToSave.question}
+            variant="ask"
             onClose={() => setBlockToSave(null)}
-            onSaved={() => setBlockToSave(null)}
+            onSaved={(saved) => {
+              const runId = blockToSave.runId;
+              setSavedDrafts((current) => ({ ...current, [runId]: saved.path }));
+              setBlockToSave(null);
+            }}
           />
         ) : null}
         <style>{ASK_KEYFRAMES}</style>
@@ -1346,6 +1353,7 @@ export function UnifiedAgentRunPanel({
                   }}
                   onNextAction={(action) => handleNextAction(item.run, action)}
                   onRepairedRun={adoptRepairedRun}
+                  savedDraftPath={savedDrafts[item.run.id]}
                 />
               ))}
 
@@ -1453,8 +1461,13 @@ export function UnifiedAgentRunPanel({
           initialContent={blockToSave.source}
           initialName={blockToSave.name}
           aiQuestion={blockToSave.question}
+          variant="ask"
           onClose={() => setBlockToSave(null)}
-          onSaved={() => setBlockToSave(null)}
+          onSaved={(saved) => {
+            const runId = blockToSave.runId;
+            setSavedDrafts((current) => ({ ...current, [runId]: saved.path }));
+            setBlockToSave(null);
+          }}
         />
       ) : null}
       <style>{`
@@ -1513,6 +1526,7 @@ export function UnifiedAgentRunPanel({
             }}
             onNextAction={(action) => handleNextAction(item.run, action)}
             onRepairedRun={adoptRepairedRun}
+            savedDraftPath={savedDrafts[item.run.id]}
           />
         ) : (
           <RunCard
@@ -1531,6 +1545,7 @@ export function UnifiedAgentRunPanel({
               void submit(selection.question, undefined, selection.selectedEvidenceId, item.run.question);
             }}
             onNextAction={(action) => handleNextAction(item.run, action)}
+            savedDraftPath={savedDrafts[item.run.id]}
           />
         ))}
 
@@ -2471,10 +2486,12 @@ function RunCard({
   onOpenResearch,
   onSelectClarification,
   onNextAction,
+  savedDraftPath,
 }: {
   run: AgentRun;
   t: Theme;
   themeMode: ThemeMode;
+  savedDraftPath?: string;
   appContext?: { appId?: string; dashboardId?: string; dashboardTitle?: string };
   onOpenApp?: (appId: string, dashboardId?: string, draftId?: string) => void;
   onInsertSql?: (sql: string, title?: string, meta?: SqlNotebookDraftMeta) => void;
@@ -2673,6 +2690,8 @@ function RunCard({
 
       {/* RFC 0010 HH-9: the host's actions on an answer that needs review. */}
       <HostAnswerActions run={run} t={t} />
+
+      {savedDraftPath ? <SavedDraftNotice path={savedDraftPath} t={t} onOpenBlock={onOpenBlock} /> : null}
 
       {(pinnable || showResearchDeeper || run.nextActions.length > 0) ? (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -3178,6 +3197,8 @@ interface AskRunCardProps {
   onSelectClarification?: (option: AgentRunClarificationOption) => void;
   onNextAction: (action: AgentRun['nextActions'][number]) => void;
   onRepairedRun: (sourceRunId: string, repairedRun: AgentRun) => void;
+  /** Where this answer was saved from here, if it was: the answer then says "Saved as a draft. Review it". */
+  savedDraftPath?: string;
 }
 
 /**
@@ -3249,6 +3270,34 @@ export function askRunAnswerPayload(run: Pick<AgentRun, 'artifacts'>): Record<st
   return primary ? payloadOf(primary) : {};
 }
 
+/**
+ * An answer saved with Save as saved query: a draft until a person reviews and certifies it in Saved queries.
+ * Ask saves nothing on its own (the trust flow approved 2026-11-27), so this shows only after Save.
+ */
+export function SavedDraftNotice({ path, t, onOpenBlock }: { path: string; t: Theme; onOpenBlock?: (path: string, name?: string) => void }) {
+  const { dispatch } = useNotebook();
+  return (
+    <div data-testid="ask-saved-draft" role="status" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12, color: t.textMuted, marginTop: -2, marginBottom: 4 }}>
+      <span>Saved as a draft.</span>
+      <button
+        type="button"
+        className="dql-ask-ghost"
+        onClick={() => {
+          if (onOpenBlock) {
+            onOpenBlock(path);
+            return;
+          }
+          const file = { name: path.split('/').pop() ?? path, path, type: 'block' as const, folder: 'blocks' };
+          void api.openBlockStudio(path).then((payload) => dispatch({ type: 'OPEN_BLOCK_STUDIO', file, payload })).catch(() => undefined);
+        }}
+        style={askGhostBtnStyle(t)}
+      >
+        <Blocks size={12} /> Review it
+      </button>
+    </div>
+  );
+}
+
 function AskRunCard(props: AskRunCardProps) {
   const {
   run,
@@ -3269,6 +3318,7 @@ function AskRunCard(props: AskRunCardProps) {
   onSelectClarification,
   onNextAction,
   onRepairedRun,
+  savedDraftPath,
   } = props;
   const { dispatch } = useNotebook();
   const hostUiState = useHostUi();
@@ -3504,31 +3554,8 @@ function AskRunCard(props: AskRunCardProps) {
       {/* RFC 0010 HH-9/HH-10: the host's review of this answer, or its actions for getting one. */}
       <HostAnswerActions run={run} t={t} />
 
-      {/* Tier 2: a review-required answer leaves a draft block for review. */}
-      {run.reviewDraft?.path ? (
-        <div data-testid="ask-review-draft" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, color: t.textMuted, marginTop: -2, marginBottom: 4 }}>
-          <span>
-            Saved as a draft saved query for review (not certified): <code title={draftNameTooltip(run.reviewDraft.path, snowflakeApp)} style={{ fontFamily: t.fontMono, fontSize: 11, overflowWrap: 'anywhere' }}>{draftNameFromPath(run.reviewDraft.path)}</code>
-            {run.reviewDraft.created ? '' : ` · asked ${run.reviewDraft.askedTimes} times`}
-          </span>
-          <button
-            type="button"
-            className="dql-ask-ghost"
-            onClick={() => {
-              const path = run.reviewDraft!.path;
-              if (onOpenBlock) {
-                onOpenBlock(path);
-                return;
-              }
-              const file = { name: path.split('/').pop() ?? path, path, type: 'block' as const, folder: 'blocks' };
-              void api.openBlockStudio(path).then((payload) => dispatch({ type: 'OPEN_BLOCK_STUDIO', file, payload })).catch(() => undefined);
-            }}
-            style={askGhostBtnStyle(t)}
-          >
-            <Blocks size={12} /> Open draft to review
-          </button>
-        </div>
-      ) : null}
+      {/* Saved from here with Save as saved query: a draft, reviewed and certified in Saved queries. */}
+      {savedDraftPath ? <SavedDraftNotice path={savedDraftPath} t={t} onOpenBlock={onOpenBlock} /> : null}
 
       {/* Quiet action row */}
       {(presentationAnswer || failureMessage || insertionPayload || pinnable || canSaveBlock || showResearchDeeper || primaryArtifact) ? (

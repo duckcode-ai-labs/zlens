@@ -28,8 +28,6 @@ import { isSnowflakeApp } from '../../snowflake-app/snowflake-app-mode';
 
 // A Home that summarises (RFC 0010 HH-16) loads after Ask, never before it.
 const HomeSummary = React.lazy(() => import('./HomeSummary').then((module) => ({ default: module.HomeSummary })));
-// The certify-first guide (fewer than ten saved queries certified) loads the same way.
-const CertifyFirstCard = React.lazy(() => import('./CertifyFirstCard').then((module) => ({ default: module.CertifyFirstCard })));
 
 /**
  * Analytics Home — the stakeholder ChatGPT-style entry. Text→SQL questions run
@@ -830,9 +828,6 @@ export function AnalyticsHome() {
   // run id and reconnects on remount, but keeping the selected conversation stable
   // still avoids an unnecessary context switch while an answer is in progress.
   const [isRunning, setIsRunning] = useState(false);
-  // A question the certify-first guide sends to Ask: asked at once, in the chat it was sent from and only there
-  // (another chat's panel must never ask it again when it mounts).
-  const [guideAsk, setGuideAsk] = useState<{ text: string; nonce: number; panel: string } | undefined>(undefined);
 
   useEffect(() => {
     activeIdRef.current = activeId;
@@ -1111,7 +1106,6 @@ export function AnalyticsHome() {
         {/* Above Ask on a new chat: my Apps, what moved, and what the host adds. */}
         {historyVerified && activeItems.length === 0 ? (
           <React.Suspense fallback={null}>
-            <CertifyFirstCard onAsk={(text) => setGuideAsk({ text, nonce: Date.now(), panel: `${activeId}:${conversationEpoch}` })} />
             <HomeSummary />
           </React.Suspense>
         ) : null}
@@ -1132,16 +1126,11 @@ export function AnalyticsHome() {
             workspaceContext={domainContext}
             audience="stakeholder"
             initialMode="auto"
-            autoRun={guideAsk?.panel === `${activeId}:${conversationEpoch}` ? guideAsk : undefined}
             initialItems={activeItems}
             onItemsChange={handleItemsChange}
             threadId={activeThreadId}
             onThreadIdChange={handleThreadIdChange}
-            onRunningChange={(running) => {
-              setIsRunning(running);
-              // Asked once: a later mount of this chat's panel must not ask it again.
-              if (running) setGuideAsk(undefined);
-            }}
+            onRunningChange={setIsRunning}
             onOpenResearch={openResearch}
             onOpenApp={openApp}
             onInsertSql={(sql, title, meta?: SqlNotebookDraftMeta) => openEditableNotebookCell({
