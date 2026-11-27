@@ -126,8 +126,11 @@ describe('"Not in this data" says what is missing in plain words (V2, listing re
       .toBe('None of the tables Ask can read has payroll data, but player salaries are not tracked either');
     // "as of" is not a reason: it stays with what is missing.
     expect(plainDeclineReason('No listed table holds standings as of 2019')).toBe('None of the tables Ask can read has standings as of 2019');
-    // A sentence these patterns do not know never leaves "or columns" behind, and keeps its capital.
-    expect(plainDeclineReason('The listed tables or columns say nothing about ticket prices')).toBe('The tables Ask can read say nothing about ticket prices');
+    // A sentence these patterns do not know never leaves "or columns" behind.
+    expect(plainDeclineReason('The listed tables or columns say nothing about ticket prices')).toBe('the tables Ask can read say nothing about ticket prices');
+    // Without the drafter's "listed", a short decline keeps its words, and how far Ask looked follows it.
+    expect(plainDeclineReason('no column holds the discount rate (Ask looked through every table it can read, and no other table has a column for it)'))
+      .toBe('no column holds the discount rate. Ask looked through every table it can read, and no other table has a column for it');
   });
 
   it('the answer, its gap and its steps read the plain sentence', async () => {

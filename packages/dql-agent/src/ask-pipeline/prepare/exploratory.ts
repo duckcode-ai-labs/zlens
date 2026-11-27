@@ -35,8 +35,12 @@ const TABLES = String.raw`(?:relations?|tables?|schemas?|columns?|fields?|data ?
 const NO_COLUMN_HOLDS = new RegExp(String.raw`^(?:there (?:is|are) )?no (?:${TABLES})(?: or (?:${TABLES}))? (?:in|among|across|of|from) (?:the |any of the |any )?(?:${LISTED} )?${TABLES}(?: (?:listed|provided|given|above))? ${HOLDS} (?:any )?(.+)$`, 'i');
 /** "None of the listed tables contain payroll data", "The provided relations do not include payroll", "None of the listed tables or columns hold payroll". */
 const NONE_HOLDS = new RegExp(String.raw`^(?:none of the|the) (?:${LISTED} )?${TABLES}(?: or (?:${TABLES}))?(?: (?:listed|provided|given|above))? (?:(?:do|does) not |don't |doesn't )?${HOLDS} (?:any )?(.+)$`, 'i');
-/** "No listed table or column holds advertising spend" (V18 test, the advertising answer). */
-const NO_TABLE_HOLDS = new RegExp(String.raw`^no (?:${LISTED} )?${TABLES}(?: or (?:${TABLES}))? ${HOLDS} (?:any )?(.+)$`, 'i');
+/**
+ * "No listed table or column holds advertising spend" (V18 test, the advertising answer). Only with the drafter's
+ * word for what it was shown ("listed", "provided" …): "no column holds the discount rate" keeps its words, and how
+ * far Ask looked follows it.
+ */
+const NO_TABLE_HOLDS = new RegExp(String.raw`^no ${LISTED} ${TABLES}(?: or (?:${TABLES}))? ${HOLDS} (?:any )?(.+)$`, 'i');
 /**
  * Where what is missing ends and the drafter's reason begins: "advertising spend, since the data covers only NBA
  * games" (V18 test: the whole clause was once left in the drafter's terms, "None of the tables Ask can read or
@@ -90,8 +94,7 @@ export function plainDeclineReason(message: string): string {
     // "Every table it can read" is what the sentence already says.
     return looked && !everyTable ? thenLooked(sentence, looked[1]!) : sentence;
   }
-  // A sentence that began "The listed tables …" still begins with a capital.
-  const plain = plainWords(core).replace(/^[a-z]/, (letter) => letter.toUpperCase());
+  const plain = plainWords(core);
   return looked ? thenLooked(plain, looked[1]!) : plain;
 }
 
