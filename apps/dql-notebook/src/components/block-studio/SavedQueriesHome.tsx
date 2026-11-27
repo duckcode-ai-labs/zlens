@@ -138,6 +138,8 @@ export function SavedQueriesHome({
   onBlankSql,
   onReviewMetricDraft,
   readOnlyReason,
+  openNewMenu,
+  onNewMenuShown,
   t,
 }: {
   onImport?: () => void;
@@ -147,6 +149,9 @@ export function SavedQueriesHome({
   /** Opens the import a metric draft came from: it is reviewed and approved there. */
   onReviewMetricDraft: (importId: string) => void;
   readOnlyReason?: string;
+  /** Show New saved query's choices at once (the toolbar's New saved query, pressed on a saved query's page). */
+  openNewMenu?: boolean;
+  onNewMenuShown?: () => void;
   t: Theme;
 }) {
   const { dispatch } = useNotebook();
@@ -185,12 +190,25 @@ export function SavedQueriesHome({
   }, [version]);
 
   useEffect(() => {
+    if (!openNewMenu) return;
+    setNewOpen(true);
+    onNewMenuShown?.();
+  }, [openNewMenu, onNewMenuShown]);
+
+  useEffect(() => {
     if (!newOpen) return undefined;
     const close = (event: MouseEvent) => {
       if (!newMenuRef.current?.contains(event.target as Node)) setNewOpen(false);
     };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNewOpen(false);
+    };
     document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', escape);
+    };
   }, [newOpen]);
 
   const rows = useMemo(

@@ -252,6 +252,7 @@ export function BlockStudio() {
   const [bottomPaneCollapsed, setBottomPaneCollapsed] = useState(false);
   const [compactLayout, setCompactLayout] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 900 : false);
   const [workspaceMode, setWorkspaceMode] = useState<BlockStudioWorkspaceMode>(() => state.blockStudioImportOpen ? 'import' : 'start');
+  const [newMenuRequested, setNewMenuRequested] = useState(false);
   const [editorMode, setEditorMode] = useState<BlockStudioEditorMode>('visual');
   const [aiDockOpen, setAiDockOpen] = useState(() => readBlockStudioBoolean('dql.block-studio.ai.open', false));
   const [aiDockWidth, setAiDockWidth] = useState(() => readBlockStudioNumber('dql.block-studio.ai.width', 420, 360, 520));
@@ -809,6 +810,8 @@ export function BlockStudio() {
   // where the AI / import / manual choice is made.
   const beginNewWorkspace = () => {
     goToBlockStudioHome();
+    // The list opens with New saved query's choices showing: Ask AI, Build manually, Blank SQL query.
+    setNewMenuRequested(true);
   };
 
   const requestOpenBlock = (block: BlockEntry) => {
@@ -1852,6 +1855,8 @@ export function BlockStudio() {
                 void api.getBlockStudioImport(importId).then(setImportSession).catch(() => undefined);
               }}
               readOnlyReason={readOnlyBlocksReason}
+              openNewMenu={newMenuRequested}
+              onNewMenuShown={() => setNewMenuRequested(false)}
               t={t}
             />
           ) : editorMode === 'detail' ? (
@@ -2433,7 +2438,8 @@ export function BlockToolbarActions(props: {
       {!readOnly && activeBlockPath && !detail && (
         <TemplateButton label="Delete" Icon={Trash2} variant="danger" title="Delete this saved query" onClick={props.onDelete} />
       )}
-      {!readOnly && <TemplateButton label="New saved query" Icon={Plus} onClick={props.onNew} />}
+      {/* On the Saved queries list its own New saved query holds the choices; from a saved query, this one goes there. */}
+      {!readOnly && hasActiveDraft && <TemplateButton label="New saved query" Icon={Plus} onClick={props.onNew} />}
       {hasActiveDraft && (
         <>
           {/* A saved block gets one AI action, Modify with AI; Ask AI is for a block not saved yet. */}
