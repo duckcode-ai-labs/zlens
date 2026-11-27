@@ -53,7 +53,7 @@ your analytics. See [Migrate from other tools](./migrate.md).
 
 ## Can I bring my Tableau or Power BI reports?
 
-Their SQL, yes. `zlens import sql` (or **Import SQL** in the workbench) reads
+Their SQL, yes. `zlens import sql` (or **Import** on **Saved queries** in the workbench) reads
 the Custom SQL in Tableau workbooks (`.twb`, `.twbx`) and the native SQL in
 Power BI templates (`.pbit`) and projects (PBIP), with their parameters, and
 drafts a saved query for each. Calculated fields, DAX measures and tables
