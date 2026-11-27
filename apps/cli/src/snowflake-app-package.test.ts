@@ -15,6 +15,22 @@ const setup = read('setup.sql');
 const readme = read('README.md');
 
 describe('the app package for Snowflake', () => {
+  it('keeps every role and privilege description in the manifest within Snowflake\'s 200 characters', () => {
+    // Snowflake refuses the whole version when one is longer (093303); V18 first failed on CREATE WAREHOUSE at 201.
+    const manifest = yaml.load(read('manifest.yml')) as {
+      privileges?: Array<Record<string, { description?: string }>>;
+      snowflake_database?: { roles?: Array<Record<string, { description?: string }>> };
+    };
+    const entries = [...(manifest.privileges ?? []), ...(manifest.snowflake_database?.roles ?? [])];
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      for (const [name, value] of Object.entries(entry)) {
+        expect(value.description, name).toBeTruthy();
+        expect(value.description!.length, name).toBeLessThanOrEqual(200);
+      }
+    }
+  });
+
   it('lists the compute pool it creates in marketplace.yml', () => {
     const family = /INSTANCE_FAMILY\s*=\s*([A-Z0-9_]+)/.exec(setup)?.[1];
     expect(family).toBe('CPU_X64_XS');

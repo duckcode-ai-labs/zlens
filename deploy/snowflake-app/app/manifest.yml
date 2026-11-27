@@ -17,4 +17,4 @@ privileges:
 - CREATE COMPUTE POOL:
     description: "Run ZLens in one small compute pool in your account."
 - CREATE WAREHOUSE:
-    description: "Its own extra-small warehouse for ZLens's queries (it suspends after 60 seconds idle). Only if you choose Check faster, it runs a size up while the first data checks run, then goes back to extra-small."
+    description: "Its own extra-small warehouse for ZLens's queries; it suspends after 60 idle seconds. If you choose Check faster, it runs one size up during the first data checks, then returns to extra-small."
