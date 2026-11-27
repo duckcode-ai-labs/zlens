@@ -49,8 +49,8 @@ statement at the cursor.
 
 4. **Open it.** Press **Launch app** on the app's page in Snowsight (next section).
 
-There is nothing to grant for Ask: it uses Claude through Snowflake Cortex, which every Snowflake app
-may use.
+There's usually nothing to grant for Ask: Snowflake gives apps access to Cortex. If ZLens says Ask isn't
+ready, it shows the one line to run.
 
 ## Try it on Snowflake's sample data
 
@@ -94,7 +94,7 @@ data into a database you own (about 1.7 million rows), then grant that database 
 5. **Certify it.** On the first answer, select **Save as saved query**, check its name and owner, and
    **Save draft**. ZLens says **Saved as a draft. Review it**: select **Review it** (it is also on the
    **Drafts** tab of **Saved queries**). Press **Run** and look at the five rows, read **How it's worked
-   out** and the checks, then select **Certify** and **I reviewed it — certify**. Ask the first question
+   out** and **Checks**, then select **Certify** and **I reviewed it — certify**. Ask the first question
    again: the answer is now **Certified**. It runs the saved query you reviewed, not SQL that AI wrote.
 
    Optional, before you certify: compare it with the report you trust today. In the saved query's **⋯**
@@ -232,8 +232,9 @@ After you add tables or schemas, run those grant lines again for them, then in Z
   inside your account. Indexing costs about a cent of Snowflake credits for a small project (about
   $0.35 for one with hundreds of tables, the first time; after that only new text is embedded). Turn
   it off in **Settings » AI provider » Search**.
-- **Nothing to grant.** Every Snowflake app may use Cortex. The app's **Permissions** tab shows the
-  `CORTEX_USER` database role as granted: Snowflake gives it to every app.
+- **Usually nothing to grant.** Snowflake gives apps access to Cortex, so the app's **Permissions** tab
+  usually shows the `CORTEX_USER` database role as granted. An admin can restrict it, and where Claude is
+  not in your account's region, Cortex needs cross-region inference.
 - **Ask checks itself.** When ZLens starts, it asks Cortex for one word. If that fails, Ask, Settings and
   the launcher say "Ask is not ready" with the one line an `ACCOUNTADMIN` runs: the `CORTEX_USER` grant with
   your app's name, or the account's cross-region setting. While Ask is not ready, ZLens checks again every
@@ -364,8 +365,9 @@ An open ZLens tab does not keep it running: ZLens stops after 60 minutes with no
 
 The app asks for three account privileges, each shown on its **Permissions** tab: `BIND SERVICE
 ENDPOINT` (its own address), `CREATE COMPUTE POOL` (one small pool) and `CREATE WAREHOUSE` (its own
-extra-small warehouse). The tab also shows the `SNOWFLAKE.CORTEX_USER` database role for Claude as
-granted: Snowflake gives it to every app, so you grant nothing for it. The app creates no listings,
+extra-small warehouse). The tab usually also shows the `SNOWFLAKE.CORTEX_USER` database role for Claude
+as granted: Snowflake gives apps access to Cortex, so there's usually nothing to grant for it. The app
+creates no listings,
 shares or external access integrations.
 
 When you press **Get**, Snowflake's dialog also lists, under **Future upgrades**, privileges a later

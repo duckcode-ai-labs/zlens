@@ -89,8 +89,8 @@ sign-on, can't be used, and Settings says so. The Snowflake user's role needs
 access to Cortex, as for Cortex's SQL functions (the `SNOWFLAKE.CORTEX_USER`
 database role). Snowflake gives that role to every user through `PUBLIC`
 unless your admin has taken it away; if it is missing, the test says so. In the
-ZLens app for Snowflake there is nothing to grant: every Snowflake app may use
-Cortex. If ZLens says Ask is not ready, it shows the one line an
+ZLens app for Snowflake there's usually nothing to grant: Snowflake gives apps
+access to Cortex. If ZLens says Ask isn't ready, it shows the one line an
 `ACCOUNTADMIN` runs.
 
 What reaches the model:

@@ -380,7 +380,7 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
       body: (
         <>
           <p style={para}>Two things are set outside ZLens, on the app's <strong>Configurations</strong> tab in Snowsight (<strong>Apps</strong>, then this app): <strong>Snowflake user who uses ZLens</strong>, the one person who uses it, and <strong>Stage for ZLens backups (optional)</strong>, a stage name such as <span style={inlineCode}>MY_DB.MY_SCHEMA.ZLENS_BACKUPS</span> for backups that outlive the app. Snowsight may list the stage first.</p>
-          <p style={para}>AI runs on Anthropic's Claude through Snowflake Cortex, inside Snowflake: model <span style={inlineCode}>claude-sonnet-5-5</span> (Claude Sonnet 5.5) unless you name another in <strong>Settings » AI provider</strong>. There is nothing to grant: every Snowflake app may use Cortex, and the app's <strong>Permissions</strong> tab shows its <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> database role as granted. <strong>Test</strong> on that page says whether Claude answers.</p>
+          <p style={para}>AI runs on Anthropic's Claude through Snowflake Cortex, inside Snowflake: model <span style={inlineCode}>claude-sonnet-5-5</span> (Claude Sonnet 5.5) unless you name another in <strong>Settings » AI provider</strong>. There's usually nothing to grant: Snowflake gives apps access to Cortex, and the app's <strong>Permissions</strong> tab usually shows its <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> database role as granted. <strong>Test</strong> on that page says whether Claude answers.</p>
         </>
       ),
     },

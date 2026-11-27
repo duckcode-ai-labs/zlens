@@ -157,8 +157,9 @@ def grant_lines(app):
 
 
 def cortex_line(app):
-    """The Cortex grant with this app's name. No longer a set-up step: every app may use Cortex through
-    SNOWFLAKE.APP_PUBLIC. When ZLens's own Cortex check fails, show_ask shows ZLens's own fix line instead."""
+    """The Cortex grant with this app's name. No longer a set-up step: Snowflake usually gives apps access to
+    Cortex (through SNOWFLAKE.APP_PUBLIC). When ZLens's own Cortex check fails, show_ask shows ZLens's own fix
+    line instead."""
     return f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};"
 
 

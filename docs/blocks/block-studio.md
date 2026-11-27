@@ -58,7 +58,7 @@ When you open a saved query, you see its overview:
 Buttons on the overview: **Run**, and **Delete** (trash icon) for a saved
 query you may edit. The **⋯** menu holds **Compare with an old report**
 (optional; see [Prove the numbers match](../guides/migrate.md#prove-the-numbers-match)),
-**Modify with AI** and **Open in builder**.
+**Modify with AI**, **Open in builder** and **History and details**.
 
 The toolbar at the top has:
 
