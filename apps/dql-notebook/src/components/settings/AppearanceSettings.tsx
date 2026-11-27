@@ -2,7 +2,6 @@ import React from 'react';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 import type { ThemeMode } from '../../store/types';
-import { CertifyGuideSetting } from './CertifyGuideSetting';
 
 /** The three themes, by what they look like. The choice is kept in this browser. */
 export const APPEARANCE_CHOICES: ReadonlyArray<{ mode: 'paper' | 'white' | 'obsidian'; label: string; detail: string; swatch: string }> = [
@@ -58,7 +57,6 @@ export function AppearanceSettings() {
           );
         })}
       </div>
-      <CertifyGuideSetting t={t} />
     </div>
   );
 }

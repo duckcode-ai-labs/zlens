@@ -21,6 +21,12 @@ interface SaveAsBlockModalProps {
   initialOwner?: string;
   /** The question Ask answered when AI wrote this content: kept on the saved query, so Certify asks for a review. */
   aiQuestion?: string;
+  /**
+   * "ask": saving an Ask answer. A small dialog with the name and the owner only, and it stays in Ask: the answer
+   * then says "Saved as a draft. Review it" (the trust flow approved 2026-11-27). The other details are filled in
+   * on the saved query's page, where it is reviewed and certified.
+   */
+  variant?: 'full' | 'ask';
 }
 
 function RequiredMark() {
@@ -48,6 +54,7 @@ export function SaveAsBlockModal({
   initialDomain,
   initialOwner,
   aiQuestion,
+  variant = 'full',
 }: SaveAsBlockModalProps) {
   const { state, dispatch } = useNotebook();
   const t = themes[state.themeMode];
@@ -59,6 +66,8 @@ export function SaveAsBlockModal({
   const [name, setName] = useState(initialName || cell.name || 'new_block');
   const [domain, setDomain] = useState(initialDomain ?? '');
   const [owner, setOwner] = useState(initialOwner ?? '');
+  const ownerTyped = useRef(Boolean(initialOwner));
+  const askVariant = variant === 'ask';
   const [description, setDescription] = useState(initialDescription ?? state.notebookMetadata.description ?? '');
   const [tags, setTags] = useState((initialTags ?? state.notebookMetadata.categories ?? []).join(', '));
   const [content, setContent] = useState(initialContent ?? cell.content);
@@ -87,6 +96,16 @@ export function SaveAsBlockModal({
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
+
+  // The owner is the person saving, as on a saved query's page: filled in from who is signed in, never guessed.
+  useEffect(() => {
+    if (initialOwner) return;
+    let cancelled = false;
+    api.getIdentity()
+      .then((id) => { if (!cancelled && id?.owner && !ownerTyped.current) setOwner(id.owner); })
+      .catch(() => { /* identity is optional: the owner is then typed */ });
+    return () => { cancelled = true; };
+  }, [initialOwner]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -149,8 +168,11 @@ export function SaveAsBlockModal({
       if (!state.files.some((existing) => existing.path === result.path)) {
         dispatch({ type: 'FILE_ADDED', file });
       }
-      const payload = await api.openBlockStudio(result.path);
-      dispatch({ type: 'OPEN_BLOCK_STUDIO', file, payload });
+      // From Ask, the person stays with the answer; the answer links to the draft to review it.
+      if (!askVariant) {
+        const payload = await api.openBlockStudio(result.path);
+        dispatch({ type: 'OPEN_BLOCK_STUDIO', file, payload });
+      }
       onSaved?.({ ...result, name: name.trim() });
       onClose();
     } catch (err) {
@@ -172,6 +194,75 @@ export function SaveAsBlockModal({
     outline: 'none',
     boxSizing: 'border-box',
   };
+
+  const buttonStyle = (primary: boolean, disabled = false): React.CSSProperties => ({
+    background: primary ? t.accent : t.btnBg,
+    border: `1px solid ${primary ? t.accent : t.btnBorder}`,
+    borderRadius: 6,
+    color: primary ? '#fff' : t.textSecondary,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    fontSize: 13,
+    fontFamily: t.font,
+    padding: primary ? '7px 20px' : '7px 16px',
+    opacity: disabled ? 0.5 : 1,
+  });
+
+  if (askVariant) {
+    return (
+      <div
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose();
+        }}
+        style={{ position: 'fixed', inset: 0, background: t.modalOverlay, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, backdropFilter: 'blur(4px)' }}
+      >
+        <div
+          role="dialog"
+          aria-label="Save as a draft"
+          data-testid="save-answer-dialog"
+          style={{ width: 440, maxWidth: 'calc(100vw - 48px)', background: t.modalBg, border: `1px solid ${t.cellBorder}`, borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}
+        >
+          <div style={{ padding: '20px 24px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: t.textPrimary, fontFamily: t.font }}>Save as a draft</h2>
+            <button aria-label="Close" onClick={onClose} style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 18 }}>×</button>
+          </div>
+          <div style={{ padding: '14px 24px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 12.5, color: t.textSecondary, fontFamily: t.font, lineHeight: 1.5 }}>
+              You'll review and certify it in Saved queries.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 12, color: t.textSecondary, fontFamily: t.font }}>
+                Name <RequiredMark />
+              </label>
+              <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 12, color: t.textSecondary, fontFamily: t.font }}>
+                Owner <RequiredMark />
+              </label>
+              <input
+                value={owner}
+                onChange={(e) => { ownerTyped.current = true; setOwner(e.target.value); }}
+                style={inputStyle}
+                placeholder="Who answers for this saved query"
+              />
+            </div>
+            {error && <div style={{ fontSize: 12, color: t.error, fontFamily: t.font }}>{error}</div>}
+          </div>
+          <div style={{ padding: '14px 24px', borderTop: `1px solid ${t.cellBorder}`, display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+            <button onClick={onClose} style={buttonStyle(false)}>Cancel</button>
+            <button
+              onClick={handleSave}
+              disabled={saving || hasErrors}
+              title={hasErrors ? 'Enter the name and owner to save' : undefined}
+              style={buttonStyle(true, saving || hasErrors)}
+            >
+              {saving ? 'Saving draft…' : 'Save draft'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -254,7 +345,7 @@ export function SaveAsBlockModal({
               </label>
               <input
                 value={owner}
-                onChange={(e) => setOwner(e.target.value)}
+                onChange={(e) => { ownerTyped.current = true; setOwner(e.target.value); }}
                 style={inputStyle}
                 placeholder="data-platform@company.com"
               />

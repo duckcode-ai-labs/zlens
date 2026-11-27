@@ -50,7 +50,28 @@ describe('agent-run stream transport', () => {
     expect(run.id).toBe('server-run-123');
     expect(messages[0]).toEqual({ kind: 'accepted', runId: 'server-run-123', operationId: 'operation-123' });
     expect(messages[1]?.kind).toBe('complete');
-    expect(JSON.parse(String(requestInit?.body))).toEqual({ question: 'show revenue' });
+    expect(JSON.parse(String(requestInit?.body))).toEqual({ question: 'show revenue', reviewDraftCapture: 'off' });
+  });
+
+  it('asks the server to keep no draft of its own: an answer is saved only when the person presses Save', async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      const url = String(_input);
+      if (url.includes('stream=1')) {
+        return new Response([
+          'event: agent-run-accepted', 'data: {"runId":"server-run-9"}', '',
+          'event: agent-run-complete', `data: ${JSON.stringify({ id: 'server-run-9', question: 'q', route: 'generated_answer', status: 'completed', trustState: 'review_required', events: [], steps: [], artifacts: [] })}`, '',
+        ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      }
+      return new Response(JSON.stringify({ run: { id: 'server-run-9', question: 'q', status: 'completed', events: [], steps: [], artifacts: [] } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    await api.createAgentRunStream({ question: 'How many playoff games did the Warriors win in 2015?' }, () => {});
+    await api.createAgentRun({ question: 'How many playoff games did the Warriors win in 2015?' });
+    expect(bodies).toEqual([
+      { question: 'How many playoff games did the Warriors win in 2015?', reviewDraftCapture: 'off' },
+      { question: 'How many playoff games did the Warriors win in 2015?', reviewDraftCapture: 'off' },
+    ]);
   });
 });
 
@@ -75,7 +96,7 @@ describe('agent-run submission identity', () => {
     }));
     await api.createAgentRunStream({ question: 'show revenue', requestId: 'submission-abc' }, () => {});
     expect(headers).toEqual(['submission-abc']);
-    expect(body).toEqual({ question: 'show revenue' });
+    expect(body).toEqual({ question: 'show revenue', reviewDraftCapture: 'off' });
   });
 
   it('two submissions of the same question carry two identities: the text is never the key', async () => {

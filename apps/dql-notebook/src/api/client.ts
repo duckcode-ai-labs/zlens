@@ -4758,9 +4758,15 @@ export async function streamAgentRunResponse(
  * The runtime also rejects it at ingress; this client-side omission protects
  * callers that construct an untyped payload.
  */
+/**
+ * An answer asked here is saved only when the person presses Save as saved query, never on its own. The server
+ * keeps a draft per answer unless it is told not to (`zlens agent ask` and MCP still get one): a draft written on
+ * its own is a project source, so it also made a model review opened before it go stale ("Project sources changed
+ * before the authoring proposal was previewed", V18 test).
+ */
 function serializeCreateAgentRunInput(input: CreateAgentRunInput): string {
   const { runId: _discardedRunId, requestId: _discardedRequestId, ...safeInput } = input as CreateAgentRunInput & { runId?: unknown; requestId?: unknown };
-  return JSON.stringify(safeInput);
+  return JSON.stringify({ ...safeInput, reviewDraftCapture: 'off' });
 }
 
 /** A fresh submission identity: a UUID when the platform has one, else time plus entropy. */
