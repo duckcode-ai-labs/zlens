@@ -3,10 +3,11 @@ import { certifiedByLabel, certifierDisplayName, plainCertificationChecks } from
 import { useShallow } from 'zustand/react/shallow';
 import { useQuery } from '@tanstack/react-query';
 import { certificationFieldGaps, certificationFieldLabel, renderSemanticBlockSource } from '@zlens/core/blocks';
-import { AlertTriangle, Blocks, Bot, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Code2, Database, FileInput, Loader2, MoreHorizontal, PanelBottomOpen, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, Blocks, Bot, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Circle, Code2, Database, FileInput, GitCompare, History, Loader2, MoreHorizontal, PanelBottomOpen, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
 import { hostProposesCertification, hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
 import { api, DqlApiError, type BlockCertificationOperationResult } from '../../api/client';
 import { importRunError, isHostRefusal, type ImportRunError } from './import-run-error';
+import { howItsWorkedOut, howSemanticIsWorkedOut, savedQueryChecks } from './saved-query-review';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { useOperations } from '../../operations/OperationsProvider';
 import { newestMatchingBlockCertificationOperation } from '../../operations/operation-state';
@@ -1870,6 +1871,9 @@ export function BlockStudio() {
               proposes={proposesCertification}
               onOpenBuilder={() => setEditorMode('visual')}
               onOpenSource={() => setEditorMode('source')}
+              onModifyWithAi={readOnlyBlocks ? undefined : () => openAskAi({ kind: 'edit', initialInput: `Modify this saved query${activeBlockName ? ` (${activeBlockName})` : ''}: ` })}
+              problems={state.blockStudioValidation?.diagnostics.filter((item) => item.severity === 'error').length ?? 0}
+              runFailed={Boolean(runError)}
               onOpenReplacement={openReplacementBlock}
               onDelete={readOnlyBlocks ? undefined : () => state.activeBlockPath && requestDeleteBlock(state.activeBlockPath, state.blockStudioMetadata?.name || activeBlockName || state.activeBlockPath)}
               onRun={() => void handleRun()}
@@ -2440,7 +2444,8 @@ export function BlockToolbarActions(props: {
           {!readOnly && !activeBlockPath && <TemplateButton label="Ask AI" Icon={Sparkles} onClick={props.onAsk} />}
           {/* Modify the block currently in the editor — the governed cascade in
               edit mode (workspaceContext.mode='edit' + blockPath). */}
-          {!readOnly && activeBlockPath && <TemplateButton label="Modify with AI" Icon={Sparkles} onClick={props.onModify} />}
+          {/* On the saved query's page it is in the page's ⋯ menu (the trust flow approved 2026-11-27). */}
+          {!readOnly && activeBlockPath && !detail && <TemplateButton label="Modify with AI" Icon={Sparkles} onClick={props.onModify} />}
           {!detail && <TemplateButton label="Run" Icon={Play} onClick={props.onRun} busy={props.running} />}
           {!readOnly && (
             <>
@@ -3394,6 +3399,9 @@ export function BlockDetailView({
   proposes = false,
   onOpenBuilder,
   onOpenSource,
+  onModifyWithAi,
+  problems = 0,
+  runFailed = false,
   onOpenReplacement,
   onDelete,
   onRun,
@@ -3413,6 +3421,12 @@ export function BlockDetailView({
   proposes?: boolean;
   onOpenBuilder: () => void;
   onOpenSource: () => void;
+  /** Modify with AI: in the page's ⋯ menu. */
+  onModifyWithAi?: () => void;
+  /** Errors in the query, for the checks list. */
+  problems?: number;
+  /** The last run failed, for the checks list. */
+  runFailed?: boolean;
   onOpenReplacement?: (path: string) => void;
   onDelete?: () => void;
   onRun: () => void;
@@ -3439,6 +3453,28 @@ export function BlockDetailView({
   const upCount = lineageDetail?.incoming?.length ?? 0;
   const downCount = lineageDetail?.outgoing?.length ?? 0;
   const [lineageOpen, setLineageOpen] = useState(false);
+  // The ⋯ menu: Compare with an old report (optional), Modify with AI, Open in builder, History.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const close = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false); };
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false); };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', escape);
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape); };
+  }, [menuOpen]);
+  const workedOut = semanticFields ? howSemanticIsWorkedOut(semanticFields) : howItsWorkedOut(queryBody);
+  const checks = savedQueryChecks({
+    ran: Boolean(preview || lastRun),
+    runFailed,
+    problems,
+    owner: metadata?.owner,
+    parameters,
+    tests,
+    ...(certified && metadata?.certification ? { certifiedChecks: plainCertificationChecks(receiptLines.checks) } : {}),
+  });
   const upstreamNames = ((lineageDetail?.incoming ?? []) as Array<{ node?: { name?: string } }>).map((item) => item.node?.name).filter(Boolean).slice(0, 3) as string[];
   const downstreamNames = ((lineageDetail?.outgoing ?? []) as Array<{ node?: { name?: string } }>).map((item) => item.node?.name).filter(Boolean).slice(0, 3) as string[];
   const sectionLabel: React.CSSProperties = { fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: t.textMuted, marginBottom: 8, fontFamily: t.font };
@@ -3451,7 +3487,6 @@ export function BlockDetailView({
     ['Last run', preview || lastRun ? (typeof lastRunDuration === 'number' ? `${(lastRunDuration / 1000).toFixed(1)}s` : 'Completed') : 'Not run yet'],
     ['Rows', preview ? String(preview.result.rowCount ?? preview.result.rows.length) : lastRun ? String(lastRun.rowCount) : '—'],
     ['Used in', downCount > 0 ? `${downCount} downstream` : '—'],
-    ['Tests', tests.length > 0 ? `${tests.length} declared` : 'None yet'],
   ];
   return (
     <div style={{ height: '100%', overflow: 'auto', background: t.appBg }}>
@@ -3463,7 +3498,7 @@ export function BlockDetailView({
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.fontMono, letterSpacing: '-0.01em' }}>{name}</span>
+              <span style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.fontMono, letterSpacing: '-0.01em', overflowWrap: 'anywhere', minWidth: 0 }}>{name}</span>
               {metadata?.reviewStatus ? <BlockStatusBadge status={certified && metadata.certificationSourceChanged ? 'pending_recertification' : proposed ? 'proposed' : metadata.reviewStatus} t={t} /> : null}
               <DiffersSinceCertifiedBadge since={comparedSince} />
               {metadata?.reviewStatus === 'deprecated' ? (
@@ -3499,9 +3534,6 @@ export function BlockDetailView({
             {metadata?.reviewStatus === 'deprecated' && onOpenReplacement ? (
               <OpenReplacementButton info={{ status: metadata.reviewStatus, replacedBy: metadata.replacedBy, deprecatedOn: metadata.deprecatedOn, replacement: metadata.replacement }} t={t} onOpen={onOpenReplacement} />
             ) : null}
-            <button type="button" onClick={onOpenBuilder} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 32, padding: '0 14px', borderRadius: 8, border: 'none', background: t.accent, color: '#fff', fontSize: 12.5, fontWeight: 650, cursor: 'pointer', fontFamily: t.font, boxShadow: '0 1px 4px rgba(107,93,211,0.25)' }}>
-              <Pencil size={13} strokeWidth={1.75} /> Open in builder
-            </button>
             <button type="button" onClick={onRun} disabled={running} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 32, padding: '0 13px', borderRadius: 8, border: `1px solid ${t.headerBorder}`, background: t.cellBg, color: t.textSecondary, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: t.font, opacity: running ? 0.7 : 1 }}>
               {running ? <Loader2 size={12} style={{ animation: 'dql-agent-run-spin 0.8s linear infinite' }} /> : <Play size={11} fill="currentColor" />} Run
             </button>
@@ -3510,9 +3542,29 @@ export function BlockDetailView({
                 <Trash2 size={14} />
               </button>
             ) : null}
-            <button type="button" title="History and metadata" onClick={onOpenHistory} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${t.headerBorder}`, background: t.cellBg, color: t.textMuted, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-              <MoreHorizontal size={15} />
-            </button>
+            <div ref={menuRef} style={{ position: 'relative' }}>
+              <button type="button" title="More" aria-label="More" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${t.headerBorder}`, background: t.cellBg, color: t.textMuted, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                <MoreHorizontal size={15} />
+              </button>
+              {menuOpen ? (
+                <div role="menu" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 20, width: 250, background: t.cellBg, border: `1px solid ${t.headerBorder}`, borderRadius: 8, boxShadow: '0 10px 30px rgba(0,0,0,0.18)', padding: 4, display: 'grid' }}>
+                  {[
+                    ...(metadata?.name && blockPath ? [{ label: 'Compare with an old report', detail: 'Optional: check every value against an export of the report it replaces.', Icon: GitCompare, action: () => setCompareOpen(true) }] : []),
+                    ...(onModifyWithAi ? [{ label: 'Modify with AI', detail: undefined, Icon: Sparkles, action: onModifyWithAi }] : []),
+                    { label: 'Open in builder', detail: undefined, Icon: Pencil, action: onOpenBuilder },
+                    { label: 'History and details', detail: undefined, Icon: History, action: onOpenHistory },
+                  ].map(({ label, detail, Icon, action }) => (
+                    <button key={label} type="button" role="menuitem" onClick={() => { setMenuOpen(false); action(); }} style={{ display: 'grid', gridTemplateColumns: '20px minmax(0, 1fr)', gap: 8, alignItems: 'start', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 6, padding: '7px 8px', cursor: 'pointer', color: t.textPrimary, fontFamily: t.font }}>
+                      <Icon size={14} color={t.accent} style={{ marginTop: 1 }} />
+                      <span style={{ display: 'grid', gap: 2 }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 600 }}>{label}</span>
+                        {detail ? <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.35 }}>{detail}</span> : null}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </div>
         </div>
 
@@ -3530,7 +3582,8 @@ export function BlockDetailView({
           ))}
         </div>
 
-        {metadata?.name && blockPath ? (
+        {/* Optional (the trust flow approved 2026-11-27): opened from ⋯, and shown while a comparison stands. */}
+        {metadata?.name && blockPath && (compareOpen || reportCheck.status?.match) ? (
           <SavedQueryReportCheck name={metadata.name} path={blockPath} certified={certified} status={reportCheck.status} onRecorded={reportCheck.reload} primaryButton={primaryImportButtonStyle(t)} t={t} />
         ) : null}
 
@@ -3568,37 +3621,50 @@ export function BlockDetailView({
 
         {/* DQL source. In the app for Snowflake (V4 review) the page shows the SQL the saved query runs instead: the
             saved query's own source (`block "…" {`, its tags, the format line) is ZLens's file, not the reviewer's. */}
+        {workedOut ? (
+          <div data-testid="saved-query-worked-out">
+            <div style={sectionLabel}>How it&apos;s worked out</div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, color: t.textSecondary }}>{workedOut}</div>
+          </div>
+        ) : null}
         {snowflakeApp ? (
           queryBody ? (
-            <div data-testid="saved-query-sql">
-              <div style={sectionLabel}>SQL</div>
+            <details data-testid="saved-query-sql">
+              <summary style={{ ...sectionLabel, cursor: 'pointer' }}>SQL</summary>
               <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{dedentSql(queryBody)}</pre>
-            </div>
+            </details>
           ) : null
         ) : (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ ...sectionLabel, marginBottom: 0 }}>{sourceEditorWords(snowflakeApp).section}</span>
-            <button type="button" onClick={onOpenSource} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'none', color: t.accent, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: t.font, padding: 0 }}>
-              {sourceEditorWords(snowflakeApp).open} <ChevronRight size={11} strokeWidth={2} />
-            </button>
-          </div>
+        // Folded; opening it in the editor stays one click, beside the fold.
+        <div style={{ position: 'relative' }}>
+          <button type="button" onClick={onOpenSource} style={{ position: 'absolute', top: 0, right: 0, display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', background: 'none', color: t.accent, fontSize: 11.5, fontWeight: 600, cursor: 'pointer', fontFamily: t.font, padding: 0 }}>
+            {sourceEditorWords(snowflakeApp).open} <ChevronRight size={11} strokeWidth={2} />
+          </button>
+        <details>
+          <summary style={{ ...sectionLabel, cursor: 'pointer' }}>{sourceEditorWords(snowflakeApp).section}</summary>
           <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{source.trim() || 'Open the builder to author this saved query.'}</pre>
+        </details>
         </div>
         )}
 
-        {/* tests + lineage */}
+        {/* checks + lineage */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-          <div>
-            <div style={sectionLabel}>Tests</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {tests.length > 0 ? tests.map((test) => (
-                <div key={test} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                  <CheckCircle2 size={13} color="var(--status-success)" strokeWidth={2} style={{ flexShrink: 0 }} />
-                  <span style={{ fontFamily: t.fontMono, color: t.textSecondary }}>{test}</span>
-                </div>
-              )) : <span style={{ fontSize: 11.5, color: t.textMuted }}>No tests yet. Tests are optional: add assertions in the builder to check the result each time it is certified.</span>}
-            </div>
+          <div data-testid="saved-query-checks">
+            <div style={sectionLabel}>Checks</div>
+            <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {checks.map((check) => (
+                <li key={check.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12 }}>
+                  {check.state === 'passed'
+                    ? <CheckCircle2 size={13} color="var(--status-success)" strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} aria-label="passed" />
+                    : check.state === 'failed'
+                      ? <AlertTriangle size={13} color="var(--status-warning)" strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} aria-label="not passed" />
+                      : <Circle size={13} color={t.textMuted} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} aria-label="not checked yet" />}
+                  <span style={{ color: t.textSecondary }}>
+                    {check.label}{check.detail ? <span style={{ color: t.textMuted }}> · {check.detail}</span> : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
           </div>
           <div>
             <button type="button" onClick={() => setLineageOpen((open) => !open)} style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontFamily: t.font, marginBottom: 8 }}>
