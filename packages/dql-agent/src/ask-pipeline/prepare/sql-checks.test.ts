@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { withoutDrafterCap, aggregatesRows, appliedConditions, groupedColumns, joinKeyGroups, joinKeyPairs, questionProper, mentionsColumn, missingRequiredFilters, missingStatedValues, namePartsMatchedByOr, requiredFilterFromText, statedValues, withRowGuard, aggregatesColumnOf } from './sql-checks.js';
+import { withoutDrafterCap, aggregatesRows, appliedConditions, draftedStatement, groupedColumns, joinKeyGroups, joinKeyPairs, questionProper, mentionsColumn, missingRequiredFilters, missingStatedValues, namePartsMatchedByOr, requiredFilterFromText, statedValues, withRowGuard, aggregatesColumnOf } from './sql-checks.js';
+import { readOnlyStatementProblem } from './exploratory.js';
 
 describe('the checks an AI-drafted statement passes before it runs', () => {
   const office = 'Lost opportunities count ,Lost Amount by month for fiscal year FY26 and competitor involved is Splunk';
@@ -198,5 +199,66 @@ describe('a clause the reading could not place states no value the question did 
   it('still keeps a name the question says, written in capitals by the note', () => {
     const stated = statedValues('how many home wins did the celtics have in 2008', reading('Celtics home games in the 2008 regular season'));
     expect(stated.map((item) => item.value)).toEqual(['2008', 'Celtics']);
+  });
+});
+
+describe("the statement in a drafter's reply", () => {
+  // The shape of the two V18 gate replies (27 Nov 2026): a paragraph on how the question was read, a blank line, the SQL.
+  const select = [
+    'SELECT t.team_id, t.nickname, SUM(g.points) / COUNT(*) AS points_per_game',
+    'FROM games g',
+    'JOIN teams t ON t.team_id = g.team_id',
+    "WHERE g.season = 2019 AND CAST(g.game_id AS VARCHAR) LIKE '2%'",
+    'GROUP BY t.team_id, t.nickname',
+    'ORDER BY points_per_game DESC',
+    'LIMIT 5',
+  ].join('\n');
+  const words = 'The question says "regular season", so only regular-season games count (GAME_ID starting with 2). The season table adds up every kind of game, so I use the games table and join teams for the name.';
+
+  it('words before a SELECT: the statement starts at the line that starts it, and nothing else is read', () => {
+    expect(draftedStatement(`${words}\n\n\n${select}`)).toBe(select);
+    expect(draftedStatement(`${words}\nThe team's name comes from teams.\n\n${select}\n`)).toBe(select);
+    expect(readOnlyStatementProblem(draftedStatement(`${words}\n\n${select}`))).toBeUndefined();
+  });
+
+  it('words before a WITH: the statement starts at the named subquery; a sentence that starts with "With" is words', () => {
+    const cte = 'WITH per_game AS (\n  SELECT team_id, SUM(points) AS points FROM games GROUP BY team_id\n)\nSELECT team_id, points FROM per_game ORDER BY points DESC LIMIT 5';
+    expect(draftedStatement(`${words}\n\n${cte}`)).toBe(cte);
+    expect(draftedStatement(`With every game counted once, the totals are:\n\n${cte}`)).toBe(cte);
+    expect(draftedStatement(`With every game counted once, the totals are:\n\n${select}`)).toBe(select);
+    expect(draftedStatement(`Two steps.\n\nWITH RECURSIVE\n  days (n) AS (SELECT 1)\nSELECT n FROM days`)).toBe('WITH RECURSIVE\n  days (n) AS (SELECT 1)\nSELECT n FROM days');
+    expect(readOnlyStatementProblem(draftedStatement(`${words}\n\n${cte}`))).toBeUndefined();
+  });
+
+  it('a reply that is words only comes back whole and is still refused', () => {
+    const only = 'No column in the listed tables says which games are regular-season games, so I cannot filter on it.';
+    expect(draftedStatement(only)).toBe(only);
+    expect(readOnlyStatementProblem(draftedStatement(only))).toContain('does not start with SELECT or WITH');
+  });
+
+  it('words with a data-changing statement are still refused: before the query, instead of it, or after it', () => {
+    const dml = `${words}\n\nDELETE FROM games WHERE points IS NULL`;
+    expect(draftedStatement(dml)).toBe(dml);
+    expect(readOnlyStatementProblem(draftedStatement(dml))).toContain('does not start with SELECT or WITH');
+    // A statement before the query: the reply is not read from the query on.
+    const before = `${words}\n\nDELETE FROM games WHERE points IS NULL;\n${select}`;
+    expect(draftedStatement(before)).toBe(before);
+    expect(readOnlyStatementProblem(draftedStatement(before))).toBeDefined();
+    const bare = `UPDATE games SET points = 0;\n\n${select}`;
+    expect(draftedStatement(bare)).toBe(bare);
+    expect(readOnlyStatementProblem(draftedStatement(bare))).toContain('does not start with SELECT or WITH');
+    // From the query on, nothing is taken out.
+    expect(readOnlyStatementProblem(draftedStatement(`${words}\n\n${select};\nDROP TABLE games`))).toContain('more than one statement');
+    expect(readOnlyStatementProblem(draftedStatement(`${words}\n\nWITH x AS (SELECT 1) DELETE FROM games`))).toContain('DELETE');
+  });
+
+  it('a reply that is already a statement, or a fenced one, is read as before', () => {
+    expect(draftedStatement(`  ${select}\n`)).toBe(select);
+    // A query written in sentence case is still the statement, not words before its inner SELECT.
+    const sentenceCase = 'With per_game AS (\n  SELECT team_id FROM games\n)\nSelect team_id FROM per_game';
+    expect(draftedStatement(sentenceCase)).toBe(sentenceCase);
+    expect(draftedStatement(`${words}\n\n\`\`\`sql\n${select}\n\`\`\`\nThat is the query.`)).toBe(select);
+    expect(draftedStatement('```\nSELECT 1 FROM t\n```')).toBe('SELECT 1 FROM t');
+    expect(draftedStatement('')).toBe('');
   });
 });

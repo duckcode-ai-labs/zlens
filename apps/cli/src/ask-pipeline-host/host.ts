@@ -70,6 +70,7 @@ import {
   statedValues,
   blocksNamedByQuestion,
   withRowGuard,
+  draftedStatement,
   asksCalendarYear,
   groupedColumns,
   calendarYearFilters,
@@ -3361,9 +3362,10 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
         const declined = /^\s*NO_SQL\s*:?\s*([\s\S]*)$/i.exec(raw.trim());
         if (declined) { dispatch.outcome = 'declined'; return { declined: declined[1]!.trim() || 'the available tables do not hold what the question asks for' }; }
-        const fenced = /```(?:sql)?\s*([\s\S]*?)```/i.exec(raw);
+        // The statement only: from its fence, or past the sentences a model sometimes writes before it. Every check
+        // below reads the statement, never the words around it (a year said only in those words is not a filter).
+        const drafted = draftedStatement(raw);
         // The earlier values the model read by position are the real ones again in what it drafted.
-        const drafted = (fenced ? fenced[1]! : raw).trim();
         const sql = drafted ? await withStatedSeasons(await withSeasonYears(await withBothNameParts(priorMask ? priorMask.restoreText(drafted) : drafted))) : drafted;
         if (!sql) { dispatch.outcome = 'error'; return { error: 'the provider returned no SQL' }; }
         dispatch.outcome = 'sql';

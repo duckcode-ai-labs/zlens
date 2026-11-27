@@ -583,6 +583,31 @@ export function aggregatesRows(sql: string): boolean {
   return /\b(count|sum|avg|min|max)\s*\(|\bgroup\s+by\b/i.test(sql);
 }
 
+/** A line that starts a statement other than a query, in any case: words before a query must not hold one. */
+const OTHER_STATEMENT = /^[ \t]*(?:insert|update|delete|drop|alter|create|merge|grant|revoke|truncate|call|copy|put|remove|use|set|begin|commit|rollback|execute|exec|show|describe|explain|pragma|attach|detach|vacuum|load|install|unload|replace|upsert)\b/i;
+/** WITH that opens a named subquery: `WITH totals AS (`, `WITH RECURSIVE t (n) AS (`, the name and AS on any line. "With every game counted once, …" is a sentence. */
+const NAMED_SUBQUERY = /^[ \t]*with\s+(?:recursive\s+)?(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)\s*(?:\([^)]*\)\s*)?as\s*(?:(?:not\s+)?materialized\s*)?\(/i;
+
+/**
+ * THE STATEMENT IN A DRAFTER'S REPLY. The drafter is told to reply with the SQL only. Now and then the model writes a
+ * sentence or two first and then the statement ('The question says "regular season", so only regular-season games
+ * count …', then SELECT …: V18 gate, 27 Nov 2026), and the whole reply was read as the statement and refused as not
+ * starting with SELECT. A fenced statement is read from its fence, as before. Otherwise the statement starts at the
+ * first line that starts a query: SELECT, or WITH opening a named subquery. A reply that already starts with one,
+ * a reply with no query in it (words only, or words then DELETE …), and a reply with another statement before its
+ * query come back whole, and the checks after this refuse what they always refused. From the query on, nothing is
+ * taken out: a second statement after it is still refused as one.
+ */
+export function draftedStatement(reply: string): string {
+  const fenced = /```(?:sql)?\s*([\s\S]*?)```/i.exec(reply);
+  if (fenced) return fenced[1]!.trim();
+  const text = reply.trim();
+  const lines = text.split('\n');
+  const start = lines.findIndex((line, index) => /^[ \t]*select\b/i.test(line) || NAMED_SUBQUERY.test(lines.slice(index).join('\n')));
+  if (start <= 0 || lines.slice(0, start).some((line) => OTHER_STATEMENT.test(line))) return text;
+  return lines.slice(start).join('\n').trim();
+}
+
 /**
  * The drafter is told never to return more rows than the host shows, so it
  * writes that LIMIT on a plain list. Left there, exactly that many rows come
