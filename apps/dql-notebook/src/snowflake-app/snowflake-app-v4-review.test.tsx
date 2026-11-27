@@ -104,7 +104,9 @@ describe('the saved query page', () => {
   it('shows the SQL it runs, not its source, and "No domain", in the app for Snowflake', () => {
     setSnowflakeApp(true);
     const html = page();
-    expect(html).toContain('Open in builder');
+    // Open in builder is in the page's ⋯ menu, beside Compare with an old report and Modify with AI.
+    expect(html).toContain('aria-label="More"');
+    expect(html).not.toContain('Open in builder');
     expect(html).not.toContain('Open in Source');
     expect(html).not.toContain('// dql-format: 1');
     expect(html).not.toContain('block &quot;');

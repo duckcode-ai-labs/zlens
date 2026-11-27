@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { BlockDetailView, certificationReceiptTechnical, CERTIFIER_NOT_RECORDED, IMPORT_SOURCE_EXPORT_HINT, importSourceUploadNote, receiptMoment } from './BlockStudio';
 import { CertificationReportLines, certificationReportView, comparedSinceCertified, DIFFERS_SINCE_CERTIFIED, DiffersSinceCertifiedBadge, RECEIPT_REBUILT_NOTE, receiptLineDay, receiptLineWords, reportCheckStatusWords, reportMatchReceipt, wordsOnViewerClock } from './SavedQueryReportCheck';
 import { ComparisonResult, comparisonVerdictLine, recordedWords } from './ReportComparePanel';
+import { SavedQueryReportCheck } from './SavedQueryReportCheck';
 import type { ReportComparison, ReportQueryMatch } from '../../store/types';
 import { themes } from '../../themes/notebook-theme';
 
@@ -82,8 +83,16 @@ describe('the receipt of a saved query compared with its old report', () => {
 });
 
 describe('the compare box on the saved query page', () => {
-  it('is on every saved query\'s own page, with its own file box for the old report\'s export', () => {
+  it('is optional: opened from the page\'s ⋯ menu, not shown until asked for (the trust flow approved 2026-11-27)', () => {
     const html = page({}, 'blocks/nba/warriors_regular_season_wins_2014_2018.dql');
+    expect(html).not.toContain('data-testid="saved-query-report-check"');
+    expect(html).toContain('aria-label="More"');
+  });
+
+  it('has its own file box for the old report\'s export', () => {
+    const html = renderToStaticMarkup(
+      <SavedQueryReportCheck name="warriors_regular_season_wins_2014_2018" path="blocks/nba/warriors_regular_season_wins_2014_2018.dql" certified status={{ match: null }} onRecorded={noop} primaryButton={{}} t={themes.paper} />,
+    );
     expect(html).toContain('data-testid="saved-query-report-check"');
     expect(html).toContain('Compare with the old report');
     expect(html).toContain('The old report&#x27;s export (CSV or Excel)');
