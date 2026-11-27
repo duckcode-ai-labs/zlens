@@ -143,6 +143,8 @@ describe('the app asks for no draft of its own (the trust flow approved 2026-11-
     expect(saved?.path).toMatch(/^blocks\/_drafts\//);
     const after = collectInputFiles({ projectRoot: root });
     expect(after).toHaveLength(before.length + 1);
-    expect(after.filter((file) => !before.includes(file)).map((file) => file.replace(/\\/g, '/'))).toEqual([expect.stringMatching(new RegExp(`${saved!.path.replace(/[.]/g, '\\.')}$`))]);
+    const added = after.filter((file) => !before.includes(file)).map((file) => file.replace(/\\/g, '/'));
+    expect(added).toHaveLength(1);
+    expect(added[0]!.endsWith(`/${saved!.path}`)).toBe(true);
   });
 });
