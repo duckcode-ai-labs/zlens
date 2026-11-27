@@ -674,3 +674,40 @@ describe('where the project turns it on, every AI-drafted answer gets a review o
     }
   });
 });
+
+describe('words the drafter writes before its statement (V18 gate, 27 Nov 2026)', () => {
+  const question = 'Total invoice amount for each customer country';
+  const rows = [{ country: 'NO', total: 10 }];
+  const words = 'The question asks for totals by country, so I join invoices to customers on customer_id and sum the "total" column. The customers table holds the country.';
+  const select = 'SELECT c.country, SUM(i.total) AS total\nFROM main.invoices i\nJOIN main.customers c ON c.customer_id = i.customer_id\nGROUP BY c.country';
+  const cte = 'WITH totals AS (\n  SELECT customer_id, SUM(total) AS total FROM main.invoices GROUP BY customer_id\n)\nSELECT c.country, SUM(t.total) AS total FROM totals t JOIN main.customers c ON c.customer_id = t.customer_id GROUP BY c.country';
+  // What ran, without the catalog reads.
+  const answers = (executed: string[]) => executed.filter((sql) => !/information_schema|pragma_table/i.test(sql));
+
+  it.each([
+    ['a SELECT', select],
+    ['a WITH', cte],
+  ])('a sentence or two before %s: the statement runs on its first draft, and only the statement', async (_, statement) => {
+    for (const hosted of [false, true]) {
+      const { result, executed, prompts } = await ask({ hosted }, question, () => `${words}\n\n${statement}`, rows);
+      expect(result.status).toBe('completed');
+      expect(prompts).toHaveLength(1);
+      // The statement ran (beside the host's key checks), and no statement anywhere carried the words.
+      expect(answers(executed).some((sql) => sql.startsWith(statement.split('\n')[0]!))).toBe(true);
+      expect(executed.some((sql) => sql.includes('The question asks'))).toBe(false);
+    }
+  });
+
+  it.each([
+    ['words only', 'The invoices table holds totals and the customers table holds the country, but I am not sure which one the question means.'],
+    ['words, then a DELETE', `${words}\n\nDELETE FROM main.invoices WHERE total IS NULL`],
+    ['words, then a SELECT and a DELETE', `${words}\n\n${select};\nDELETE FROM main.invoices`],
+    ['a DELETE, then a SELECT', `DELETE FROM main.invoices;\n${select}`],
+  ])('%s: still refused, and nothing runs', async (_, reply) => {
+    for (const hosted of [false, true]) {
+      const { result, executed } = await ask({ hosted }, question, () => reply, rows);
+      expect(result.status).toBe('blocked');
+      expect(answers(executed)).toEqual([]);
+    }
+  });
+});
