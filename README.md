@@ -53,7 +53,7 @@ labels what it used:
 |---|---|---|
 | ● **Certified** | a certified saved query | Ran a saved query a person reviewed and certified, exactly as certified. |
 | ◐ **From Metrics** | your semantic layer | Built from approved metrics and dimensions. Not certified. |
-| ○ **Needs review** | SQL written by AI | Grounded in your schema and checked before it runs, then saved as a draft saved query until someone certifies it. |
+| ○ **Needs review** | SQL written by AI | Grounded in your schema and checked before it runs. Save it, and it waits as a draft until someone reviews and certifies it. |
 
 If none of these can answer safely, Ask refuses and says why. It never dresses
 an unreviewed number up as a trusted one.
@@ -283,8 +283,9 @@ before running, and the exact DQL and SQL that ran.
 </p>
 
 When no certified saved query or metric fits, AI writes the SQL from your schema.
-ZLens checks it before it runs, labels the answer **AI-generated**, and saves
-it as a draft saved query for someone to review. It never certifies itself.
+ZLens checks it before it runs and labels the answer **AI-generated**. To keep
+it, select **Save as saved query**: it is saved as a draft for someone to
+review. It never certifies itself.
 
 <p align="center">
   <img src="docs/assets/readme/ask-review.png" alt="An AI-generated answer with 4 checks passed, its result table, and the line Saved for review as a draft block (not certified)" width="85%">
@@ -297,10 +298,13 @@ it as a draft saved query for someone to review. It never certifies itself.
 ### Saved queries: save is a draft, certify is a person
 
 A saved query is a named, reusable query with an owner, a description, tests
-and a chart. Save a notebook cell with **Save as saved query**, and it is a
-draft. **Certify** runs the saved query and its checks; only if they pass
-does it become Certified, with a receipt of who certified it, when, and under
-which rules.
+and a chart. Save an Ask answer or a notebook cell with **Save as saved query**,
+or bring in the SQL behind your reports with **Import**, and it is a draft.
+Review it on its page: run it, read how it is worked out and its checks. Then
+**Certify** runs the saved query and its checks; only if they pass does it
+become Certified, with a receipt of who certified it, when, and under which
+rules. A saved query AI wrote also asks you to confirm: **I reviewed it —
+certify**. Comparing it with an old report first is optional.
 
 <p align="center">
   <img src="docs/assets/readme/block-certified.png" alt="Block Studio showing top_customers_by_spend as Certified, with the receipt line Certified by analytics@jaffle.shop via Block Studio, OSS rules, and a Block certified panel with Metadata, Validation, Run, Chart and Lineage checks" width="100%">

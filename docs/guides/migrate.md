@@ -83,8 +83,9 @@ report says so under **Not read** rather than counting it as empty.
     ```
 
     Fix the rest (often a parameter that needs a default value) and run it
-    again. You can also do all of this in the workbench, where **Certify all
-    that ran** does the same. See [Import SQL](../blocks/import-sql.md).
+    again. You can also do all of this in the workbench, with **Import** on
+    **Saved queries**, where **Certify all that ran** does the same. See
+    [Import SQL](../blocks/import-sql.md).
 
 ## Bring the calculations over as metrics
 
@@ -168,7 +169,8 @@ runs Certify.
 A metric draft shows its value over all rows, but a report is a whole table.
 `zlens migrate compare` takes an export of the old report, builds the same
 table in ZLens, and compares every value. It works on drafts, so you can check
-before you approve.
+before you approve. It is optional: a person certifies after review, with or
+without a match.
 
 1. Export the report as CSV or `.xlsx`: in Tableau, **Download → Crosstab**; in
    Power BI, a visual's **Export data**.
@@ -261,10 +263,11 @@ signs off the migration. An `exports.yaml` in the folder gives each file its own
 options, under the file's name: `worksheet`, `report`, `query`, `filters`,
 `waive`, `map`, `keys`, `ignore`, `fileRows`, `tolerance`.
 
-**On the screen.** **Compare with the old report** does the same thing: drop the
-file (CSV or Excel), read the differences. It is on every saved query's own page,
-on a saved draft in the Import screen, and in the Import screen's *Metric drafts*
-section, where you also state the report's filters. Each draft then shows its
+**On the screen.** **Compare with an old report** does the same thing: drop the
+file (CSV or Excel), read the differences. On a saved query's own page it is in
+the **⋯** menu. The Import screen has it too, as **Compare with the old report**,
+on a saved draft and in its *Metric drafts* section, where you also state the
+report's filters. Each draft then shows its
 verdict, and **Approve all that ran** leaves out what differs. The Import screen's
 **Source** box takes SQL, Tableau and Power BI files only; it points a CSV to the
 compare box.

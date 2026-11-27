@@ -357,7 +357,8 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
       mins: '5 min',
       body: (
         <>
-          <p style={para}>A good answer deserves <em>Save as saved query</em>. Saving never certifies: open it in <strong>Saved queries</strong>, check it, and select <strong>Certify</strong>. The next time anyone asks that question, the answer is <strong>Certified</strong>.</p>
+          <p style={para}>A good answer deserves <em>Save as saved query</em>: check its name and owner, then <strong>Save draft</strong>. Saving never certifies. Select <strong>Review it</strong>, or open the <strong>Drafts</strong> tab of <strong>Saved queries</strong>. <strong>Run</strong> it, read <strong>How it&apos;s worked out</strong> and the checks, then select <strong>Certify</strong> and <strong>I reviewed it — certify</strong>. The next time anyone asks that question, the answer is <strong>Certified</strong>: it runs the saved query you reviewed, not SQL that AI wrote.</p>
+          <p style={para}>To bring in the SQL behind your reports, use <strong>Import</strong> on <strong>Saved queries</strong>: each query becomes a draft that you review and certify the same way. Comparing a saved query with an old report is optional: <strong>⋯ » Compare with an old report</strong>.</p>
           <p style={para}>To share numbers, open <strong>Apps → Build new App</strong>, pick its data (certified saved queries first), add tiles and filters, then <strong>Publish</strong>. Readers see who checked each number.</p>
         </>
       ),
@@ -378,8 +379,8 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
       mins: '2 min',
       body: (
         <>
-          <p style={para}>Two things are set outside ZLens, on the app's <strong>Configurations</strong> tab in Snowsight (<strong>Apps</strong>, then this app): the one person who uses ZLens, and an optional stage for backups that outlive the app.</p>
-          <p style={para}>AI runs on Anthropic's Claude through Snowflake Cortex, inside Snowflake: model <span style={inlineCode}>claude-sonnet-5-5</span> (Claude Sonnet 5.5) unless you name another in <strong>Settings » AI provider</strong>. Ask needs the app to hold the <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> database role; <strong>Test</strong> on that page says whether Claude answers.</p>
+          <p style={para}>Two things are set outside ZLens, on the app's <strong>Configurations</strong> tab in Snowsight (<strong>Apps</strong>, then this app): <strong>Snowflake user who uses ZLens</strong>, the one person who uses it, and <strong>Stage for ZLens backups (optional)</strong>, a stage name such as <span style={inlineCode}>MY_DB.MY_SCHEMA.ZLENS_BACKUPS</span> for backups that outlive the app. Snowsight may list the stage first.</p>
+          <p style={para}>AI runs on Anthropic's Claude through Snowflake Cortex, inside Snowflake: model <span style={inlineCode}>claude-sonnet-5-5</span> (Claude Sonnet 5.5) unless you name another in <strong>Settings » AI provider</strong>. There is nothing to grant: every Snowflake app may use Cortex, and the app's <strong>Permissions</strong> tab shows its <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> database role as granted. <strong>Test</strong> on that page says whether Claude answers.</p>
         </>
       ),
     },
@@ -418,7 +419,7 @@ const SNOWFLAKE_APP_GUIDE: HelpGuideContent = {
             {troubleCard('“Service is not yet running”', <>ZLens is starting: usually 2 to 3 minutes, and up to 20 minutes the first time after an install or update. Close that tab and press <strong>Launch app</strong> in Snowsight: it waits until ZLens is ready, then offers <strong>Open ZLens</strong>. Or <span style={inlineCode}>CALL ZLENS_APP.app_public.app_url();</span> in a worksheet.</>)}
             {troubleCard('Snowsight asks for a warehouse', <>Pick <span style={inlineCode}>ZLENS_APP_WH</span> (your app's name followed by <span style={inlineCode}>_WH</span>): the page that starts ZLens runs on it. A note that you are missing a default warehouse is about your own Snowflake user's settings, not ZLens.</>)}
             {troubleCard('“This ZLens app is set up for one person”', <>Only the user named on the app's Configurations tab can open it. Your Snowflake admin can change that name there.</>)}
-            {troubleCard('Ask cannot reach Claude', <>Your Snowflake admin grants <span style={inlineCode}>SNOWFLAKE.CORTEX_USER</span> to the app. Then <strong>Settings » AI provider » Test</strong>.</>)}
+            {troubleCard('Ask cannot reach Claude', <>When Ask says it is not ready, it shows the one line your Snowflake admin runs as ACCOUNTADMIN. Then select <strong>Check again</strong> over Ask, or <strong>Settings » AI provider » Test</strong>.</>)}
             {troubleCard('A table is missing', <>Grant it to the app (see <strong>Add more data</strong>), then <strong>Settings » Database » Apply and synchronize</strong>.</>)}
             {troubleCard('Still stuck', <>Write to support through the <strong>Support</strong> link on the left. Say what you did, what you saw, and when.</>)}
           </div>

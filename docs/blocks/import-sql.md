@@ -10,14 +10,17 @@ one at a time or all that ran at once.
 
 {{ video("bk2-import-sql") }}
 
-## 1. Open Import SQL
+## 1. Open Import
 
-1. In the left rail, click **Saved queries**.
-2. With no saved query open, the saved query editor shows **Create saved queries**. On the
-   **Import SQL** card, click **Start import**.
+1. In the left rail, click **Saved queries**. It opens on the list of drafts
+   and certified saved queries.
+2. Click **Import**.
 
 The page is titled **Import SQL to DQL** and shows three steps: **Source**,
-**Draft** and **Review**.
+**Draft** and **Review**. It lists the files it reads: `.sql` files, Tableau
+`.twb` or `.twbx`, and Power BI `.pbit` or `model.bim`/TMDL. It cannot read a
+`.pbix`: in Power BI Desktop choose **File › Export › Power BI template** and
+import the `.pbit`.
 
 ## 2. Give it your SQL
 
@@ -95,7 +98,9 @@ Upload is fine for workbooks without extracts. For a large `.twbx`, point the
 Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
 
 ZLens works through **Reading SQL**, **Running previews** and, for a Tableau
-or Power BI file, **Making metric drafts**, then **Import complete**. Nothing is written to your project yet: a draft becomes a saved query
+or Power BI file, **Making metric drafts**, then **Import complete**. Then it
+shows what it made: the query drafts, the metric drafts, and what it left out,
+with the reason for each. Nothing is written to your project yet: a draft becomes a saved query
 file only when you click **Save draft** on it, or when it is certified.
 
 ## 3. Review each draft
@@ -158,7 +163,8 @@ ready.**
 
 ## 5. Certify it
 
-Click **Certify**. It is available once the draft is saved.
+Click **Certify**. It is available once the draft is saved. A saved draft is
+also on the **Drafts** tab of **Saved queries**, to review and certify later.
 
 ZLens runs the saved query and its tests, if it has any (tests are optional). When
 the checks pass, the saved query moves out of `_drafts/` to its normal place and is
@@ -203,7 +209,8 @@ approves every draft whose check ran, leaving out any that differs from the old
 report, and any ratio that would bring one along: those are approved one at a
 time. **Compare with the old report** takes an export of a report and compares
 every value, as [`zlens migrate compare`](../guides/migrate.md#prove-the-numbers-match)
-does; a saved query draft has the same section, and so does every saved query's own page. Below them: calculations that are
+does. It is optional. A saved query draft has the same section, and every saved query's own page has it in
+the **⋯** menu, as **Compare with an old report**. Below them: calculations that are
 already a metric, ones whose check failed on the database, and ones left out,
 each with why. See [Migrate from other tools](../guides/migrate.md#bring-the-calculations-over-as-metrics).
 
@@ -218,7 +225,7 @@ Saved drafts go in:
 
 ## From the terminal
 
-Unlike the Import SQL page, the terminal command saves every draft as it goes.
+Unlike the Import page, the terminal command saves every draft as it goes.
 
 ```bash
 zlens import sql ./legacy-sql --domain finance --owner you@example.com
@@ -256,7 +263,7 @@ zlens certify --from-import --apply
 Without an id it uses the latest import. `--apply` runs the page's Certify on
 each draft, so each one is checked on its own and gets its own receipt
 (`via: sql-import`). The ones that fail stay drafts and are listed with the
-reason. Fix a draft on the Import SQL page or in its file under `_drafts/`,
+reason. Fix a draft on the Import page or in its file under `_drafts/`,
 then run it again: drafts already certified are skipped.
 
 One draft at a time: `zlens certify --from-draft <path> --owner

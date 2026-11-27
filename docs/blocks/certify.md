@@ -8,8 +8,30 @@ ZLens keeps two steps apart:
   only if they pass does the saved query become **Certified**, with a record of who
   certified it.
 
-**Saving never certifies.** Not in the saved query editor, not in Import SQL, not when
-Ask keeps a draft, and not from the CLI.
+**Saving never certifies.** Not in the saved query editor, not on the Import page, not
+when you save an Ask answer, and not from the CLI.
+
+## The usual path: save, review, certify
+
+1. **Save.** On an Ask answer, select **Save as saved query**, check the name
+   and **Owner**, and **Save draft**. ZLens says **Saved as a draft. Review
+   it**. Drafts also come from **Import** on **Saved queries** (SQL, Tableau
+   and Power BI files; see [Import SQL](import-sql.md)) and from **New saved
+   query**.
+2. **Review.** Select **Review it**, or open **Saved queries**: it opens on the
+   list, with a **Drafts** tab and a **Certified** tab, a **Queries** /
+   **Metrics** filter, and the most asked first. On the draft's page, click
+   **Run** (set its **Parameters** first, if it has any), read **How it's
+   worked out**, a line in plain words, and look at its checks. The SQL is
+   folded under them.
+3. **Certify.** Click **Certify**. For a saved query AI wrote, confirm with
+   **I reviewed it — certify**. When the checks pass, it is **Certified**:
+   Ask and Apps run it as you reviewed it, with no AI-written SQL.
+
+Comparing it with an old report is optional. On the saved query's page it is
+in the **⋯** menu, as **Compare with an old report**, with **Modify with AI**
+and **Open in builder**. See
+[Prove the numbers match](../guides/migrate.md#prove-the-numbers-match).
 
 ## Save a draft
 
@@ -53,7 +75,7 @@ Recorded as maria.lopez@example.com · 10/15/2026, 3:27:48 PM · via the saved q
 The certifier is your git `user.email` (else `$USER@local`), named by git `user.name`; in the ZLens app for
 Snowflake it is the Snowflake user you signed in as. A receipt made where ZLens could not tell who was
 certifying (an early version of the app for Snowflake) says **Who certified it was not recorded**. When the saved query was compared
-with its old report and every value matched, the receipt adds a line such as
+with its old report (optional: **⋯ › Compare with an old report**) and every value matched, the receipt adds a line such as
 `Old report when certified: Matches Sales by Region · every value compared (12 of 12 at 2 decimals, 2026-10-15)`;
 see [Prove the numbers match](../guides/migrate.md#prove-the-numbers-match).
 
@@ -80,7 +102,7 @@ write the same receipt:
 
 | Where | Action | Receipt says |
 |---|---|---|
-| [Import SQL](import-sql.md) | **Certify** on a saved draft, or **Certify all that ran** for every draft whose preview ran | `via: sql-import` |
+| [Import](import-sql.md) | **Certify** on a saved draft, or **Certify all that ran** for every draft whose preview ran | `via: sql-import` |
 | Terminal, after `zlens import sql` | `zlens certify --from-import --apply`: each draft of the import that passes | `via: sql-import` |
 | App Studio, data checked from a table (or a saved query made row-level) | **I vouch for this — certify**, at publish or under **⋯ → Certify…** | `via: app-dataset` |
 | App Studio, a saved query | **Certify now** in the publish dialog, or **⋯ → Certify…**: a short review (it runs, its tests, who owns it, what one row is), then **I vouch for this — certify** | `via: app-dataset` |

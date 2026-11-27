@@ -13,10 +13,16 @@ GRANT USAGE ON SCHEMA app_public TO APPLICATION ROLE app_user;
 
 -- Who uses ZLens: entered on the app's Configurations tab (or ALTER APPLICATION ... SET CONFIGURATION
 -- zlens_user VALUE = '...'). ZLens reads it on every sign-in; until it is set, ZLens shows the steps.
+--
+-- Snowsight does not list the configurations in the order this script defines them: it shows
+-- ZLENS_BACKUP_STAGE above ZLENS_USER, as SHOW CONFIGURATIONS does (by name, it seems; Snowflake documents no
+-- order and no way to set one). In the V18 test a first-time admin typed the user into the backup stage.
+-- Renaming either would lose the values installed apps hold, so each description says first whether it is
+-- required, and the README and the launcher name the user's row.
 ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_user
   TYPE = STRING
   LABEL = 'Snowflake user who uses ZLens'
-  DESCRIPTION = 'The one Snowflake user this free app serves (their user name, for example JSMITH). Anyone else who opens ZLens is refused.'
+  DESCRIPTION = 'Required. The one Snowflake user this free app serves (their user name, for example JSMITH). Anyone else who opens ZLens is refused.'
   APPLICATION_ROLES = (app_admin)
   SENSITIVE = FALSE;
 
@@ -26,7 +32,7 @@ ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_user
 ALTER APPLICATION SET CONFIGURATION DEFINITION zlens_backup_stage
   TYPE = STRING
   LABEL = 'Stage for ZLens backups (optional)'
-  DESCRIPTION = 'A stage you own, as DATABASE.SCHEMA.STAGE. First grant this app USAGE on its database, USAGE on its schema, and READ, WRITE on the stage. ZLens copies its projects there once a day; the copies stay if the app is uninstalled.'
+  DESCRIPTION = 'Optional: leave it empty unless you made a backup stage. A stage name, not a user: MY_DB.MY_SCHEMA.ZLENS_BACKUPS. First grant this app USAGE on its database, USAGE on its schema, and READ, WRITE on the stage. ZLens copies its projects there daily.'
   APPLICATION_ROLES = (app_admin)
   SENSITIVE = FALSE;
 

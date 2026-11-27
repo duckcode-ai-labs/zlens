@@ -2,7 +2,8 @@
 
 When no certified saved query or semantic metric answers a question, Ask can write
 SQL from your tables with AI. That answer may well be right, but nobody has
-checked it yet, so ZLens labels it and keeps it as a draft for review.
+checked it yet, so ZLens labels it. To keep it, save it: it waits as a draft
+until someone reviews and certifies it.
 
 {{ clip("ask-review") }}
 
@@ -19,39 +20,42 @@ in the sample project:
    locations tables, because no certified saved query or metric answers this;
    review it before relying on the numbers.`
 3. The result card says `AI-generated`.
-4. Under the result, a line reads **Saved as a draft saved query for review (not
-   certified):** and the draft's name, such as
-   `how_many_orders_placed_each_store_location`. Asking the same question again
-   reuses that draft and counts the asks.
-5. **Open draft to review** opens that draft in the saved query editor.
+4. **Save as saved query** on the answer keeps it. Ask saves nothing on its
+   own.
 
-The draft is named after the question, here `how_many_orders_placed_each_store_location`.
-When every table the answer reads is listed in one Domain's **Source systems**
-(in the sample, `orders` and `locations` are both in **commerce**), the draft
-is saved in that Domain and its **Domain** is already set. When the tables
-belong to more than one Domain, or to none, the draft is saved in
-`blocks/_drafts/` with no Domain, and you pick one when you certify.
-
-If the same question is asked again, ZLens reuses the same draft and counts
-the repeats (**asked N times**). A question many people ask is a good one to
-certify first.
-
-## Review and certify the draft
+## Save, review, certify
 
 {{ video("ask3-ai-to-certified") }}
 
-1. Click **Open draft to review**, or find it in **Saved queries** in the **Drafts**
-   folder.
-2. Check the SQL and click **Run** to look at the rows.
-3. Check the **Saved query name** and **Domain**, set an **Owner** and a clear
-   description. Add a test if you can. To change the **Saved query name**,
-   **Domain** or **Owner**, click **Open in builder**. These fields are in the
-   **Details** box.
-4. Click **Certify**. If the draft has no Domain yet and your project has
+1. Click **Save as saved query** on the answer. A small dialog shows the name
+   and the **Owner**; change them if you need to, then click **Save draft**.
+   ZLens says **Saved as a draft. Review it**.
+2. Click **Review it**, or open **Saved queries**: the draft is on the
+   **Drafts** tab.
+3. Click **Run** and look at the rows. Read **How it's worked out**, one line
+   in plain words, and the checks. The SQL is folded under them.
+4. To change the **Saved query name**, **Domain** or **Owner**, set a clear
+   description or add a test, click **⋯ › Open in builder**. These fields are
+   in the **Details** box.
+5. Click **Certify**. If the draft has no Domain yet and your project has
    Domains, the saved query editor asks for one first: a Domain, or **Global /
    cross-domain** for an answer that spans Domains. AI wrote the draft, so
    Certify then asks you to confirm you reviewed it: click **I reviewed it —
    certify**.
+
+The draft is named after the question, here `how_many_orders_placed_each_store_location`,
+unless you change the name. When every table the answer reads is listed in one
+Domain's **Source systems** (in the sample, `orders` and `locations` are both in
+**commerce**), the draft is saved in that Domain and its **Domain** is already
+set. When the tables belong to more than one Domain, or to none, the draft is
+saved in `blocks/_drafts/` with no Domain, and you pick one when you certify.
+
+**Saved queries** lists the drafts most asked first. A question many people
+ask is a good one to certify first.
+
+Comparing the result with an old report is optional: **⋯ › Compare with an
+old report** on the saved query's page. See
+[Prove the numbers match](../guides/migrate.md#prove-the-numbers-match).
 
 When it passes, the saved query is **Certified** and is saved in its Domain under its
 name. A certified saved query is available to Apps because it is certified, so it
@@ -88,15 +92,10 @@ question:
 `ZLENS_ASK_RESULT_REVIEW=1` turns it on and `=0` off for one server or
 command, whatever the project says.
 
-## When no draft is saved
+## What can be saved
 
-ZLens saves a review draft only when the answer actually ran and produced
-SQL. It does not save one for a refusal, a cancelled run, or a Research
-report. Evaluation runs (`zlens agent eval`) never write drafts.
-
-To keep an answer that was not saved, click **Save as saved query** on it.
-**Save as saved query** opens the **Save as saved query** dialog; **Save draft saved query**
-saves a draft and opens it in the saved query editor.
+Only an answer that ran SQL has a query to save. Evaluation runs
+(`zlens agent eval`) never write drafts.
 
 ## Other labels you may see
 

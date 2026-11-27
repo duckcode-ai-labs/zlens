@@ -144,8 +144,9 @@ def read_data():
 def grant_lines(app):
     """The database grants of the README's step 2, with the app's name filled in.
 
-    Only the database: the Cortex grant (step 4) is optional and often already there, so a box about data that
-    also listed it read as if Cortex were missing (Snowflake's review and the V17 p9 tester, 20 Nov 2026).
+    Only the database: a box about data that also listed the Cortex grant read as if Cortex were missing
+    (Snowflake's review and the V17 p9 tester, 20 Nov 2026). Every app may use Cortex through SNOWFLAKE.APP_PUBLIC,
+    so there is no Cortex step (V18 test, 27 Nov 2026).
     """
     return (
         f"GRANT USAGE ON DATABASE MY_DB TO APPLICATION {app};\n"
@@ -156,7 +157,8 @@ def grant_lines(app):
 
 
 def cortex_line(app):
-    """The README's optional step 4: let ZLens ask Claude through Cortex."""
+    """The Cortex grant with this app's name. No longer a set-up step: every app may use Cortex through
+    SNOWFLAKE.APP_PUBLIC. When ZLens's own Cortex check fails, show_ask shows ZLens's own fix line instead."""
     return f"GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION {app};"
 
 
@@ -323,7 +325,9 @@ if not status["zlens_user"]:
     st.subheader("Set up ZLens first")
     st.write(
         "**One step is missing: name the Snowflake user who uses ZLens.** On the app's **Configurations** tab, "
-        "set **Snowflake user who uses ZLens** and press **Save**. When it is saved, the tab shows a green "
+        "select **Review** on **Snowflake user who uses ZLens**, enter the user name and press **Save**. "
+        "Leave **Stage for ZLens backups (optional)** for now: it takes a stage name, not a user. "
+        "When the user is saved, the tab shows a green "
         "**Configured** badge with the name; if it still shows **Review**, open Review and Save again. "
         "Or run this as a role that owns the app:"
     )
@@ -333,11 +337,6 @@ if not status["zlens_user"]:
         "with your database and schema names. " + RUN_ALL
     )
     st.code(grant_lines(app), language="sql")
-    st.caption(
-        "To let ZLens ask Claude (optional), also run this if the app's **Permissions** tab does not show "
-        "CORTEX_USER as granted:"
-    )
-    st.code(cortex_line(app), language="sql")
     st.caption(
         f"If Snowsight asks you to select a warehouse before this page opens, pick {warehouse}, "
         "the app's own warehouse: this page runs on it."

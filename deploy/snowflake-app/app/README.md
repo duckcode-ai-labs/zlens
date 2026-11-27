@@ -18,10 +18,12 @@ several lines, run each line, or select them all and press **Run**: Snowsight's 
 statement at the cursor.
 
 1. **Name the person who uses ZLens.** Open **Apps** in Snowsight's left menu, then this app, then its
-   **Configurations** tab. Pick a warehouse at the top of the page first (Snowsight needs one to save),
-   then select **Review**, enter that person's Snowflake user name, and **Save**. When it is saved, the
-   tab shows a green **Configured** badge with the name. If it still shows **Review**, open Review and
-   Save again. Or in SQL:
+   **Configurations** tab. Pick a warehouse at the top of the page first (Snowsight needs one to save).
+   Then find **Snowflake user who uses ZLens**, select its **Review**, enter that person's Snowflake
+   user name, and **Save**. Snowsight may list **Stage for ZLens backups (optional)** above it: leave
+   that one for now. It takes a stage name, not a user (see **Backups** below). When the user is
+   saved, the tab shows a green **Configured** badge with the name. If it still shows **Review**, open
+   Review and Save again. Or in SQL:
 
    ```sql
    ALTER APPLICATION ZLENS_APP SET CONFIGURATION ZLENS_USER VALUE = 'THEIR_USER';
@@ -45,14 +47,10 @@ statement at the cursor.
    GRANT APPLICATION ROLE ZLENS_APP.app_user TO ROLE THEIR_ROLE;
    ```
 
-4. **Let ZLens ask Claude** (optional). If the app's **Permissions** tab does not show `CORTEX_USER`
-   as granted yet:
+4. **Open it.** Press **Launch app** on the app's page in Snowsight (next section).
 
-   ```sql
-   GRANT DATABASE ROLE SNOWFLAKE.CORTEX_USER TO APPLICATION ZLENS_APP;
-   ```
-
-5. **Open it.** Press **Launch app** on the app's page in Snowsight (next section).
+There is nothing to grant for Ask: it uses Claude through Snowflake Cortex, which every Snowflake app
+may use.
 
 ## Try it on Snowflake's sample data
 
@@ -93,9 +91,15 @@ data into a database you own (about 1.7 million rows), then grant that database 
    five rows, UNITED STATES first at 1,419,081,800.96. Ask "What was our payroll in 1997?" and ZLens
    says **Not in this data** and runs no query.
 
-5. **Certify it.** On the first answer, select **Save as saved query**, give it a name and an owner, and
-   **Save draft**. Open it under **Saved queries**. In **Compare with the old report**, upload the report
-   you trust today; for this sample, save these lines as `old-report.csv`:
+5. **Certify it.** On the first answer, select **Save as saved query**, check its name and owner, and
+   **Save draft**. ZLens says **Saved as a draft. Review it**: select **Review it** (it is also on the
+   **Drafts** tab of **Saved queries**). Press **Run** and look at the five rows, read **How it's worked
+   out** and the checks, then select **Certify** and **I reviewed it — certify**. Ask the first question
+   again: the answer is now **Certified**. It runs the saved query you reviewed, not SQL that AI wrote.
+
+   Optional, before you certify: compare it with the report you trust today. In the saved query's **⋯**
+   menu, select **Compare with an old report** and upload the file. For this sample, save these lines as
+   `old-report.csv`:
 
    ```csv
    N_NATIONKEY,N_NAME,ORDER_REVENUE
@@ -108,8 +112,8 @@ data into a database you own (about 1.7 million rows), then grant that database 
 
    ZLens says **Matches: 5 of 5 rows, every value**. It matches the file's columns to the answer's by
    name, ignoring case, spaces and underscores; if the answer's columns are named differently, change
-   the file's first line to match. Select **Certify**, then ask the first question again: the answer is
-   now **Certified**.
+   the file's first line to match. When you then certify, the receipt records the match. A match is
+   not needed to certify.
 
 6. **Clean up** when you are done:
 
@@ -228,7 +232,8 @@ After you add tables or schemas, run those grant lines again for them, then in Z
   inside your account. Indexing costs about a cent of Snowflake credits for a small project (about
   $0.35 for one with hundreds of tables, the first time; after that only new text is embedded). Turn
   it off in **Settings » AI provider » Search**.
-- **Without `CORTEX_USER`** (step 4), Ask is off. Everything else works.
+- **Nothing to grant.** Every Snowflake app may use Cortex. The app's **Permissions** tab shows the
+  `CORTEX_USER` database role as granted: Snowflake gives it to every app.
 - **Ask checks itself.** When ZLens starts, it asks Cortex for one word. If that fails, Ask, Settings and
   the launcher say "Ask is not ready" with the one line an `ACCOUNTADMIN` runs: the `CORTEX_USER` grant with
   your app's name, or the account's cross-region setting. While Ask is not ready, ZLens checks again every
@@ -359,8 +364,9 @@ An open ZLens tab does not keep it running: ZLens stops after 60 minutes with no
 
 The app asks for three account privileges, each shown on its **Permissions** tab: `BIND SERVICE
 ENDPOINT` (its own address), `CREATE COMPUTE POOL` (one small pool) and `CREATE WAREHOUSE` (its own
-extra-small warehouse), plus the `SNOWFLAKE.CORTEX_USER` database role for Claude. It creates no
-listings, shares or external access integrations.
+extra-small warehouse). The tab also shows the `SNOWFLAKE.CORTEX_USER` database role for Claude as
+granted: Snowflake gives it to every app, so you grant nothing for it. The app creates no listings,
+shares or external access integrations.
 
 When you press **Get**, Snowflake's dialog also lists, under **Future upgrades**, privileges a later
 version could be granted without asking again: `EXECUTE TASK`, `EXECUTE MANAGED TASK`,

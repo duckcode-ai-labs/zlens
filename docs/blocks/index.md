@@ -12,9 +12,9 @@ from saved queries.
 
 | Start from | How |
 |---|---|
-| Existing SQL: `.sql` files, pasted SQL, Tableau workbooks or Power BI files | [Import SQL](import-sql.md) |
+| Existing SQL: `.sql` files, pasted SQL, Tableau workbooks or Power BI files | **Import** on **Saved queries**. See [Import SQL](import-sql.md). |
 | A notebook cell | **Save as saved query** on the cell. See [Notebooks](../notebooks/index.md#save-a-cell-as-a-saved-query). |
-| An Ask answer you want to keep | **Save as saved query** on the answer, or the review draft Ask saves for you. See [Answers that need review](../ask/needs-review.md). |
+| An Ask answer you want to keep | **Save as saved query** on the answer. Ask saves nothing on its own. See [Answers that need review](../ask/needs-review.md). |
 | Nothing yet | **New saved query** in [Saved queries](block-studio.md) |
 | A dbt project | `zlens propose` in a terminal: it ranks your dbt models and writes one draft saved query per high-value model. See the [CLI reference](../reference/cli.md). |
 | A terminal | `zlens new block "<name>"` or `zlens import sql <path>` |
@@ -25,8 +25,10 @@ later. See [Save and certify](certify.md).
 ## Find your saved queries
 
 1. In the left rail, click **Saved queries**.
-2. The sidebar lists saved queries in folders by domain. Drafts that Ask or
-   Import SQL saved for review are in a **Drafts** folder.
+2. It opens on the list. The **Drafts** tab holds the drafts waiting for
+   review, saved from Ask, Import or by hand; the **Certified** tab holds the
+   certified ones. A **Queries** / **Metrics** filter narrows the list, and the
+   most asked come first.
 3. Narrow the list with the search box or the domain menu (**All domains**).
 
 The line under the search box counts them, for example `3 saved queries · 1
@@ -76,7 +78,7 @@ block "Top customers by lifetime spend" {
 
 - Saved queries are kept under `blocks/<domain>/`, or `domains/<domain>/blocks/`
   when your project uses domain folders.
-- Drafts that Ask or Import SQL created go in a `_drafts/` folder until they
+- Drafts saved from Ask or Import go in a `_drafts/` folder until they
   are certified.
 - Once you save it, a saved query has a companion file under
   `semantic-layer/blocks/` that records its review status and, once certified,
