@@ -131,6 +131,11 @@ export function savedQueryRows(input: {
       || left.name.localeCompare(right.name));
 }
 
+/** The tab the list opens on: Drafts, unless there are none and something is certified. */
+export function openingSavedQueriesTab(counts: { drafts: number; certified: number }): SavedQueriesTab {
+  return counts.drafts === 0 && counts.certified > 0 ? 'certified' : 'drafts';
+}
+
 export function SavedQueriesHome({
   onImport,
   onAskAi,
@@ -219,6 +224,17 @@ export function SavedQueriesHome({
     drafts: blocks ? savedQueryRows({ blocks, metricDrafts, runs, tab: 'drafts', kind: 'all' }).length : 0,
     certified: blocks ? savedQueryRows({ blocks, metricDrafts, runs, tab: 'certified', kind: 'all' }).length : 0,
   }), [blocks, metricDrafts, runs]);
+  // Open on the tab that has something in it, once, unless the person already picked one.
+  const tabSettled = useRef(false);
+  useEffect(() => {
+    if (!blocks || tabSettled.current) return;
+    tabSettled.current = true;
+    setTab(openingSavedQueriesTab(counts));
+  }, [blocks, counts]);
+  const pickTab = (next: SavedQueriesTab) => {
+    tabSettled.current = true;
+    setTab(next);
+  };
 
   const openRow = useCallback((row: SavedQueryRow) => {
     if (row.kind === 'metric') {
@@ -317,10 +333,10 @@ export function SavedQueriesHome({
       {readOnlyReason && !onBuildManually ? <div style={{ fontSize: 12, color: t.textMuted }}>{readOnlyReason}</div> : null}
 
       <div role="tablist" aria-label="Saved queries" style={{ display: 'flex', alignItems: 'center', borderBottom: `1px solid ${t.headerBorder}` }}>
-        <button type="button" role="tab" aria-selected={tab === 'drafts'} onClick={() => setTab('drafts')} style={tabStyle(tab === 'drafts')}>
+        <button type="button" role="tab" aria-selected={tab === 'drafts'} onClick={() => pickTab('drafts')} style={tabStyle(tab === 'drafts')}>
           Drafts{blocks ? ` (${counts.drafts})` : ''}
         </button>
-        <button type="button" role="tab" aria-selected={tab === 'certified'} onClick={() => setTab('certified')} style={tabStyle(tab === 'certified')}>
+        <button type="button" role="tab" aria-selected={tab === 'certified'} onClick={() => pickTab('certified')} style={tabStyle(tab === 'certified')}>
           Certified{blocks ? ` (${counts.certified})` : ''}
         </button>
         <div style={{ flex: 1 }} />

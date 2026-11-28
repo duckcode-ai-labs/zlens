@@ -49,7 +49,7 @@ describe('a saved query\'s page, for review', () => {
     it(`says how it is worked out above the SQL, which is folded away (${snowflakeApp ? 'app for Snowflake' : 'open source'})`, () => {
       setSnowflakeApp(snowflakeApp);
       const html = page();
-      expect(text(html)).toContain("How it's worked out Reads LOCAL_TEAM_GAME_FACTS, keeps the rows where SEASON = ${season} AND CAST(GAME_ID AS VARCHAR) LIKE '4%', and adds them up into one row.");
+      expect(text(html)).toContain("How it's worked out Reads LOCAL_TEAM_GAME_FACTS, keeps the rows where SEASON is the season you choose and GAME_ID starts with “4”, and adds them up into one row.");
       expect(html.indexOf('saved-query-worked-out')).toBeLessThan(html.indexOf('<details'));
       // Folded: a <details> without `open`.
       expect(html).toMatch(/<details(?: data-testid="saved-query-sql")?><summary/);

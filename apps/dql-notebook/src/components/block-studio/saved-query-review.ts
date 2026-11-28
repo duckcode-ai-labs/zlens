@@ -46,6 +46,206 @@ function clauseText(sql: string, top: string, start: RegExp, ends: RegExp): stri
 }
 
 /**
+ * The query with string contents and everything inside brackets blanked out (same length), so a word such as AND
+ * is found only where it joins two conditions.
+ */
+function maskedTopLevel(text: string): string {
+  let depth = 0;
+  let quoted = false;
+  let out = '';
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (quoted) {
+      out += char === "'" ? "'" : 'x';
+      if (char === "'") {
+        if (text[index + 1] === "'") {
+          out += 'x';
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      }
+      continue;
+    }
+    if (char === "'") {
+      quoted = true;
+      out += char;
+      continue;
+    }
+    if (char === '(') depth += 1;
+    out += depth > 0 ? ' ' : char;
+    if (char === ')') depth = Math.max(0, depth - 1);
+  }
+  return out;
+}
+
+/** Split at a top-level AND or OR. The AND of `BETWEEN a AND b` stays with its BETWEEN. */
+function splitTopLevel(text: string, word: 'and' | 'or'): string[] {
+  const masked = maskedTopLevel(text);
+  const parts: string[] = [];
+  let start = 0;
+  let pendingBetween = false;
+  for (const match of masked.matchAll(/\s(and|or|between)\s/gi)) {
+    const found = match[1]!.toLowerCase();
+    if (found === 'between') {
+      pendingBetween = true;
+      continue;
+    }
+    if (found === 'and' && pendingBetween) {
+      pendingBetween = false;
+      continue;
+    }
+    if (found !== word) continue;
+    parts.push(text.slice(start, match.index).trim());
+    start = match.index! + match[0].length;
+  }
+  parts.push(text.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
+/** True when the whole condition sits inside one pair of brackets. */
+function isWrapped(text: string): boolean {
+  if (!text.startsWith('(') || !text.endsWith(')')) return false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === '(') depth += 1;
+    if (text[index] === ')') depth -= 1;
+    if (depth === 0 && index < text.length - 1) return false;
+  }
+  return true;
+}
+
+const IDENTIFIER = /^(?:"[^"]+"|[A-Za-z_][\w$]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w$]*))*$/;
+
+/** A column as people read it: `CAST(g.GAME_ID AS VARCHAR)`, `UPPER(g.GAME_ID)` and `g.GAME_ID` → `GAME_ID`. */
+function columnWords(expression: string): string | null {
+  let text = expression.trim().replace(/::\s*[\w ]+(?:\([\d, ]*\))?$/, '').trim();
+  const cast = /^(?:try_)?cast\s*\(\s*(.+?)\s+as\s+[\w ]+(?:\([\d, ]*\))?\s*\)$/i.exec(text);
+  if (cast) text = cast[1]!.trim();
+  const wrapped = /^(?:upper|lower|trim)\s*\(\s*(.+?)\s*\)$/i.exec(text);
+  if (wrapped) text = wrapped[1]!.trim();
+  const datePart = /^(year|quarter|month|day)\s*\(\s*(.+?)\s*\)$/i.exec(text)
+    ?? /^extract\s*\(\s*(year|quarter|month|day)\s+from\s+(.+?)\s*\)$/i.exec(text)
+    ?? /^date_part\s*\(\s*'?(year|quarter|month|day)'?\s*,\s*(.+?)\s*\)$/i.exec(text);
+  if (datePart) {
+    const column = columnWords(datePart[2]!);
+    return column ? `the ${datePart[1]!.toLowerCase()} of ${column}` : null;
+  }
+  return IDENTIFIER.test(text) ? lastPart(text) : null;
+}
+
+/** A value as people read it: `'Golden State'` → `“Golden State”`, `DATE '1996-01-01'` → `1996-01-01`. */
+function valueWords(expression: string): { words: string; date: boolean; column?: boolean } | null {
+  const text = expression.trim();
+  const dated = /^(?:date\s+)?'(\d{4}-\d{2}-\d{2}(?:[ T][\d:.]+)?)'$/i.exec(text);
+  if (dated) return { words: dated[1]!, date: true };
+  if (/^'(?:[^']|'')*'$/.test(text)) return { words: `“${text.slice(1, -1).replace(/''/g, "'")}”`, date: false };
+  const input = /^\$\{\s*([A-Za-z_][\w]*)\s*\}$/.exec(text);
+  if (input) return { words: `the ${input[1]!.replace(/_/g, ' ')} you choose`, date: false };
+  if (/^-?\d+(?:\.\d+)?$/.test(text)) return { words: text, date: false };
+  if (/^(?:true|false)$/i.test(text)) return { words: text.toLowerCase(), date: false };
+  if (/^current_date(?:\s*\(\s*\))?$/i.test(text)) return { words: 'today', date: true };
+  const column = columnWords(text);
+  return column ? { words: column, date: false, column: true } : null;
+}
+
+const COMPARISON: Record<string, { plain: string; date: string }> = {
+  '=': { plain: 'is', date: 'is' },
+  '<>': { plain: 'is not', date: 'is not' },
+  '!=': { plain: 'is not', date: 'is not' },
+  '>=': { plain: 'is at least', date: 'is on or after' },
+  '<=': { plain: 'is at most', date: 'is on or before' },
+  '>': { plain: 'is more than', date: 'is after' },
+  '<': { plain: 'is less than', date: 'is before' },
+};
+
+/** One condition in plain words, or null when it can't be said safely. */
+function conditionWords(condition: string): string | null {
+  let text = condition.trim();
+  while (isWrapped(text)) text = text.slice(1, -1).trim();
+  const either = splitTopLevel(text, 'or');
+  if (either.length > 1) {
+    const options = either.map(conditionWords);
+    return options.every(Boolean) ? `(${options.join(' or ')})` : null;
+  }
+  let match = /^(.+?)\s+is\s+(not\s+)?null$/i.exec(text);
+  if (match) {
+    const column = columnWords(match[1]!);
+    return column ? `${column} is ${match[2] ? 'not empty' : 'empty'}` : null;
+  }
+  match = /^(.+?)\s+(not\s+)?between\s+(.+?)\s+and\s+(.+)$/i.exec(text);
+  if (match) {
+    const column = columnWords(match[1]!);
+    const low = valueWords(match[3]!);
+    const high = valueWords(match[4]!);
+    return column && low && high ? `${column} is ${match[2] ? 'not ' : ''}between ${low.words} and ${high.words}` : null;
+  }
+  match = /^(.+?)\s+(not\s+)?i?like\s+'((?:[^']|'')*)'$/i.exec(text);
+  if (match) {
+    const column = columnWords(match[1]!);
+    const pattern = match[3]!.replace(/''/g, "'");
+    if (!column || pattern.includes('_')) return null;
+    const not = Boolean(match[2]);
+    const inner = /^%([^%]+)%$/.exec(pattern);
+    const starts = /^([^%]+)%$/.exec(pattern);
+    const ends = /^%([^%]+)$/.exec(pattern);
+    if (inner) return `${column} ${not ? 'does not contain' : 'contains'} “${inner[1]}”`;
+    if (starts) return `${column} ${not ? 'does not start' : 'starts'} with “${starts[1]}”`;
+    if (ends) return `${column} ${not ? 'does not end' : 'ends'} with “${ends[1]}”`;
+    return pattern.includes('%') ? null : `${column} is ${not ? 'not ' : ''}“${pattern}”`;
+  }
+  match = /^(.+?)\s+(not\s+)?in\s*\((.+)\)$/i.exec(text);
+  if (match) {
+    const column = columnWords(match[1]!);
+    if (!column || /\bselect\b/i.test(match[3]!)) return null;
+    const values = match[3]!.split(/,(?=(?:[^']*'[^']*')*[^']*$)/).map(valueWords);
+    if (values.some((value) => !value)) return null;
+    const words = values.map((value) => value!.words);
+    const list = words.length <= 1 ? words[0] : `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`;
+    return `${column} is ${match[2] ? 'not ' : ''}${list}`;
+  }
+  match = /^(.+?)\s*(<>|!=|>=|<=|=|>|<)\s*(.+)$/.exec(text);
+  if (match) {
+    const column = columnWords(match[1]!);
+    const value = valueWords(match[3]!);
+    const operator = COMPARISON[match[2]!]!;
+    if (!column || !value) return null;
+    if (value.column && match[2] === '=') return `${column} matches ${value.words}`;
+    return `${column} ${value.date ? operator.date : operator.plain} ${value.words}`;
+  }
+  match = /^not\s+(.+)$/i.exec(text);
+  if (match) {
+    const column = columnWords(match[1]!);
+    return column ? `${column} is false` : null;
+  }
+  const column = columnWords(text);
+  return column ? `${column} is true` : null;
+}
+
+const MAX_PLAIN_FILTER = 120;
+
+/**
+ * A WHERE clause in plain words: `g.SEASON = 2015 AND CAST(g.GAME_ID AS VARCHAR) LIKE '4%'` → `SEASON is 2015 and
+ * GAME_ID starts with “4”`. A condition it can't say safely (a subquery, a function it doesn't know) keeps its SQL,
+ * so nothing is reworded wrongly. Null when no condition could be put in plain words.
+ */
+export function plainFilter(where: string): string | null {
+  const conditions = splitTopLevel(where.trim(), 'and');
+  const said = conditions.map((condition) => conditionWords(condition));
+  if (said.every((word) => word === null)) return null;
+  const words = said.map((word, index) => word ?? (conditions[index]!.length > MAX_FILTER ? `${conditions[index]!.slice(0, MAX_FILTER).trimEnd()}…` : conditions[index]!));
+  const shown: string[] = [];
+  let length = 0;
+  for (const word of words) {
+    if (shown.length > 0 && length + word.length > MAX_PLAIN_FILTER) break;
+    shown.push(word);
+    length += word.length + 2;
+  }
+  const more = words.length - shown.length;
+  return more > 0 ? `${shown.join(', ')} and ${more} more condition${more === 1 ? '' : 's'}` : listWords(shown);
+}
+
+/**
  * One line, in plain words, on how a saved query's result is worked out: the tables it reads, the rows it keeps,
  * and what one row of the result is. Null when there is no SQL to read.
  */
@@ -71,7 +271,10 @@ export function howItsWorkedOut(sql: string): string | null {
   const limit = /\blimit\s+(\d+)\s*$/i.exec(top)?.[1];
   const aggregates = /\b(?:count|sum|avg|min|max)\s*\(/i.test(text);
   const parts = [read];
-  if (where) parts.push(`keeps the rows where ${where.length > MAX_FILTER ? `${where.slice(0, MAX_FILTER).trimEnd()}…` : where}`);
+  if (where) {
+    const plain = plainFilter(where);
+    parts.push(`keeps the rows where ${plain ?? (where.length > MAX_FILTER ? `${where.slice(0, MAX_FILTER).trimEnd()}…` : where)}`);
+  }
   if (groupBy) {
     const columns = groupBy.split(',').map((column) => column.trim()).filter(Boolean);
     parts.push(columns.every((column) => /^\d+$/.test(column))
