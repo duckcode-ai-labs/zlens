@@ -23,7 +23,7 @@ test('Import SQL: Save draft writes a draft; only Certify certifies, with a rece
   await page.getByTestId('saved-queries-home').getByRole('button', { name: 'Import', exact: true }).click();
   await page.getByPlaceholder(/select \.\.\./).fill('select count(*) as customer_count from dev.dim_customers');
   await page.getByPlaceholder('auto').fill('orders');
-  await page.getByPlaceholder('analytics').fill('e2e');
+  await page.getByPlaceholder('Person or team to ask').fill('e2e');
   await page.getByRole('button', { name: 'Generate DQL drafts' }).click();
 
   // Save is one click and never certifies; Certify stays a separate action.
