@@ -1,5 +1,4 @@
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -363,6 +362,17 @@ export function publishedWorkspaceRange(spec, version) {
 }
 
 /**
+ * Empty the pack folder before a run. It used to keep tarballs from earlier
+ * runs, so a dry run after the package list changed handed the install smoke
+ * and the launch gate a package that is no longer released (0.3.0's gate
+ * found 20 tarballs for 19 packages).
+ */
+export function emptyArtifactsDir(artifactsDir) {
+  rmSync(artifactsDir, { recursive: true, force: true });
+  mkdirSync(artifactsDir, { recursive: true });
+}
+
+/**
  * Prepare package manifests for npm pack/publish.
  *
  * - Replace all "workspace:*" dependency versions with the exact package
@@ -479,7 +489,7 @@ export async function main({ argv = process.argv.slice(2), cwd = process.cwd(), 
   const artifactsDir = path.join(cwd, '.release-artifacts');
 
   console.log(`\nRelease ${release.dryRun ? 'dry run' : 'publish'}: ${version} -> npm dist-tag ${release.tag}`);
-  await mkdir(artifactsDir, { recursive: true });
+  emptyArtifactsDir(artifactsDir);
 
   // Build everything first so the CLI tarball picks up a fresh notebook UI
   // bundle. The CLI's own `prepublishOnly` rebuilds `apps/cli` but not
