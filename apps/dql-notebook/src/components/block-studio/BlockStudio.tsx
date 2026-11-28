@@ -6679,7 +6679,7 @@ function StatusWorkflow({
   );
 }
 
-function CertificationChecklistPanel({
+export function CertificationChecklistPanel({
   result,
   proposes = false,
   t,
@@ -6757,22 +6757,46 @@ function CertificationChecklistPanel({
         correction: 'Update the saved query, run it again, and retry certification.',
         action: message === 'The query must run successfully.' ? 'run_again' : 'edit_source',
       }));
-  const accent = result.pending ? t.accent : result.ok ? '#3fb950' : '#d29922';
+  // Certify on a saved query AI wrote stops once, on purpose, for the person's
+  // own review. When that is the only thing left, it is the normal last step,
+  // not a failure: say so calmly and put the button first.
+  const lastStepIsReview = !result.pending
+    && !result.ok
+    && Boolean(onConfirmAiReview)
+    && awaitsOnlyAiReview(issues)
+    && items.every(([, ok, required]) => ok || !required);
+  const accent = result.pending || lastStepIsReview ? t.accent : result.ok ? '#3fb950' : '#d29922';
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // The panel sits in a short bottom pane: bring the review button into view.
+    if (lastStepIsReview) panelRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [lastStepIsReview]);
+  const checkedAt = lastStepIsReview ? undefined : checkedAtLabel(checklist?.checkedAt);
   return (
-    <div style={{ margin: '12px 12px 0', border: `1px solid ${accent}55`, borderRadius: 8, background: `${accent}0d`, padding: 12, display: 'grid', gap: 10 }}>
+    <div ref={panelRef} style={{ margin: '12px 12px 0', border: `1px solid ${accent}55`, borderRadius: 8, background: `${accent}0d`, padding: 12, display: 'grid', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: accent, fontFamily: t.font }}>
-          {certificationPanelHeading(result, proposes)}
+          {certificationPanelHeading(result, proposes, lastStepIsReview)}
         </span>
-        {checklist?.checkedAt && <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono }}>{checklist.checkedAt}</span>}
+        {checkedAt && <span style={{ fontSize: 10, color: t.textMuted }}>{checkedAt}</span>}
       </div>
       <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.45 }}>
         {result.pending
           ? result.message ?? 'The exact draft is saved and the certification gates are running in the background.'
           : result.ok
           ? certificationPassedLine(Boolean(checklist?.tests), proposes)
+          : lastStepIsReview
+          ? CERTIFY_REVIEW_LINE
           : `The draft is saved. Certification stopped with ${issues.length || 1} required fix${issues.length === 1 ? '' : 'es'}; nothing was partially certified.`}
       </div>
+      {lastStepIsReview && onConfirmAiReview && (
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
+          <button type="button" onClick={onConfirmAiReview} style={primaryImportButtonStyle(t)}>
+            I reviewed it — certify
+          </button>
+          <button type="button" onClick={onEditSource} style={secondaryImportButtonStyle(t)}>Edit the SQL</button>
+        </div>
+      )}
       {result.pending && (
         <div style={{ display: 'grid', gap: 5 }}>
           <div style={{ height: 5, borderRadius: 999, background: t.headerBorder, overflow: 'hidden' }}>
@@ -6794,7 +6818,7 @@ function CertificationChecklistPanel({
         </div>
       )}
       {result.error && issues.length === 0 && <div style={{ fontSize: 12, color: '#f85149' }}>{result.error}</div>}
-      {!result.pending && !result.ok && issues.length > 0 && (
+      {!result.pending && !result.ok && !lastStepIsReview && issues.length > 0 && (
         <div style={{ display: 'grid', gap: 8 }}>
           <div style={{ fontSize: 10, color: '#d29922', textTransform: 'uppercase', fontWeight: 800 }}>
             Fixes before certification · {issues.length}
@@ -6881,8 +6905,28 @@ function CertificationChecklistPanel({
   );
 }
 
+/** What the last step asks when the only thing left is the person's review of what AI wrote. */
+export const CERTIFY_REVIEW_LINE = 'AI wrote this saved query, and it passed its checks. Look over its SQL and the rows it returns. If they look right, confirm you reviewed it.';
+
+/**
+ * True when every remaining issue is the explicit review of what AI wrote:
+ * the normal last step of certifying an Ask answer, not a failed check.
+ */
+export function awaitsOnlyAiReview(issues: ReadonlyArray<{ action?: string; code?: string }>): boolean {
+  return issues.length > 0 && issues.every((issue) => issue.action === 'confirm_ai_review' || issue.code === 'ai_review_required');
+}
+
+/** "Checked 6:45 PM" in the viewer's own time, not a raw UTC timestamp. */
+export function checkedAtLabel(checkedAt: string | undefined): string | undefined {
+  if (!checkedAt) return undefined;
+  const when = new Date(checkedAt);
+  if (Number.isNaN(when.getTime())) return undefined;
+  return `Checked ${when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+
 /** The checklist panel's heading: under a host that certifies through review, Certify proposes. */
-export function certificationPanelHeading(result: { pending?: boolean; ok?: boolean }, proposes = false): string {
+export function certificationPanelHeading(result: { pending?: boolean; ok?: boolean }, proposes = false, lastStepIsReview = false): string {
+  if (lastStepIsReview && !result.pending && !result.ok) return 'One last step: confirm you reviewed it';
   if (proposes) return result.pending ? 'Proposing certification' : result.ok ? 'Certification proposed' : 'Unable to propose certification';
   return result.pending ? 'Certification running' : result.ok ? 'Saved query certified' : 'Unable to certify';
 }
