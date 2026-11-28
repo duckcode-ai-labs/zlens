@@ -31,6 +31,14 @@ describe('the app package for Snowflake', () => {
     }
   });
 
+  it('links the step-by-step setup guide on the website from the readme and the launcher\'s set-up page', () => {
+    const guide = 'https://zlens.app/guides/snowflake-get-started.html';
+    expect(readme.split('\n').slice(0, 12).join('\n')).toContain(guide);
+    const launcher = read('launcher/launcher.py');
+    expect(launcher).toContain(`TUTORIAL_URL = "${guide}"`);
+    expect(launcher).toMatch(/Set up ZLens first[\s\S]*TUTORIAL_URL[\s\S]*SETUP_RECHECK_FOR_SECONDS - \(now/);
+  });
+
   it('lists the compute pool it creates in marketplace.yml', () => {
     const family = /INSTANCE_FAMILY\s*=\s*([A-Z0-9_]+)/.exec(setup)?.[1];
     expect(family).toBe('CPU_X64_XS');
