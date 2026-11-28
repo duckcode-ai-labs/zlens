@@ -18,7 +18,7 @@ clip('import-certify', async ({ page, sample, director }) => {
   await director.type(page.getByPlaceholder(/^\.\/queries/), './legacy', { clear: true });
   await director.beat(500);
   await director.type(page.getByPlaceholder('auto'), 'commerce', { clear: true });
-  await director.type(page.getByPlaceholder('analytics'), 'analytics@jaffle.shop', { clear: true, delay: 25 });
+  await director.type(page.getByPlaceholder('Person or team to ask'), 'analytics@jaffle.shop', { clear: true, delay: 25 });
   await director.click(page.getByRole('button', { name: 'Generate DQL drafts' }), { after: 300 });
 
   // One draft per query: the workbook's Custom SQL, the template's native queries, the script's report.

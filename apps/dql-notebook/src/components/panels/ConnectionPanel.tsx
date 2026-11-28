@@ -1518,7 +1518,7 @@ export function ConnectionPanel({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 640 }}>
           {lockedNote}
           {connectionListSection}
-          {testConnectionSection}
+          {/* No second Test connection here: the card's button above tests it and shows the result. */}
         </div>
       ) : isSetup && setupSource === 'warehouse' ? null : (
         <AdvancedDisclosure enabled={isSetup} label="Import from a dbt profile" hint="profiles.yml" t={t}>

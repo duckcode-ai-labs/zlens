@@ -1684,7 +1684,7 @@ export function BlockStudio() {
           @keyframes dql-agent-run-spin { to { transform: rotate(360deg); } }
         `}</style>
         {/* Prototype toolbar: breadcrumb · status pill · Visual/Source toggle · actions */}
-        <div style={{ height: 46, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', borderBottom: `1px solid ${t.headerBorder}`, background: t.cellBg, overflowX: 'auto' }}>
+        <div style={blockToolbarStyles(t).row}>
           {leftPaneCollapsed && (
             <button
               onClick={() => setLeftPaneCollapsed(false)}
@@ -1737,10 +1737,10 @@ export function BlockStudio() {
               onClick={() => setContextInspectorOpen((open) => !open)}
             />
           )}
-          <div style={{ flex: 1 }} />
-          {/* Run, Save draft and Certify stay in view at any width (B10): the
-              toolbar scrolls sideways under them, never them off-screen. */}
-          <div data-block-toolbar-actions="" style={{ position: 'sticky', right: 0, zIndex: 2, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, alignSelf: 'stretch', paddingLeft: 10, background: t.cellBg, boxShadow: `-8px 0 8px -8px ${t.headerBorder}` }}>
+          {/* Run, Save draft and Certify stay in view at any width (B10): when the
+              row is too narrow they wrap onto a second line, right-aligned. They
+              no longer sit over the row, which hid Context and the name (V18 p2). */}
+          <div data-block-toolbar-actions="" style={blockToolbarStyles(t).actions}>
           {/* The block overview has its own Run and Delete; the toolbar shows them only while editing. */}
           <BlockToolbarActions
             readOnly={readOnlyBlocks}
@@ -2404,6 +2404,39 @@ function ExplorerTabButton({
       {busy ? `${label}...` : label}
     </button>
   );
+}
+
+/**
+ * The editor toolbar's row and its action group. The row wraps instead of
+ * scrolling sideways: before, the actions sat over the row (sticky), so at
+ * about 1024px they covered Context ("Con…") and squeezed the name to nothing.
+ * Wrapped, the actions keep to the right on their own line.
+ */
+export function blockToolbarStyles(t: Theme): { row: React.CSSProperties; actions: React.CSSProperties } {
+  return {
+    row: {
+      minHeight: 46,
+      flexShrink: 0,
+      display: 'flex',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      columnGap: 10,
+      rowGap: 6,
+      padding: '8px 16px',
+      borderBottom: `1px solid ${t.headerBorder}`,
+      background: t.cellBg,
+    },
+    actions: {
+      marginLeft: 'auto',
+      maxWidth: '100%',
+      display: 'flex',
+      flexWrap: 'wrap',
+      justifyContent: 'flex-end',
+      alignItems: 'center',
+      columnGap: 10,
+      rowGap: 6,
+    },
+  };
 }
 
 /**
@@ -4336,6 +4369,7 @@ export function BlockStudioImportWorkspace({
   const [uploadNote, setUploadNote] = useState<string | null>(null);
   const [domain, setDomain] = useState(defaultDomain);
   const [owner, setOwner] = useState(defaultOwner);
+  const ownerTyped = useRef(Boolean(defaultOwner));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
@@ -4358,6 +4392,16 @@ export function BlockStudioImportWorkspace({
   const [metricDraftsBusy, setMetricDraftsBusy] = useState<string | null>(null);
   const [metricDraftsMessage, setMetricDraftsMessage] = useState<string | null>(null);
   const [metricDraftsDone, setMetricDraftsDone] = useState<Record<string, 'approved' | 'discarded'>>({});
+
+  // The owner is the person importing, as in Ask's "Save as a draft": filled in from who is signed in, never guessed.
+  useEffect(() => {
+    if (defaultOwner) return undefined;
+    let cancelled = false;
+    api.getIdentity()
+      .then((id) => { if (!cancelled && id?.owner && !ownerTyped.current) setOwner(id.owner); })
+      .catch(() => { /* identity is optional: the owner is then typed */ });
+    return () => { cancelled = true; };
+  }, [defaultOwner]);
 
   useEffect(() => {
     setMetricDraftsMessage(null);
@@ -4889,9 +4933,10 @@ export function BlockStudioImportWorkspace({
   };
 
   return (
-    <div style={{ position: 'relative', height: '100%', display: 'grid', gridTemplateRows: '80px minmax(0, 1fr)', minHeight: 0, background: t.appBg, borderRadius: inline ? 0 : 8 }}>
-      <header style={{ borderBottom: `1px solid ${t.headerBorder}`, background: t.cellBg, padding: '14px 14px 12px', display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 260 }}>
+    <div style={{ position: 'relative', height: '100%', display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr)', minHeight: 0, background: t.appBg, borderRadius: inline ? 0 : 8 }}>
+      {/* Wraps when the page is narrow: the steps and the close button go on a second line instead of past the right edge. */}
+      <header style={{ borderBottom: `1px solid ${t.headerBorder}`, background: t.cellBg, padding: '14px 14px 12px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 14, rowGap: 10, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '0 1 auto', minWidth: 0 }}>
           <span style={{ width: 34, height: 34, borderRadius: 8, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: t.accent, background: `${t.accent}16`, flexShrink: 0 }}>
             <Sparkles size={17} strokeWidth={2} aria-hidden="true" />
           </span>
@@ -4902,17 +4947,16 @@ export function BlockStudioImportWorkspace({
             </span>
           </span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(130px, 1fr))', gap: 6, width: 'min(560px, 44vw)', minWidth: 390 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6, flex: '1 1 390px', maxWidth: 560, minWidth: 0 }}>
           <ImportStep index={1} active={activeStep === 1} complete={Boolean(session)} title="Source" detail={mode === 'paste' ? 'Paste SQL' : mode === 'upload' ? 'Upload files' : 'Local path'} t={t} />
           <ImportStep index={2} active={activeStep === 2} complete={smartCounts.ready > 0 || smartCounts.saved > 0} title="Draft" detail={session ? `${session.candidates.length} saved queries · ${readyCount} ready` : importDraftWords(snowflakeApp).generateStep} t={t} />
           <ImportStep index={3} active={activeStep === 3} complete={certifiedCount > 0} title="Review" detail={certifiedCount > 0 ? `${certifiedCount} certified` : draftSavedCount > 0 ? `${draftSavedCount} draft${draftSavedCount === 1 ? '' : 's'} saved · certify next` : 'Preview and certify'} t={t} />
         </div>
-        <div style={{ flex: 1 }} />
         <button
           onClick={onClose}
           title="Close import"
           aria-label="Close import"
-          style={{ ...secondaryImportButtonStyle(t), width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          style={{ ...secondaryImportButtonStyle(t), width: 32, height: 32, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginLeft: 'auto' }}
         >
           <X size={15} strokeWidth={2} aria-hidden="true" />
         </button>
@@ -4984,7 +5028,7 @@ export function BlockStudioImportWorkspace({
                     <input value={domain} onChange={(event) => setDomain(event.target.value)} placeholder="auto" style={importInputStyle(t)} />
                   </FieldLabel>
                   <FieldLabel label="Owner" t={t}>
-                    <input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="analytics" style={importInputStyle(t)} />
+                    <input value={owner} onChange={(event) => { ownerTyped.current = true; setOwner(event.target.value); }} placeholder={IMPORT_OWNER_HINT} style={importInputStyle(t)} />
                   </FieldLabel>
                 </div>
                 <button
@@ -5879,6 +5923,8 @@ export const IMPORT_READS: ReadonlyArray<{ what: string; files: string }> = [
   { what: 'Tableau', files: 'workbooks, .twb or .twbx' },
   { what: 'Power BI', files: 'a template (.pbit), model.bim, or TMDL files' },
 ];
+/** The Owner box's hint on Import. It was "analytics", which read like a real value (V18 p2 test). */
+export const IMPORT_OWNER_HINT = 'Person or team to ask';
 export const IMPORT_PBIX_NOTE = '.pbix can\'t be read: in Power BI, use File › Export › Power BI template, then import the .pbit.';
 
 /**
