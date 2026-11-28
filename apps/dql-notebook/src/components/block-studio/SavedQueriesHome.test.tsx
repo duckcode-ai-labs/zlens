@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { SavedQueriesHome, savedQueryRows, savedQuerySourceLine, type MetricDraftEntry } from './SavedQueriesHome';
+import { SavedQueriesHome, openingSavedQueriesTab, savedQueryRows, savedQuerySourceLine, type MetricDraftEntry } from './SavedQueriesHome';
 import type { BlockEntry } from '../blocks/block-types';
 import type { ListedRun } from './most-asked';
 import { themes } from '../../themes/notebook-theme';
@@ -104,5 +104,16 @@ describe('Saved queries home', () => {
     expect(text).toContain('Most asked first');
     expect(text).toContain("Drafts aren't used to answer questions until you certify them.");
     expect(text).not.toMatch(/Create saved queries|Start import|Import SQL|Describe the query/);
+  });
+});
+
+describe('the tab Saved queries opens on (V18 patch 2 new-user test)', () => {
+  it('opens on Certified when there are no drafts and something is certified', () => {
+    expect(openingSavedQueriesTab({ drafts: 0, certified: 1 })).toBe('certified');
+  });
+
+  it('opens on Drafts otherwise', () => {
+    expect(openingSavedQueriesTab({ drafts: 2, certified: 1 })).toBe('drafts');
+    expect(openingSavedQueriesTab({ drafts: 0, certified: 0 })).toBe('drafts');
   });
 });

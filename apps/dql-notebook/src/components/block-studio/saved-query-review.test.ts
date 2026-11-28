@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { howItsWorkedOut, howSemanticIsWorkedOut, savedQueryChecks } from './saved-query-review';
+import { howItsWorkedOut, howSemanticIsWorkedOut, plainFilter, savedQueryChecks } from './saved-query-review';
 
 /** The trust flow approved 2026-11-27: a saved query's page says how it is worked out, and lists its checks. */
 describe('how a saved query is worked out, in one line', () => {
@@ -10,11 +10,11 @@ describe('how a saved query is worked out, in one line', () => {
       WHERE T.SEASON = 2015 AND CAST(T.GAME_ID AS VARCHAR) LIKE '4%'
       GROUP BY T.TEAM_ID, D.TEAM_NICKNAME
       ORDER BY PLAYOFF_WINS DESC`))
-      .toBe("Reads LOCAL_TEAM_GAME_FACTS and DIM_TEAMS_CLEANSED, keeps the rows where T.SEASON = 2015 AND CAST(T.GAME_ID AS VARCHAR) LIKE '4%', and gives one row per TEAM_ID and TEAM_NICKNAME.");
+      .toBe('Reads LOCAL_TEAM_GAME_FACTS and DIM_TEAMS_CLEANSED, keeps the rows where SEASON is 2015 and GAME_ID starts with “4”, and gives one row per TEAM_ID and TEAM_NICKNAME.');
   });
 
   it('says a total is one row, a plain list is a list, and a LIMIT is the first rows', () => {
-    expect(howItsWorkedOut('select count(*) as games from games where season = 2016;')).toBe('Reads games, keeps the rows where season = 2016, and adds them up into one row.');
+    expect(howItsWorkedOut('select count(*) as games from games where season = 2016;')).toBe('Reads games, keeps the rows where season is 2016, and adds them up into one row.');
     expect(howItsWorkedOut('SELECT name FROM players ORDER BY points DESC LIMIT 5')).toBe('Reads players, and lists those rows (the first 5).');
     expect(howItsWorkedOut('SELECT season, COUNT(*) FROM games GROUP BY 1')).toBe('Reads games, and gives one row for each value of its first column.');
   });
@@ -34,6 +34,36 @@ describe('how a saved query is worked out, in one line', () => {
     expect(howItsWorkedOut('  -- nothing\n ')).toBeNull();
     expect(howSemanticIsWorkedOut({ metrics: ['revenue', 'orders'], dimensions: ['store'], timeDimension: 'month' }))
       .toBe('Works out revenue and orders from the certified metrics, one row per store and month.');
+  });
+});
+
+describe('a filter in plain words (V18 patch 2 new-user test, P2-4)', () => {
+  it('says the playoff filter the tester was asked to review in words a business user can check', () => {
+    expect(plainFilter("g.SEASON = 2015 AND CAST(g.GAME_ID AS VARCHAR) LIKE '4%' AND g.TEAM_WON = TRUE AND t.CITY ILIKE '%Golden State%'"))
+      .toBe('SEASON is 2015, GAME_ID starts with “4”, TEAM_WON is true and CITY contains “Golden State”');
+  });
+
+  it('says lists, ranges, dates, empty values and either-or', () => {
+    expect(plainFilter("c.c_mktsegment IN ('BUILDING', 'MACHINERY') AND o.o_orderdate >= DATE '1996-01-01' AND o.o_orderdate < '1997-01-01'"))
+      .toBe('c_mktsegment is “BUILDING” or “MACHINERY”, o_orderdate is on or after 1996-01-01 and o_orderdate is before 1997-01-01');
+    expect(plainFilter('YEAR(o_orderdate) = 1996 AND o_totalprice BETWEEN 100 AND 500')).toBe('the year of o_orderdate is 1996 and o_totalprice is between 100 and 500');
+    expect(plainFilter('EXTRACT(year FROM o.o_orderdate) <> 1995 AND l.l_returnflag IS NOT NULL')).toBe('the year of o_orderdate is not 1995 and l_returnflag is not empty');
+    expect(plainFilter("(t.CITY = 'Boston' OR t.CITY = 'Miami') AND NOT g.IS_HOME")).toBe('(CITY is “Boston” or CITY is “Miami”) and IS_HOME is false');
+    expect(plainFilter("name NOT LIKE '%test%' AND o.cust_id = c.id")).toBe('name does not contain “test” and cust_id matches id');
+    expect(plainFilter('g.SEASON = ${season} AND g.TEAM_ID = ${team_id}')).toBe('SEASON is the season you choose and TEAM_ID is the team id you choose');
+  });
+
+  it('keeps the SQL of a condition it cannot say safely, and says nothing new when none can be said', () => {
+    expect(plainFilter("season = 2016 AND DATEADD(day, -30, CURRENT_DATE) < played_on")).toBe('season is 2016 and DATEADD(day, -30, CURRENT_DATE) < played_on');
+    expect(plainFilter("code LIKE 'A_1%'")).toBeNull();
+    expect(plainFilter('a.id IN (SELECT id FROM b)')).toBeNull();
+    expect(plainFilter("note = 'it''s and done' AND kind = 'x'")).toBe('note is “it\'s and done” and kind is “x”');
+  });
+
+  it('stops a long filter after the first few conditions', () => {
+    const many = plainFilter(Array.from({ length: 30 }, (_, index) => `c${index} = ${index}`).join(' AND '))!;
+    expect(many).toMatch(/^c0 is 0, c1 is 1, .* and \d+ more conditions$/);
+    expect(many.length).toBeLessThan(170);
   });
 });
 
