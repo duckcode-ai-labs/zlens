@@ -7,7 +7,6 @@ import {
   importContextHint,
   importEmptyMessage,
   importSourceModes,
-  importStartDetail,
   metadataIndexDetail,
   metadataSyncingMessage,
   notebookAiScopeHint,
@@ -20,9 +19,7 @@ import {
 import {
   BlockDetailView,
   BlockStudioImportWorkspace,
-  BlockStudioStartPage,
   CompactBlockIdentity,
-  homeTableCount,
   savedQueriesCrumb,
   SqlBlockVisualBuilder,
 } from '../components/block-studio/BlockStudio';
@@ -58,7 +55,6 @@ describe('words for the app for Snowflake, and the open-source words unchanged',
       [importContextHint(true), importContextHint(false)],
       [importEmptyMessage(true), importEmptyMessage(false)],
       [importAddSqlStep(true), importAddSqlStep(false)],
-      [importStartDetail(true), importStartDetail(false)],
       [sqlConvertHint(true).after, sqlConvertHint(false).after],
       [sqlPlaceholder(true), sqlPlaceholder(false)],
     ];
@@ -134,39 +130,11 @@ describe('words for the app for Snowflake, and the open-source words unchanged',
   });
 });
 
-const startPage = (indexedTables: number) => renderToStaticMarkup(
-  <BlockStudioStartPage
-    dbtStatus={null}
-    semanticStats={{ metrics: 0, measures: 0, dimensions: 0, timeDimensions: 0, entities: 0, hierarchies: 0, semanticModels: 0, savedQueries: 0 }}
-    semanticObjectCount={0}
-    databaseStats={{ schemas: 0, tables: homeTableCount(0, 0, indexedTables), columns: 0 }}
-    onImport={noop}
-    onBuildDql={noop}
-    t={t}
-  />,
-);
-
 describe('the Saved queries home', () => {
-  it('in the app for Snowflake: no dbt chip or dbt card, and the tables ZLens indexed', () => {
-    setSnowflakeApp(true);
-    const html = startPage(18);
-    expect(html).not.toMatch(/dbt pending|dbt ready|dbt models|MetricFlow|Waiting for dbt/);
-    expect(html).toContain('18 tables');
-    expect(html).not.toMatch(/point at a folder|writing files/);
-  });
-
-  it('everywhere else: as before', () => {
-    const html = startPage(0);
-    expect(html).toContain('dbt pending');
-    expect(html).toContain('Waiting for dbt artifacts');
-    expect(html).toContain('0 tables');
-    expect(html).toContain('point at a folder');
-  });
-
   it('has no "Saved queries › sql" crumb in the app for Snowflake', () => {
     const crumb = (input: Partial<Parameters<typeof savedQueriesCrumb>[0]>) => savedQueriesCrumb({ hasActiveDraft: false, importing: false, semantic: false, snowflakeApp: true, ...input });
     expect(crumb({})).toBeNull();
-    expect(crumb({ importing: true })).toBe('Import SQL');
+    expect(crumb({ importing: true })).toBe('Import');
     expect(crumb({ hasActiveDraft: true })).toBe('New saved query');
     expect(crumb({ name: 'warriors_regular_wins_v13_import' })).toBe('warriors_regular_wins_v13_import');
     // Everywhere else, as before.
@@ -175,12 +143,6 @@ describe('the Saved queries home', () => {
     expect(crumb({ snowflakeApp: false, hasActiveDraft: true })).toBe('new_block');
   });
 
-  it('counts the most tables any source knows of', () => {
-    expect(homeTableCount(0, 0, 18)).toBe(18);
-    expect(homeTableCount(25, 3, 18)).toBe(25);
-    expect(homeTableCount(0, 4, undefined)).toBe(4);
-    expect(homeTableCount(0, 0, Number.NaN)).toBe(0);
-  });
 });
 
 describe('Import SQL in the app for Snowflake', () => {

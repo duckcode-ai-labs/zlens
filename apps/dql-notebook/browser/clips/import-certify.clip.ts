@@ -13,7 +13,7 @@ clip('import-certify', async ({ page, sample, director }) => {
   await openAndRecord(page, director, server.baseUrl);
 
   await director.click(page.getByRole('button', { name: 'Saved queries', exact: true }).first());
-  await director.click(page.getByRole('button', { name: 'Start import' }));
+  await director.click(page.getByTestId('saved-queries-home').getByRole('button', { name: 'Import', exact: true }));
   await director.click(page.getByRole('button', { name: 'Local path', exact: true }), { after: 300 });
   await director.type(page.getByPlaceholder(/^\.\/queries/), './legacy', { clear: true });
   await director.beat(500);

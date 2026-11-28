@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ReadOnlyStrip } from '../components/shell/HostReadOnly';
-import { BlockStudioStartPage } from '../components/block-studio/BlockStudio';
+import { SavedQueriesHome } from '../components/block-studio/SavedQueriesHome';
 import { themes } from '../themes/notebook-theme';
 import { HostUiProvider, hostReadOnly, navItemAllowed, navKeyForView, readOnlyNext, type HostUi, type HostUiState } from './host-ui';
 
@@ -15,29 +15,20 @@ function hosted(capabilities: Record<string, boolean>, refusals?: HostUi['refusa
 const strip = (state: HostUiState, view: string) =>
   renderToStaticMarkup(<HostUiProvider initial={state}><ReadOnlyStrip mainView={view} /></HostUiProvider>);
 
-describe('Blocks start page: Import SQL', () => {
+describe('Saved queries home: Import', () => {
   const noop = () => {};
-  const stats = { metrics: 0, measures: 0, dimensions: 0, timeDimensions: 0, entities: 0, hierarchies: 0, semanticModels: 0, savedQueries: 0 };
-  const page = (props: { onImport?: () => void; readOnlyReason?: string }) => renderToStaticMarkup(
-    <BlockStudioStartPage
-      dbtStatus={null}
-      semanticStats={stats}
-      semanticObjectCount={0}
-      databaseStats={{ schemas: 0, tables: 0, columns: 0 }}
-      onBuildDql={noop}
-      t={themes.paper}
-      {...props}
-    />,
+  const page = (props: { onImport?: () => void; onBuildManually?: () => void; readOnlyReason?: string }) => renderToStaticMarkup(
+    <SavedQueriesHome onAskAi={noop} onReviewMetricDraft={noop} t={themes.paper} {...props} />,
   );
 
-  it('shows Import SQL when the handler is given', () => {
-    expect(page({ onImport: noop })).toContain('Import SQL');
+  it('shows Import when the handler is given', () => {
+    expect(page({ onImport: noop, onBuildManually: noop })).toMatch(/<button[^>]*>.*Import<\/button>/);
   });
 
-  it('hides Import SQL without the handler and gives the reason', () => {
+  it('hides Import without the handler and gives the reason', () => {
     const html = page({ readOnlyReason: 'Production follows main.' });
+    expect(html).not.toMatch(/>\s*Import\s*</);
     expect(html).not.toContain('Import SQL');
-    expect(html).not.toContain('Start import');
     expect(html).toContain('Production follows main.');
   });
 });

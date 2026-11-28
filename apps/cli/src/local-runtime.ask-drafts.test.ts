@@ -69,3 +69,29 @@ describe('automatic Ask drafts: marked in the library, cleared on request', () =
     });
   });
 });
+
+describe('the library says where each saved query came from (the trust flow approved 2026-11-27)', () => {
+  it('lists the question an Ask answer was saved from, an old automatic draft\'s count, and the file an import read', async () => {
+    const project = tempProject();
+    const block = (name: string, extra = '') => `block "${name}" {\n${extra}  type = "custom"\n  status = "draft"\n  owner = "TEST_ADMIN"\n  query = """\n    SELECT 1\n  """\n}\n`;
+    mkdirSync(join(project, 'blocks'), { recursive: true });
+    writeFileSync(join(project, 'blocks', 'playoff_wins_2015.dql'), block('playoff_wins_2015', '  source_question = "How many playoff games did the \\"Warriors\\" win in 2015?"\n'));
+    writeFileSync(join(project, 'blocks', 'team_stats.dql'), block('team_stats'));
+    mkdirSync(join(project, 'semantic-layer', 'blocks'), { recursive: true });
+    writeFileSync(join(project, 'semantic-layer', 'blocks', 'team_stats.yaml'), 'name: team_stats\nblock: team_stats\nimport:\n  importId: imp_1\n  sourceKind: powerbi-project\n  sourcePath: "Team stats.pbit#Team stats"\nreviewStatus: draft\n');
+    // As Ask kept them before 2026-11-27 (review-draft-capture passes the asked words).
+    const asked = { question: 'How many teams are there?', askedQuestion: 'How many teams are there?', sql: 'SELECT COUNT(*) FROM teams' };
+    const automatic = upsertReviewRequiredAnswerDraft(project, asked);
+    upsertReviewRequiredAnswerDraft(project, asked);
+
+    await withServer(project, async (base) => {
+      const library = await fetch(`${base}/api/blocks/library`).then((response) => response.json()) as { blocks: Array<LibraryEntry & { sourceQuestion?: string; askedTimes?: number; importedFrom?: { kind: string; path?: string } }> };
+      const byPath = new Map(library.blocks.map((entry) => [entry.path, entry]));
+      expect(byPath.get('blocks/playoff_wins_2015.dql')).toMatchObject({ sourceQuestion: 'How many playoff games did the "Warriors" win in 2015?' });
+      expect(byPath.get('blocks/playoff_wins_2015.dql')?.importedFrom).toBeUndefined();
+      expect(byPath.get('blocks/team_stats.dql')).toMatchObject({ importedFrom: { kind: 'powerbi-project', path: 'Team stats.pbit#Team stats' } });
+      expect(byPath.get('blocks/team_stats.dql')?.sourceQuestion).toBeUndefined();
+      expect(byPath.get(automatic.path)).toMatchObject({ sourceQuestion: 'How many teams are there?', askedTimes: 2, automaticDraft: true });
+    });
+  });
+});

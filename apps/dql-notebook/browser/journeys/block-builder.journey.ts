@@ -15,8 +15,9 @@ test('SQL block builder: SQL survives tab switches, Global stays global, Save dr
   const name = `b10_store_revenue_${Date.now().toString(36)}`;
   await page.goto('/');
   await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
-  await page.getByText('Manual options').click();
-  await page.getByRole('button', { name: /Blank SQL query/ }).click();
+  // New saved query holds Ask AI, Build manually and Blank SQL query (the trust flow approved 2026-11-27).
+  await page.getByTestId('saved-queries-home').getByRole('button', { name: /New saved query/ }).click();
+  await page.getByRole('menuitem', { name: /Blank SQL query/ }).click();
 
   const sqlBox = page.getByRole('textbox', { name: 'Saved query SQL' });
   await expect(sqlBox).toBeVisible();

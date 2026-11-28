@@ -30,8 +30,9 @@ const draft = [
 test('DQL Source keeps working when a key leaves an error past the last line', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
-  await page.getByText('Manual options').click();
-  await page.getByRole('button', { name: /Blank SQL query/ }).click();
+  // New saved query holds Ask AI, Build manually and Blank SQL query (the trust flow approved 2026-11-27).
+  await page.getByTestId('saved-queries-home').getByRole('button', { name: /New saved query/ }).click();
+  await page.getByRole('menuitem', { name: /Blank SQL query/ }).click();
   await page.getByRole('button', { name: 'DQL Source', exact: true }).click();
 
   const editor = page.locator('.cm-content').first();

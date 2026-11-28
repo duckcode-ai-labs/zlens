@@ -76,13 +76,6 @@ export function importAddSqlStep(snowflakeApp: boolean): string {
     : 'Paste SQL, upload SQL, Tableau or Power BI files, or point to a folder of them.';
 }
 
-/** The Import SQL card on the Saved queries home. */
-export function importStartDetail(snowflakeApp: boolean): string {
-  return snowflakeApp
-    ? 'Paste SQL, or upload SQL, Tableau or Power BI files. ZLens drafts saved queries from them; nothing is saved until you save.'
-    : 'Paste scripts, upload files, or point at a folder. ZLens analyzes candidates without writing files until you save.';
-}
-
 /** Under the saved query builder's SQL box. */
 export function sqlConvertHint(snowflakeApp: boolean): { before: string; after: string } {
   return snowflakeApp
@@ -292,7 +285,7 @@ export function importDraftWords(snowflakeApp: boolean): {
 } {
   return snowflakeApp
     ? {
-        title: 'Import SQL',
+        title: 'Import',
         generateStep: 'Generate drafts',
         generateButton: 'Generate drafts',
         readyDetail: 'The drafts are saved as drafts. Open one to review, preview, and certify.',

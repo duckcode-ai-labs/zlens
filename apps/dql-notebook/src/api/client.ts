@@ -6380,6 +6380,12 @@ export const api = {
       replacement?: { name: string; path: string } | null;
       /** An automatic Ask draft nobody changed: kept out of pickers, removed by "Clear drafts". */
       automaticDraft?: boolean;
+      /** The question Ask answered, on one saved from Ask. */
+      sourceQuestion?: string;
+      /** How often Ask counted it asked, on a draft Ask kept on its own before 2026-11-27. */
+      askedTimes?: number;
+      /** The file an import read it from: `tableau-workbook`, `powerbi-project`, or SQL. */
+      importedFrom?: { kind: string; path?: string };
     }>;
     /** Why the library could not be read; an empty library is not the same as a failed one. */
     error?: string;
@@ -6812,6 +6818,12 @@ export const api = {
     /** A saved query's last comparison with an old report, if it has one; with its file, what its receipt names. */
     async getQueryReportMatch(name: string, path?: string): Promise<ReportQueryMatch> {
       return request(`/api/report-match/query?name=${encodeURIComponent(name)}${path ? `&path=${encodeURIComponent(path)}` : ''}`);
+    },
+
+    /** The metric drafts waiting for review (from an import's calculated fields and measures), project-wide. */
+    async listMetricDrafts(): Promise<Array<{ name: string; label: string; path: string; domain?: string; inWords?: string; importId?: string }>> {
+      const result = await request<{ drafts: Array<{ name: string; label: string; path: string; domain?: string; inWords?: string; importId?: string }> }>('/api/semantic-layer/metric-drafts');
+      return result.drafts ?? [];
     },
 
     async discardMetricDrafts(names: string[]): Promise<{ discarded: string[] }> {

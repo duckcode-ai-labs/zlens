@@ -32,6 +32,12 @@ export interface BlockEntry {
   certificationProposed?: boolean;
   /** An automatic Ask draft nobody changed. Pickers leave it out; "Clear drafts" removes it. */
   automaticDraft?: boolean;
+  /** The question Ask answered, on one saved from Ask. */
+  sourceQuestion?: string;
+  /** How often Ask counted it asked, on a draft Ask kept on its own before 2026-11-27. */
+  askedTimes?: number;
+  /** The file an import read it from: `tableau-workbook`, `powerbi-project`, or SQL. */
+  importedFrom?: { kind: string; path?: string };
 }
 
 /**
