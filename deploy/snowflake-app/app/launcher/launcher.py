@@ -47,6 +47,8 @@ RECHECK_FOR_SECONDS = 600
 # Before the user is saved: check every 10 seconds, for 10 minutes, so the page moves on by itself once the
 # admin saves it (V17 p6 tester: after the save, Launch app kept showing the old "Set up ZLens first" until a
 # browser reload; the page had stopped and Snowsight showed its last frame).
+# The setup guide on the website, with a screenshot of every step (a plain link: the app itself needs no internet).
+TUTORIAL_URL = "https://zlens.app/guides/snowflake-get-started.html"
 SETUP_RECHECK_SECONDS = 10
 SETUP_RECHECK_FOR_SECONDS = 600
 # Streamlit removes the lines of an earlier screen only when a run ends, and a page that checks again ends each
@@ -342,6 +344,7 @@ if not status["zlens_user"]:
         f"If Snowsight asks you to select a warehouse before this page opens, pick {warehouse}, "
         "the app's own warehouse: this page runs on it."
     )
+    st.caption(f"New to ZLens? The step-by-step setup guide with screenshots: [{TUTORIAL_URL}]({TUTORIAL_URL})")
     left = SETUP_RECHECK_FOR_SECONDS - (now - state["setup_since"])
     if left > 0:
         st.caption(

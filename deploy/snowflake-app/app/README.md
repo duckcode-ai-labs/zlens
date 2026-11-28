@@ -4,6 +4,9 @@ Governed analytics in your Snowflake account: a semantic layer, certified answer
 and Apps. This free app serves **one person**. ZLens runs here, reads only what you grant it, and
 keeps its projects on a volume in your account.
 
+New to ZLens? Follow the [step-by-step setup guide with screenshots](https://zlens.app/guides/snowflake-get-started.html):
+Get, set up, ask, review and certify, in 20 short steps.
+
 When you get the app, Snowflake gives it what it needs to run: a small compute pool, its own address,
 and an extra-small warehouse for its queries. ZLens starts by itself.
 
