@@ -9055,8 +9055,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // The reviewed proposal was saved as its rebased copy: it waits for no one now.
       if (reviewed !== proposal) contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: committedAt, supersededBy: committed.id });
       contextProposalStore.saveCommitReceipt(idempotencyKey, { proposalId: proposal.id, proposalHash: proposal.proposalHash, snapshotId: nextSnapshot.snapshotId });
-      // Saved drafts are reviewed: older copies of them wait for no one.
-      if (proposal.origin === 'warehouse_discovery') closeWaitingWarehouseDrafts({ supersededBy: committed.id });
+      // Saved drafts are reviewed: older copies of them wait for no one, and the launcher's line says so.
+      if (proposal.origin === 'warehouse_discovery') {
+        closeWaitingWarehouseDrafts({ supersededBy: committed.id });
+        writeLauncherSetupStatus();
+      }
       return { committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling, rebased: reviewed !== proposal };
     } catch (error) {
       for (const { patch, absolute } of written.reverse()) {
@@ -15595,6 +15598,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const setupStatusWriter = snowflakeApp && snowflakeAppOptions?.appName
     ? new SetupStatusWriter({ appName: snowflakeAppOptions.appName, query: (sql) => snowflakeAppQuery(sql) })
     : undefined;
+  // Whether drafts still wait for review: once they are saved or discarded, the launcher's line stops saying so.
+  const launcherDraftsWaiting = (): boolean => {
+    try {
+      return waitingWarehouseDrafts().length > 0;
+    } catch {
+      return true;
+    }
+  };
   // Ask readiness (fix plan risk 3): is Ask's Snowflake Cortex set up? Checked with one tiny Cortex call at start in
   // Snowflake, kept for a few minutes, checked again on demand. In the app it rides in the setup status row, so the
   // launcher shows it through the same write and the same read.
@@ -15605,7 +15616,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     },
     ...(setupStatusWriter ? {
       onResult: async (readiness) => {
-        const row = setupStatusLine(warehouseSetup, currentSetupOperation(), readiness);
+        const row = setupStatusLine(warehouseSetup, currentSetupOperation(), readiness, { draftsWaiting: launcherDraftsWaiting });
         // Before setup has started (or after a one-go setup from an earlier version), only Ask's part: no setup line.
         await setupStatusWriter.write(warehouseSetup ? row : { ...row, line: '' }, { force: true });
       },
@@ -15622,14 +15633,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const saveWarehouseSetup = (next: WarehouseSetupStateV1): WarehouseSetupStateV1 => {
     warehouseSetup = next;
     writeWarehouseSetupState(projectRoot, next);
-    void setupStatusWriter?.write(setupStatusLine(next, currentSetupOperation(), askReadiness.latest()), { force: true });
+    void setupStatusWriter?.write(setupStatusLine(next, currentSetupOperation(), askReadiness.latest(), { draftsWaiting: launcherDraftsWaiting }), { force: true });
     return next;
   };
   if (setupStatusWriter) {
     operationCoordinator.subscribe((operation) => {
       if (operation.type !== 'warehouse-read' && operation.type !== 'warehouse-check') return;
       if (operation.status !== 'running') return;
-      void setupStatusWriter.write(setupStatusLine(warehouseSetup, operation, askReadiness.latest()));
+      void setupStatusWriter.write(setupStatusLine(warehouseSetup, operation, askReadiness.latest(), { draftsWaiting: launcherDraftsWaiting }));
     });
   }
   const setupOperationRunning = () => warehouseSetup?.read.state === 'running' || warehouseSetup?.checks?.state === 'running';
@@ -15638,6 +15649,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       ? warehouseSetup.read.operationId
       : warehouseSetup?.checks?.state === 'running' ? warehouseSetup.checks.operationId : undefined;
     return id ? operationCoordinator.get(id) : null;
+  };
+  /** The launcher's row again, at once: drafts were saved or discarded, so its line changes. Never throws. */
+  const writeLauncherSetupStatus = (): void => {
+    if (!setupStatusWriter || !warehouseSetup) return;
+    try {
+      void setupStatusWriter.write(setupStatusLine(warehouseSetup, currentSetupOperation(), askReadiness.latest(), { draftsWaiting: launcherDraftsWaiting }), { force: true });
+    } catch {
+      // The launcher's row is best effort; saving and discarding go on.
+    }
   };
   /** The data checks and the search index, in the background (stage 2). Null when there is nothing read to check. */
   const startSetupCheck = (options: { fresh?: boolean; anyway?: string[]; checkSize?: CheckWarehouseSize; domain?: string; includeStaging?: boolean } = {}): LocalOperation | null => {
@@ -17386,6 +17406,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       const discarded: ContextAuthoringProposalV1 = proposal.status === 'discarded' ? proposal : { ...proposal, status: 'discarded', discardedAt: new Date().toISOString() };
       contextProposalStore.save(discarded);
+      if (discarded.origin === 'warehouse_discovery') writeLauncherSetupStatus();
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(serializeJSON({ requestId, proposal: discarded }));
       return;
