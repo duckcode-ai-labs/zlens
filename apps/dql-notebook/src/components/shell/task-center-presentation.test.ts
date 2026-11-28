@@ -52,6 +52,63 @@ describe('taskOutcomePresentation (UI-016)', () => {
     });
   });
 
+  it('does not count the review of what AI wrote as needing attention', () => {
+    const awaitingReview = operation({
+      result: {
+        outcome: 'draft_saved_with_blockers',
+        oldPath: 'blocks/playoff_wins.dql',
+        draftPath: 'blocks/playoff_wins.dql',
+        blockers: ['AI wrote this saved query.'],
+        checklist: {
+          metadata: true,
+          validation: true,
+          run: true,
+          tests: false,
+          chart: false,
+          lineage: true,
+          aiReviewed: false,
+          blockers: ['AI wrote this saved query.'],
+          issues: [{ severity: 'error', code: 'ai_review_required', action: 'confirm_ai_review', message: 'AI wrote this saved query.' }],
+        },
+        block: {} as never,
+      },
+    });
+
+    expect(taskOutcomePresentation(awaitingReview)).toMatchObject({
+      tone: 'neutral',
+      statusLabel: 'waiting for your review',
+      message: 'It passed its checks. Confirm you reviewed it to certify it.',
+    });
+    expect(taskCenterProjection([awaitingReview]).attentionCount).toBe(0);
+  });
+
+  it('still needs attention when a real fix is left beside the review', () => {
+    const result = taskOutcomePresentation(operation({
+      result: {
+        outcome: 'draft_saved_with_blockers',
+        oldPath: 'blocks/playoff_wins.dql',
+        draftPath: 'blocks/playoff_wins.dql',
+        checklist: {
+          metadata: true,
+          validation: true,
+          run: false,
+          tests: false,
+          chart: false,
+          lineage: true,
+          aiReviewed: false,
+          blockers: ['The query must run successfully.', 'AI wrote this saved query.'],
+          issues: [
+            { severity: 'error', code: 'certification_blocker', action: 'run_again', message: 'The query must run successfully.' },
+            { severity: 'error', code: 'ai_review_required', action: 'confirm_ai_review', message: 'AI wrote this saved query.' },
+          ],
+        },
+        block: {} as never,
+      },
+    }));
+
+    expect(result).toMatchObject({ tone: 'attention', statusLabel: 'needs attention', message: 'Draft saved with 2 certification blockers.' });
+  });
+
   it('uses certified only for the governed certified outcome', () => {
     const result = taskOutcomePresentation(operation({
       result: {

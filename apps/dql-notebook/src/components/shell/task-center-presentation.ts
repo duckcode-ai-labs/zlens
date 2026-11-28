@@ -122,6 +122,17 @@ export function taskOutcomePresentation(operation: LocalOperation): TaskOutcomeP
   if (operation.type === 'block_certification' && operation.status === 'succeeded') {
     const result = operation.result as BlockCertificationOperationResult | undefined;
     if (result?.outcome === 'draft_saved_with_blockers') {
+      // Only the person's own review of what AI wrote is left: the normal
+      // last step of certifying, so it is not counted as needing attention.
+      const issues = result.checklist?.issues ?? [];
+      if (issues.length > 0 && issues.every((issue) => issue.action === 'confirm_ai_review' || issue.code === 'ai_review_required')) {
+        return {
+          active: false,
+          tone: 'neutral',
+          statusLabel: 'waiting for your review',
+          message: 'It passed its checks. Confirm you reviewed it to certify it.',
+        };
+      }
       const blockerCount = result.checklist?.issues?.length
         ?? result.blockers?.length
         ?? result.checklist?.blockers.length
