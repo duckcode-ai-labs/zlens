@@ -160,7 +160,7 @@ describe('setup in two stages, run as background operations (onboarding design P
     expect((await read(app, { check: true })).status).toBe(202);
     const done = await app.until((value) => value.state === 'done' || value.state === 'failed' || value.stage === 'failed', 20_000);
     expect(done).toMatchObject({ state: 'done', stage: 'checked', database: 'SALES', relations: 1 });
-    const status = await (await app.call('/api/connections/default/setup')).json() as { stage: string; setup: { read: { state: string; relations: number }; checks: { state: string } } };
+    const status = await (await app.call('/api/connections/default/setup')).json() as { stage: string; setup: { read: { state: string; relations: number }; checks: { state: string; proposalId?: string } } };
     expect(status).toMatchObject({ stage: 'checked', setup: { read: { state: 'done', relations: 1 }, checks: { state: 'done' } } });
     // Names, then keys and comments, then the checks: in that order.
     const firstColumns = warehouse.statements.findIndex((sql) => sql.includes('INFORMATION_SCHEMA.COLUMNS'));
@@ -176,6 +176,14 @@ describe('setup in two stages, run as background operations (onboarding design P
     expect(stages.at(-1)).toBe('checked');
     expect(setupStatusWrites.at(-1)).toContain("'ZLens is ready to ask. Background checks done: drafts wait for review.' AS line, 100 AS percent");
     expect(JSON.parse(readFileSync(join(app.projectRoot, '.dql', 'local', 'snowflake-app-setup.json'), 'utf8'))).toMatchObject({ state: 'done', database: 'SALES' });
+    // Drafts discarded (or saved) wait for no one: the launcher's line says so at once (V18 p2 test, 28 Nov 2026).
+    const proposalId = status.setup.checks.proposalId;
+    expect(proposalId).toBeTruthy();
+    expect((await app.call(`/api/context-proposals/${encodeURIComponent(proposalId!)}/discard`, { method: 'POST', body: '{}' })).status).toBe(200);
+    const reviewedLine = "'ZLens is ready to ask. Background checks done.' AS line, 100 AS percent";
+    for (let tries = 0; tries < 40 && !setupStatusWrites.at(-1)?.includes(reviewedLine); tries += 1) await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(setupStatusWrites.at(-1)).toContain(reviewedLine);
+    expect((await (await app.call('/api/connections/default/setup')).json() as { stage: string }).stage).toBe('checked');
   }, 30_000);
 
   it('with the checks off, stops at ready; Check the data runs them', async () => {

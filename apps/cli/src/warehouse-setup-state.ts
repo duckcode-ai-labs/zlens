@@ -177,7 +177,7 @@ export function settleInterruptedStages(state: WarehouseSetupStateV1, running: (
  * - `reading`: names are being read;
  * - `ready`: names are read, Ask works; the checks are off or not started;
  * - `checking`: ready, and the checks run in the background;
- * - `checked`: the checks are done, the drafts wait for review;
+ * - `checked`: the checks are done; their drafts wait for review until someone saves or discards them;
  * - `failed` / `stopped`: the read failed or was stopped (a failed or stopped
  *   check leaves setup `ready`, with the check's own state saying why).
  */
@@ -199,13 +199,17 @@ export function warehouseSetupStage(state: WarehouseSetupStateV1 | null): Wareho
  * Ask's readiness (fix plan risk 3), the row carries it for the launcher, and
  * a line that says "ZLens is ready to ask." says Ask's own headline instead
  * while Ask's Snowflake Cortex is not set up.
+ *
+ * `draftsWaiting` says whether drafts still wait for review (asked only once
+ * the checks are done). Without it, the checks' own drafts are taken to wait.
  */
 export function setupStatusLine(
   state: WarehouseSetupStateV1 | null,
   operation: { status: string; progress: number; message: string; type: string } | null,
   askReadiness?: Parameters<typeof launcherAskReadiness>[0],
+  options: { draftsWaiting?: () => boolean } = {},
 ): SetupStatusRow & { stage: WarehouseSetupStage } {
-  return withAskReadiness(setupStageLine(state, operation), launcherAskReadiness(askReadiness));
+  return withAskReadiness(setupStageLine(state, operation, options.draftsWaiting), launcherAskReadiness(askReadiness));
 }
 
 function withAskReadiness<T extends SetupStatusRow>(row: T, ask: LauncherAskReadiness | undefined): T {
@@ -217,6 +221,7 @@ function withAskReadiness<T extends SetupStatusRow>(row: T, ask: LauncherAskRead
 function setupStageLine(
   state: WarehouseSetupStateV1 | null,
   operation: { status: string; progress: number; message: string; type: string } | null,
+  draftsWaiting?: () => boolean,
 ): { stage: WarehouseSetupStage; line: string; percent: number | null } {
   const stage = warehouseSetupStage(state);
   const running = operation && (operation.status === 'running' || operation.status === 'queued') ? operation : null;
@@ -239,7 +244,10 @@ function setupStageLine(
     }
     case 'checked': {
       const problems = state?.checks?.problems?.length ?? 0;
-      return { stage, line: `ZLens is ready to ask. Background checks done: drafts wait for review${problems ? `; ${problems} ${problems === 1 ? 'table' : 'tables'} not checked` : ''}.`, percent: 100 };
+      const notChecked = problems ? `; ${problems} ${problems === 1 ? 'table' : 'tables'} not checked` : '';
+      // Drafts saved or discarded wait for no one: the line stops saying they do (V18 p2 test, 28 Nov 2026).
+      const waiting = draftsWaiting ? draftsWaiting() : Boolean(state?.checks?.proposalId);
+      return { stage, line: `ZLens is ready to ask. Background checks done${waiting ? ': drafts wait for review' : ''}${notChecked}.`, percent: 100 };
     }
     default: {
       // Between the read and the checks it asked for, the checks are about to start, not off.

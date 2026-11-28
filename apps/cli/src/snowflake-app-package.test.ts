@@ -205,6 +205,10 @@ describe('the app package for Snowflake', () => {
     // headline when Ask is not ready, so the warning gives the reason and the line without repeating it.
     expect(page).toMatch(/def show_ask\(ask, setup_line, moment\):[\s\S]*?said = ask\["headline"\] in setup_line[\s\S]*?st\.warning\(reason if said and reason else f"\*\*\{ask\['headline'\]\}\*\* \{reason\}"\.strip\(\)\)[\s\S]*?st\.caption\(ask\["fixIntro"\]\)\n\s+st\.code\(ask\["fixSql"\], language="sql"\)/);
     expect(page).not.toMatch(/CORTEX_ENABLED_CROSS_REGION/);
+    // ZLens checks Ask as it starts, on Check again and when a page asks after 10 minutes, not every minute: the
+    // time is said as the last check, with the day when not today (V18 p2 test: "Checked at 12:31" read as now).
+    expect(page).toContain('checked_at = f" Last checked at {when}." if when else ""');
+    expect(page).toMatch(/def checked_clock\(value, moment\):[\s\S]*?if checked\.date\(\) != moment\.date\(\):\n\s+return f"\{checked\.day\} \{checked:%b\} \{clock\(checked\)\}"/);
     expect(readme).toContain('**Ask checks itself.**');
     expect(readme).toContain("setup's status with whether Ask is ready");
   });

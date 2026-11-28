@@ -20,7 +20,9 @@ grant lines, and the page said "ZLens is ready" with no data granted).
 Once ZLens is ready, the page also says whether Ask is ready, as ZLens last checked it with one tiny Snowflake Cortex
 call: "Ask is ready", or "Ask is not ready" with the one line an ACCOUNTADMIN runs (the CORTEX_USER grant with this
 app's name, or the account's cross-region setting). It comes in setup's status (launcher_status()'s `setup`), in
-ZLens's own words, the same ZLens shows over Ask.
+ZLens's own words, the same ZLens shows over Ask. ZLens checks it as it starts (a few seconds in), on Check again, and
+when a page asks after 10 minutes, not every minute, so the page says "Last checked at" with that check's time, and the
+day when it was not today (V18 p2 test: "Checked at 12:31" read as now on an app started hours later).
 
 It reads no customer data and calls nothing outside Snowflake: only the app's own procedures
 app_public.launcher_status(), app_public.launcher_data() (database names, never rows) and
@@ -248,7 +250,10 @@ def ask_readiness(setup):
 
 
 def checked_clock(value, moment):
-    """When ZLens checked Ask (ISO time, UTC), told like the page's own time: in the session's zone when known."""
+    """When ZLens last checked Ask (ISO time, UTC), told like the page's own time: in the session's zone when known.
+
+    A check from another day says the day too ("27 Nov 12:31 PST").
+    """
     try:
         checked = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
@@ -257,6 +262,8 @@ def checked_clock(value, moment):
         return ""
     if isinstance(moment, datetime.datetime) and moment.tzinfo is not None:
         checked = checked.astimezone(moment.tzinfo)
+        if checked.date() != moment.date():
+            return f"{checked.day} {checked:%b} {clock(checked)}"
     return clock(checked)
 
 
@@ -270,7 +277,7 @@ def show_ask(ask, setup_line, moment):
     if not ask:
         return
     when = checked_clock(ask.get("checkedAt"), moment)
-    checked_at = f" Checked at {when}." if when else ""
+    checked_at = f" Last checked at {when}." if when else ""
     if ask["state"] == "ready":
         st.caption(ask["headline"] + checked_at)
         return

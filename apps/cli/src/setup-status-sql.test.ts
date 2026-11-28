@@ -18,9 +18,25 @@ describe('setup status for the launcher page', () => {
     expect(setupStatusLine(state({ state: 'done' }, { state: 'off' }), null).line).toBe('ZLens is ready to ask. Background checks are starting.');
     expect(setupStatusLine(state({ state: 'done' }, { state: 'running' }), { status: 'running', progress: 62, type: 'warehouse-check', message: '' }))
       .toEqual({ stage: 'checking', line: 'ZLens is ready to ask. Background checks: 24%.', percent: 24 });
-    expect(setupStatusLine(state({ state: 'done' }, { state: 'done', problems: [{ relations: ['A'], kind: 'too_big', text: '' }] }), null))
+    expect(setupStatusLine(state({ state: 'done' }, { state: 'done', proposalId: 'p1', problems: [{ relations: ['A'], kind: 'too_big', text: '' }] }), null))
       .toEqual({ stage: 'checked', line: 'ZLens is ready to ask. Background checks done: drafts wait for review; 1 table not checked.', percent: 100 });
     expect(setupStatusLine(state({ state: 'done' }, { state: 'stopped' }), null).line).toBe('ZLens is ready to ask. The background checks were stopped.');
+  });
+
+  // V18 p2 test (28 Nov 2026): after "Accept all that passed" and a save, the launcher still said drafts waited.
+  it('says drafts wait for review only while some do', () => {
+    const checked = state({ state: 'done' }, { state: 'done', proposalId: 'p1' });
+    expect(setupStatusLine(checked, null, null, { draftsWaiting: () => true }).line).toBe('ZLens is ready to ask. Background checks done: drafts wait for review.');
+    expect(setupStatusLine(checked, null, null, { draftsWaiting: () => false }))
+      .toEqual({ stage: 'checked', line: 'ZLens is ready to ask. Background checks done.', percent: 100 });
+    const withProblems = state({ state: 'done' }, { state: 'done', proposalId: 'p1', problems: [{ relations: ['A'], kind: 'too_big', text: '' }, { relations: ['B'], kind: 'failed', text: '' }] });
+    expect(setupStatusLine(withProblems, null, null, { draftsWaiting: () => false }).line).toBe('ZLens is ready to ask. Background checks done; 2 tables not checked.');
+    // Checks that drafted nothing leave nothing to review.
+    expect(setupStatusLine(state({ state: 'done' }, { state: 'done' }), null).line).toBe('ZLens is ready to ask. Background checks done.');
+    // Asked only once the checks are done.
+    let asked = 0;
+    setupStatusLine(state({ state: 'done' }, { state: 'running' }), null, null, { draftsWaiting: () => { asked += 1; return true; } });
+    expect(asked).toBe(0);
   });
 
   it('keeps one row in the app\'s own table, with the values as literals', () => {
