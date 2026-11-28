@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
-import { Background, Controls, Handle, MarkerType, MiniMap, NodeResizeControl, Position, ReactFlow, useNodesState, useReactFlow, type Connection, type Edge, type Node, type NodeProps } from '@xyflow/react';
+import { Background, Controls, Handle, MarkerType, MiniMap, NodeResizeControl, Position, ReactFlow, useNodesState, useReactFlow, useStoreApi, useUpdateNodeInternals, type Connection, type Edge, type Node, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import Dagre from '@dagrejs/dagre';
 import { Link2, Maximize2, Plus } from 'lucide-react';
@@ -9,6 +9,7 @@ import { entityKindColor, entityRecords, resolveEntityRecordKey } from './domain
 import { relationshipStatusView } from './relationship-builder-model';
 import { areaStubs, mapLevel, type AreaStub } from './model-map-levels';
 import { MapOverview } from './MapOverview';
+import { keepMeasured, unmeasuredNodeIds } from './canvas-measure';
 
 export type ColumnDisplayMode = 'keys' | 'relevant' | 'all';
 export type ModelingViewMode = 'business' | 'data';
@@ -71,7 +72,8 @@ export function DomainModelingCanvas({ modeling, ghostEntityIds, ghostRelationsh
   }, [graphNodes, stubs, theme]);
   const flowEdges = useMemo(() => (stubs.length ? [...edges, ...stubs.flatMap((stub) => stub.from.map((from): Edge => ({ id: `${stub.id}:${from}`, source: from, target: stub.id, type: 'smoothstep', style: { strokeDasharray: '5 5', stroke: 'var(--border-strong)' }, markerEnd: { type: MarkerType.ArrowClosed } })))] : edges), [edges, stubs]);
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
-  useEffect(() => setNodes(flowNodes), [flowNodes, setNodes]);
+  // A rebuilt node keeps React Flow's measurement, or the map can stay empty (see keepMeasured).
+  useEffect(() => setNodes((current) => keepMeasured(flowNodes, current)), [flowNodes, setNodes]);
   const visibleDbtIds = level.kind === 'tables' ? graphNodes.map((node) => (node.data as EntityNodeData).entity.dbtUniqueId) : [];
   const visibleDbtKey = visibleDbtIds.join('|');
   useEffect(() => onVisibleDbtIdsChange(visibleDbtIds), [onVisibleDbtIdsChange, visibleDbtKey]);
@@ -122,6 +124,8 @@ export function DomainModelingCanvas({ modeling, ghostEntityIds, ghostRelationsh
       <FocusController focusRequest={focusRequest} />
       {/* Fits the view again when the map opens another Domain or area. */}
       <FitViewController fitKey={`${selectedDomain ?? ''}|${selectedAreaId ?? ''}|${flowNodes.length}`} />
+      {/* Measures the models again after a change, so none is left hidden without its joins. */}
+      <MeasureController />
       {/* Prototype dot grid: 22px spacing on the Paper canvas. */}
       <Background color="var(--border-strong)" gap={22} size={1} />
       <Controls showInteractive={false} />
@@ -501,6 +505,39 @@ function FitViewController({ fitKey }: { fitKey: string }) {
     const timer = window.setTimeout(() => void flow.fitView({ padding: 0.16, duration: 250 }), 80);
     return () => window.clearTimeout(timer);
   }, [fitKey, flow]);
+  return null;
+}
+
+/**
+ * React Flow measures a node (its size and join handles) before it draws it or
+ * any of its joins, and measures again only when a ResizeObserver says so. A
+ * measurement lost to a rebuild is never retried, and a column change can move
+ * the handles without resizing the node. So once the nodes settle after a
+ * change, ask React Flow to measure them again: after each new set of nodes,
+ * and whenever a shown node is left unmeasured.
+ */
+function MeasureController() {
+  const store = useStoreApi();
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    let timer = 0;
+    let measuredFor: unknown = null;
+    const check = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const { nodes, nodeLookup } = store.getState();
+        if (!nodes.length || (nodes === measuredFor && !unmeasuredNodeIds(nodeLookup).length)) return;
+        measuredFor = nodes;
+        updateNodeInternals(nodes.map((node) => node.id));
+      }, 100);
+    };
+    check();
+    const unsubscribe = store.subscribe(check);
+    return () => {
+      unsubscribe();
+      window.clearTimeout(timer);
+    };
+  }, [store, updateNodeInternals]);
   return null;
 }
 
